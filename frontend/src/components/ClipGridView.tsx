@@ -4,6 +4,7 @@ import { api } from "../lib/api";
 import type { Project } from "../lib/types";
 import { fmtDuration, scoreColor } from "../lib/format";
 import ClipCard from "./ClipCard";
+import CueModal from "./CueModal";
 
 interface Learning {
   total_ratings: number;
@@ -28,6 +29,7 @@ export default function ClipGridView({
   const [selected, setSelected] = useState<string[]>([]); // selection order = montage order
   const [montaging, setMontaging] = useState(false);
   const [montageErr, setMontageErr] = useState<string | null>(null);
+  const [showCues, setShowCues] = useState(false);
   const alive = useRef(true); // stops the montage poll after unmount
 
   useEffect(() => {
@@ -139,6 +141,12 @@ export default function ClipGridView({
               {learn.trims > 0 ? ` · ${learn.trims}✂` : ""}
             </span>
           )}
+          {project.content_type === "gameplay" && (
+            <button className="btn ghost sm" onClick={() => setShowCues(true)}
+              title="Add reference game sounds so key moments (kills, goals…) are detected exactly — then Re-run">
+              🎯 Game cues
+            </button>
+          )}
           <button className="btn ghost sm" onClick={rerun}
             title="Re-run on the same video — applies your 👍/👎, new cues, and settings">
             ↻ Re-run
@@ -235,6 +243,8 @@ export default function ClipGridView({
       </div>
 
       {montageErr && <div className="toast err">{montageErr}</div>}
+
+      {showCues && <CueModal onClose={() => setShowCues(false)} />}
 
       {project.montages.length > 0 && (
         <div style={{ marginTop: 28 }}>

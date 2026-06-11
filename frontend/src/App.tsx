@@ -5,6 +5,7 @@ import type { Health } from "./lib/types";
 import Upload from "./screens/Upload";
 import ProjectView from "./screens/ProjectView";
 import ClipEditor from "./screens/ClipEditor";
+import CueModal from "./components/CueModal";
 
 function Caps({ health }: { health: Health | null }) {
   if (!health) return null;
@@ -37,6 +38,7 @@ function Caps({ health }: { health: Health | null }) {
 
 export default function App() {
   const [health, setHealth] = useState<Health | null>(null);
+  const [showCues, setShowCues] = useState(false);
   useEffect(() => {
     api.health().then(setHealth).catch(() => setHealth(null));
   }, []);
@@ -49,10 +51,15 @@ export default function App() {
         </Link>
         <div className="spacer" />
         <Caps health={health} />
+        <button className="btn ghost sm" onClick={() => setShowCues(true)}
+          title="Add reference game sounds (kill ding, goal horn…) so key moments are detected exactly">
+          🎯 Game cues
+        </button>
         <Link to="/" className="btn primary sm">
           + New project
         </Link>
       </nav>
+      {showCues && <CueModal onClose={() => setShowCues(false)} />}
       <Routes>
         <Route path="/" element={<Upload health={health} />} />
         <Route path="/p/:projectId" element={<ProjectView />} />
