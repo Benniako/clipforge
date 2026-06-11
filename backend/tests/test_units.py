@@ -318,6 +318,11 @@ def test_nvenc_requires_a_real_gpu():
     assert _settings(has_nvenc=False, has_nvidia=True).use_nvenc is False  # no encoder
 
 
+def test_upload_cap_unlimited_by_default():
+    assert _settings(max_upload_mb=0).upload_cap_bytes is None      # 0 = no cap
+    assert _settings(max_upload_mb=10).upload_cap_bytes == 10 * 1024 * 1024
+
+
 def test_encoder_args_switch():
     cpu = _settings(has_nvenc=False).video_encoder_args()
     gpu = _settings(has_nvenc=True, has_nvidia=True).video_encoder_args()

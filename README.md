@@ -143,7 +143,7 @@ runs from a **single process on http://localhost:8000** — no second terminal.
 | `CLIPFORGE_RENDER_WORKERS` | *auto* | Parallel clip renders (scaled to CPU cores). |
 | `CLIPFORGE_CODEC` | `h264` | `av1` opts into av1_nvenc (RTX 40/50 series) — better quality per bitrate. |
 | `CLIPFORGE_DATA_DIR` | `backend/data` | Where the DB + media live. |
-| `CLIPFORGE_MAX_UPLOAD_MB` | `2048` | Upload / URL-import size cap. |
+| `CLIPFORGE_MAX_UPLOAD_MB` | `0` (unlimited) | Upload / URL-import size cap in MB; set only to guard a small disk. |
 | `FFMPEG_BIN` / `FFPROBE_BIN` | auto | Override binary resolution. |
 
 Default spoken language is **German** (English/auto selectable per project).

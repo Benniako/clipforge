@@ -104,13 +104,15 @@ async def create_project(
             fd, tmp_name = tempfile.mkstemp(suffix=Path(file.filename or "v.mp4").suffix)
             os.close(fd)
             tmp = Path(tmp_name)
-            cap = get_settings().max_upload_mb * 1024 * 1024
+            cap = get_settings().upload_cap_bytes
             size = 0
             with open(tmp, "wb") as out:
                 while chunk := await file.read(1 << 20):
                     size += len(chunk)
-                    if size > cap:
-                        raise HTTPException(413, "file exceeds upload limit")
+                    if cap is not None and size > cap:
+                        raise HTTPException(
+                            413, f"file exceeds the {get_settings().max_upload_mb} MB "
+                                 "upload limit (CLIPFORGE_MAX_UPLOAD_MB; 0 = unlimited)")
                     out.write(chunk)
             src = await run_in_threadpool(ingest.attach_source_file, project,
                                           tmp, file.filename or "upload.mp4")

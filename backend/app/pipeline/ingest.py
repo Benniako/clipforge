@@ -77,15 +77,14 @@ def _download_http(url: str, dest_stem: Path) -> Path:
     if ext not in VIDEO_EXTS:
         ext = ".mp4"
     dest = dest_stem.with_suffix(ext)
-    # Same cap as file uploads — a direct-URL import shouldn't be the one
-    # path that can fill the disk unbounded.
-    cap = get_settings().max_upload_mb * 1024 * 1024
+    # Same cap as file uploads (None = unlimited, the default).
+    cap = get_settings().upload_cap_bytes
     size = 0
     req = urllib.request.Request(url, headers={"User-Agent": "ClipForge/0.1"})
     with urllib.request.urlopen(req, timeout=60) as resp, open(dest, "wb") as f:
         while chunk := resp.read(1 << 20):
             size += len(chunk)
-            if size > cap:
+            if cap is not None and size > cap:
                 raise ValueError("download exceeds the upload size limit")
             f.write(chunk)
     return dest

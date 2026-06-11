@@ -179,7 +179,10 @@ class Settings:
     # encoder are the bottlenecks, so a second project mostly contends; raise it
     # if you batch many small videos (transcription is internally serialized).
     pipeline_workers: int = int(os.environ.get("CLIPFORGE_PIPELINE_WORKERS", "1"))
-    max_upload_mb: int = int(os.environ.get("CLIPFORGE_MAX_UPLOAD_MB", "2048"))
+    # Upload / URL-import size cap in MB; 0 (default) = unlimited. A local
+    # single-user tool processing your own VODs shouldn't reject them — set
+    # this only to guard a small disk.
+    max_upload_mb: int = int(os.environ.get("CLIPFORGE_MAX_UPLOAD_MB", "0"))
     # Compute device for the neural models ("cpu" or "cuda").
     device: str = os.environ.get("CLIPFORGE_DEVICE", "cpu")
     # Which transcriber to prefer: "auto" (whisperX if present, else faster-whisper),
@@ -205,6 +208,11 @@ class Settings:
     @property
     def can_render(self) -> bool:
         return bool(self.ffmpeg)
+
+    @property
+    def upload_cap_bytes(self) -> int | None:
+        """Byte cap for uploads/URL imports; None = unlimited."""
+        return self.max_upload_mb * 1024 * 1024 if self.max_upload_mb > 0 else None
 
     @property
     def transcription_engine(self) -> str:
