@@ -62,8 +62,10 @@ export default function CueModal({ onClose }: { onClose: () => void }) {
             </div>
             {game && <CueManager game={game} cues={cues} onChange={setCues} />}
             <p className="muted tiny" style={{ marginBottom: 0 }}>
-              New cues apply on the next processing run — on an existing project, use ↻ Re-run
-              to re-detect with them.
+              Added cues are saved on this machine and baked into <b>every</b> future run (on an
+              existing project, hit ↻ Re-run to re-detect with them). ClipForge can't ship the
+              game sounds themselves — they're copyrighted — so grab each one via 🔍 Find, an
+              SFX pack, or the game files (see docs/GAME_CUES.md).
             </p>
           </>
         ) : (

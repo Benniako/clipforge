@@ -18,8 +18,8 @@ from .. import feedback, store
 from ..config import get_settings
 from ..media import ffmpeg
 from ..media.ffmpeg import MediaInfo
-from ..models import (Clip, ClipStatus, ContentType, JobProgress, LayoutType,
-                      ProjectStatus, Reframe, ReframeKeyframe)
+from ..models import (ASPECTS, Clip, ClipStatus, ContentType, JobProgress,
+                      LayoutType, ProjectStatus, Reframe, ReframeKeyframe)
 from ..providers import detect as detect_mod
 from ..providers import detect_gameplay as gameplay_mod
 from ..providers import hashtags as hashtags_mod
@@ -421,6 +421,11 @@ class Engine:
     def _render_one(self, project_id: str, clip: Clip, src_path: str,
                     info: MediaInfo, out_w: int, out_h: int,
                     burn_captions: bool = True, motion: str = "none") -> None:
+        # A clip may carry its own output aspect (editor override); it wins
+        # over the project default passed in.
+        dims = ASPECTS.get(clip.aspect or "")
+        if dims:
+            out_w, out_h = dims
         settings = get_settings()
         pdir = ingest.project_dir(project_id)
         out = pdir / "clips" / f"{clip.id}.mp4"
@@ -468,10 +473,8 @@ class Engine:
                 raise RuntimeError("clip not found")
             src_path = str(get_settings().media_dir / project.source.path)
             info = ffmpeg.probe(src_path)
-            # A clip may carry its own output aspect (editor override).
-            from ..models import ASPECTS
-            out_w, out_h = (ASPECTS.get(clip.aspect or "")
-                            or project.settings.dims())
+            # _render_one resolves a per-clip aspect override on its own.
+            out_w, out_h = project.settings.dims()
             burn = project.settings.burn_captions
             with store.mutate(project_id) as p:
                 c = p.clip(clip_id)
@@ -483,6 +486,36 @@ class Engine:
             return
         self._render_one(project_id, clip, src_path, info, out_w, out_h, burn,
                          project.settings.motion)
+
+    def rerender_all(self, project_id: str) -> None:
+        """Re-render every clip with the current settings (e.g. after a
+        format change) — transcription, detection, scoring, and captions
+        stay exactly as they are."""
+        try:
+            project = store.get(project_id)
+            if not project or not project.source:
+                raise RuntimeError("project or source media missing")
+            src_path = str(get_settings().media_dir / project.source.path)
+            info = ffmpeg.probe(src_path)
+            out_w, out_h = project.settings.dims()
+            self._render_all(project_id, project.clips, src_path, info,
+                             out_w, out_h, project.settings.burn_captions,
+                             project.settings.motion)
+            with store.mutate(project_id) as p:
+                ready = sum(1 for c in p.clips if c.status == ClipStatus.ready)
+                p.status = ProjectStatus.ready
+                p.progress = JobProgress(
+                    stage="done", stage_index=len(STAGES), total_stages=len(STAGES),
+                    message=f"Done — {ready} clips ready", pct=100.0,
+                    stages=self._stage_view(len(STAGES), 1.0))
+        except Exception as e:
+            log.error("re-render all failed for %s: %s", project_id, e)
+            try:
+                with store.mutate(project_id) as p:
+                    p.status = ProjectStatus.ready  # clips keep their old files
+                    p.progress.message = f"Format change failed: {e}"
+            except Exception:
+                pass  # project deleted underneath us
 
     def _mark_clip_failed(self, project_id: str, clip_id: str, err: Exception) -> None:
         try:

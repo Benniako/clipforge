@@ -652,6 +652,19 @@ def test_status_ws_reports_missing_project():
         assert ws.receive_json() == {"error": "project not found"}
 
 
+def test_set_aspect_endpoint_validation():
+    from starlette.testclient import TestClient
+    from app import store
+    from app.main import create_app
+
+    store.init_db()
+    c = TestClient(create_app(), raise_server_exceptions=False)
+    r = c.post("/api/projects/proj_missing/aspect", json={"aspect": "21:9"})
+    assert r.status_code == 400          # unknown aspect rejected first
+    r = c.post("/api/projects/proj_missing/aspect", json={"aspect": "16:9"})
+    assert r.status_code == 404          # then the project must exist
+
+
 def test_clip_aspect_override_falls_back_to_project_dims():
     from app.models import ASPECTS
     st = ImportSettings(aspect="9:16")

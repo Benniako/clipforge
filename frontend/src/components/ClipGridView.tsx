@@ -188,6 +188,26 @@ export default function ClipGridView({
             </button>
           ))}
         </div>
+        <span className="muted tiny" style={{ marginLeft: 10 }}>Format</span>
+        <select
+          className="input"
+          style={{ width: "auto", padding: "7px 10px" }}
+          value={project.settings.aspect}
+          title="Change the output format now — re-renders every clip; moments, scores and captions stay the same"
+          onChange={async (e) => {
+            try {
+              await api.setAspect(project.id, e.target.value);
+              window.location.reload(); // show live render progress
+            } catch (err: any) {
+              setMontageErr(err?.message ?? "Could not change the format.");
+            }
+          }}
+        >
+          <option value="9:16">9:16 vertical</option>
+          <option value="4:5">4:5 feed</option>
+          <option value="1:1">1:1 square</option>
+          <option value="16:9">16:9 wide</option>
+        </select>
         <div className="spacer" />
         <span className="muted tiny">Min score: {minScore}+</span>
         <input

@@ -9,6 +9,7 @@ import zipfile
 from pathlib import Path
 
 import asyncio
+import threading
 
 from fastapi import (APIRouter, File, Form, HTTPException, UploadFile,
                      WebSocket, WebSocketDisconnect)
@@ -295,6 +296,31 @@ def reprocess(project_id: str, body: Reprocess | None = None) -> Project:
         proj.error = None
         proj.status = ProjectStatus.created
     engine.enqueue(project_id)
+    return store.get(project_id)
+
+
+class AspectBody(BaseModel):
+    aspect: str
+
+
+@router.post("/{project_id}/aspect", response_model=Project)
+def set_aspect(project_id: str, body: AspectBody) -> Project:
+    """Change the output format AFTER processing: re-renders every clip in the
+    new aspect without re-running transcription/detection/scoring. Per-clip
+    aspect overrides made in the editor keep winning."""
+    if body.aspect not in ASPECTS:
+        raise HTTPException(400, f"unknown aspect '{body.aspect}'")
+    p = store.get(project_id)
+    if not p:
+        raise HTTPException(404, "project not found")
+    if p.status in (ProjectStatus.queued, ProjectStatus.processing):
+        raise HTTPException(409, "project is still processing — wait for it to finish")
+    if not p.clips:
+        raise HTTPException(409, "no clips to re-render yet")
+    with store.mutate(project_id) as proj:
+        proj.settings.aspect = body.aspect
+    threading.Thread(target=engine.rerender_all, args=(project_id,),
+                     daemon=True).start()
     return store.get(project_id)
 
 

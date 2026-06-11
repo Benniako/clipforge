@@ -72,6 +72,15 @@ export default function CueManager({
               value={urls[e.name] || ""}
               onChange={(ev) => setUrls((u) => ({ ...u, [e.name]: ev.target.value }))}
             />
+            <a
+              className="btn sm ghost"
+              href={`https://www.myinstants.com/en/search/?name=${encodeURIComponent(e.hint)}`}
+              target="_blank"
+              rel="noreferrer"
+              title={`Search MyInstants for "${e.hint}" — right-click the sound's Download link, copy the address, paste it here`}
+            >
+              🔍 Find
+            </a>
             <button className="btn sm" disabled={busy === e.name} onClick={() => add(e.name)}>
               {busy === e.name ? "…" : "Add"}
             </button>

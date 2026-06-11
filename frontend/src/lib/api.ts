@@ -90,6 +90,14 @@ export const api = {
       body: "{}",
     }).then((r) => json<Project>(r)),
 
+  // Re-render all clips in a new output format (no re-detection).
+  setAspect: (id: string, aspect: string) =>
+    fetch(`/api/projects/${id}/aspect`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ aspect }),
+    }).then((r) => json<Project>(r)),
+
   downloadSrtUrl: (projectId: string, clipId: string) =>
     `/api/projects/${projectId}/clips/${clipId}/captions.srt`,
 
