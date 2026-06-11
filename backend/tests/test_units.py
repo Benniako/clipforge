@@ -652,6 +652,20 @@ def test_status_ws_reports_missing_project():
         assert ws.receive_json() == {"error": "project not found"}
 
 
+def test_audio_url_extracted_from_soundboard_page():
+    from app.game_packs import audio_url_from_html
+    base = "https://www.myinstants.com/en/instant/valorant-kill/"
+    # MyInstants-style relative path in an onclick handler
+    html = """<html><button onclick="play('/media/sounds/valorant-kill.mp3', ...)">▶</button></html>"""
+    assert (audio_url_from_html(html, base)
+            == "https://www.myinstants.com/media/sounds/valorant-kill.mp3")
+    # absolute URL wins
+    html2 = '<a href="https://cdn.example.com/sfx/goal.mp3">download</a>'
+    assert audio_url_from_html(html2, base) == "https://cdn.example.com/sfx/goal.mp3"
+    # a page with no audio reference
+    assert audio_url_from_html("<html><p>nothing here</p></html>", base) is None
+
+
 def test_set_aspect_endpoint_validation():
     from starlette.testclient import TestClient
     from app import store

@@ -14,8 +14,11 @@ export default function CueManager({
   const pack = cues?.[game];
   const [urls, setUrls] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState<string | null>(null);
+  const [busyAll, setBusyAll] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   if (!pack) return null;
+
+  const filled = pack.events.filter((e) => (urls[e.name] ?? "").trim());
 
   const add = async (event: string, file?: File) => {
     const url = urls[event]?.trim();
@@ -30,6 +33,27 @@ export default function CueManager({
     } finally {
       setBusy(null);
     }
+  };
+
+  // Install every row that has a URL typed in — one click instead of N.
+  const saveAll = async () => {
+    setBusyAll(true);
+    setErr(null);
+    const errors: string[] = [];
+    for (const ev of pack.events) {
+      const url = (urls[ev.name] ?? "").trim();
+      if (!url) continue;
+      setBusy(ev.name);
+      try {
+        onChange(await api.addCue(game, ev.name, { url }));
+        setUrls((u) => ({ ...u, [ev.name]: "" }));
+      } catch (e: any) {
+        errors.push(`${ev.name}: ${e?.message ?? "failed"}`);
+      }
+    }
+    setBusy(null);
+    setBusyAll(false);
+    if (errors.length) setErr(`Some cues failed — ${errors.join(" · ")}`);
   };
 
   const remove = async (event: string) => {
@@ -51,8 +75,9 @@ export default function CueManager({
         <span className="muted tiny">({pack.configured}/{pack.total} configured)</span>
       </h3>
       <p className="muted tiny" style={{ marginBottom: 12 }}>
-        Optional: paste a sound URL (e.g. from MyInstants) or upload a file for each event to
-        detect it exactly. Without cues, ClipForge still finds the loud moments automatically.
+        Optional: paste a sound URL (a MyInstants page link works) or upload a file for each
+        event to detect it exactly. Without cues, ClipForge still finds the loud moments
+        automatically. <b>Typed URLs aren't stored until you hit Add or Save all.</b>
       </p>
       {err && (
         <p className="tiny" style={{ color: "var(--bad)", marginBottom: 10 }}>
@@ -106,6 +131,18 @@ export default function CueManager({
           </div>
         ))}
       </div>
+      {filled.length > 0 && (
+        <div className="row" style={{ marginTop: 12, justifyContent: "flex-end" }}>
+          <button className="btn primary sm" disabled={busyAll} onClick={saveAll}
+            title="Download and install every URL you've pasted above">
+            {busyAll ? (
+              <><span className="spinner" /> Saving…</>
+            ) : (
+              <>⬇ Save all ({filled.length})</>
+            )}
+          </button>
+        </div>
+      )}
     </div>
   );
 }
