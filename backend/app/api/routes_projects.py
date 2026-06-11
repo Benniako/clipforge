@@ -8,8 +8,12 @@ import tempfile
 import zipfile
 from pathlib import Path
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+import asyncio
+
+from fastapi import (APIRouter, File, Form, HTTPException, UploadFile,
+                     WebSocket, WebSocketDisconnect)
 from fastapi.concurrency import run_in_threadpool
+from fastapi.encoders import jsonable_encoder
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from starlette.background import BackgroundTask
@@ -144,12 +148,10 @@ def get_project(project_id: str) -> Project:
     return p
 
 
-@router.get("/{project_id}/status")
-def project_status(project_id: str) -> dict:
-    """Lightweight polling payload for the processing + grid views."""
+def _status_payload(project_id: str) -> dict | None:
     p = store.get(project_id)
     if not p:
-        raise HTTPException(404, "project not found")
+        return None
     return {
         "id": p.id,
         "status": p.status,
@@ -167,6 +169,43 @@ def project_status(project_id: str) -> dict:
             for c in p.clips
         ],
     }
+
+
+@router.get("/{project_id}/status")
+def project_status(project_id: str) -> dict:
+    """Lightweight polling payload for the processing + grid views."""
+    payload = _status_payload(project_id)
+    if payload is None:
+        raise HTTPException(404, "project not found")
+    return payload
+
+
+@router.websocket("/{project_id}/ws")
+async def project_ws(ws: WebSocket, project_id: str) -> None:
+    """Push status updates while a project processes (UI falls back to
+    polling when this isn't available). Sends only on change, closes once
+    the project reaches a terminal state."""
+    await ws.accept()
+    last: dict | None = None
+    try:
+        while True:
+            payload = await run_in_threadpool(_status_payload, project_id)
+            if payload is None:
+                await ws.send_json({"error": "project not found"})
+                break
+            encoded = jsonable_encoder(payload)
+            if encoded != last:
+                await ws.send_json(encoded)
+                last = encoded
+            if payload["status"] in ("ready", "failed"):
+                break
+            await asyncio.sleep(0.5)
+    except WebSocketDisconnect:
+        return
+    try:
+        await ws.close()
+    except Exception:
+        pass
 
 
 @router.delete("/{project_id}")

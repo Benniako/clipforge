@@ -27,6 +27,7 @@ export default function ClipEditor() {
   const [fb, setFb] = useState<"up" | "down" | null>(null);
   const [layout, setLayout] = useState<string>("center");
   const [cam, setCam] = useState<Rect | null>(null);
+  const [aspect, setAspect] = useState<string>(""); // "" = project default
 
   useEffect(() => {
     alive.current = true;
@@ -65,11 +66,14 @@ export default function ClipEditor() {
     setStart(c.start);
     setEnd(c.end);
     setStyleId(c.captions.style_id);
-    setCx(c.reframe.overridden ? c.reframe.keyframes[0]?.cx ?? 0.5 : null);
+    // cx_overridden (not overridden): layout/facecam edits also set
+    // `overridden`, and showing their keyframe as a manual crop is wrong.
+    setCx(c.reframe.cx_overridden ? c.reframe.keyframes[0]?.cx ?? 0.5 : null);
     setWords(c.captions.words.map((w) => ({ t: w.t, d: w.d, text: w.text })));
     setFb(c.feedback);
     setLayout(c.reframe.layout);
     setCam(c.reframe.facecam ?? null);
+    setAspect(c.aspect ?? "");
   };
 
   const rate = async (r: "up" | "down") => {
@@ -88,12 +92,13 @@ export default function ClipEditor() {
       Math.abs(start - clip.start) > 0.01 ||
       Math.abs(end - clip.end) > 0.01 ||
       styleId !== clip.captions.style_id ||
-      (cx !== null && (!clip.reframe.overridden || Math.abs(cx - (clip.reframe.keyframes[0]?.cx ?? 0.5)) > 0.01)) ||
+      (cx !== null && (!clip.reframe.cx_overridden || Math.abs(cx - (clip.reframe.keyframes[0]?.cx ?? 0.5)) > 0.01)) ||
       layout !== clip.reframe.layout ||
+      aspect !== (clip.aspect ?? "") ||
       (cam !== null && JSON.stringify(cam) !== JSON.stringify(clip.reframe.facecam)) ||
       JSON.stringify(words) !== JSON.stringify(clip.captions.words.map((w) => ({ t: w.t, d: w.d, text: w.text })))
     );
-  }, [clip, title, start, end, styleId, cx, words, layout, cam]);
+  }, [clip, title, start, end, styleId, cx, words, layout, cam, aspect]);
 
   const spanChanged = clip && (Math.abs(start - clip.start) > 0.01 || Math.abs(end - clip.end) > 0.01);
 
@@ -111,6 +116,7 @@ export default function ClipEditor() {
       if (styleId !== clip.captions.style_id) edit.style_id = styleId;
       if (cx !== null) edit.reframe_cx = cx;
       if (layout !== clip.reframe.layout) edit.layout = layout;
+      if (aspect !== (clip.aspect ?? "")) edit.aspect = aspect;
       if (cam !== null && JSON.stringify(cam) !== JSON.stringify(clip.reframe.facecam))
         edit.facecam = cam;
       // Only send manual caption edits if the span didn't change (a new span
@@ -305,6 +311,17 @@ export default function ClipEditor() {
                 Reset to auto (needs new range to re-track)
               </button>
             )}
+            <div style={{ marginTop: 14 }}>
+              <label className="tiny muted">Output aspect (this clip only)</label>
+              <select className="input" value={aspect}
+                onChange={(e) => setAspect(e.target.value)}>
+                <option value="">Project default ({project.settings.aspect})</option>
+                <option value="9:16">9:16 (Reels/Shorts/TikTok)</option>
+                <option value="4:5">4:5 (Feed)</option>
+                <option value="1:1">1:1 (Square)</option>
+                <option value="16:9">16:9 (YouTube)</option>
+              </select>
+            </div>
           </div>
 
           {clip.kind === "gameplay" && (

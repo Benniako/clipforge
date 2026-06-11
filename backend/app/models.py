@@ -122,7 +122,10 @@ class Reframe(BaseModel):
     # crop window aspect is fixed 9:16; we only need the horizontal path.
     keyframes: list[ReframeKeyframe] = Field(default_factory=list)
     tracked: bool = False       # True if a real subject track drove the path
-    overridden: bool = False    # True once the user edits the crop
+    overridden: bool = False    # True once the user edits ANY reframe aspect
+    # True only when the user set a manual crop centre — layout/facecam edits
+    # also flip `overridden`, so the editor needs this to tell them apart.
+    cx_overridden: bool = False
     # Facecam region (source-frame fractions) for split/framed layouts.
     facecam: Rect | None = None
 
@@ -152,6 +155,8 @@ class Clip(BaseModel):
     transcript_excerpt: str = ""
     captions: CaptionSet = Field(default_factory=CaptionSet)
     reframe: Reframe = Field(default_factory=Reframe)
+    # Per-clip output aspect (an ASPECTS key); None = the project default.
+    aspect: str | None = None
     status: ClipStatus = ClipStatus.pending
     # Raw detector boundaries before any learned correction — lets the learner
     # measure how far the user actually trims from the detector's output.

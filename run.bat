@@ -11,8 +11,10 @@ REM Whisper model + device stay on auto: with CUDA working the app already
 REM picks large-v3 on this card, and falls back safely to CPU if not.
 REM 4 parallel renders: encoding runs on NVENC, so ffmpeg barely loads the CPU.
 set CLIPFORGE_RENDER_WORKERS=4
-REM Uncomment for ~6x faster transcription at near-large-v3 quality:
-REM set CLIPFORGE_WHISPER_MODEL=large-v3-turbo
+REM ~6x faster transcription at near-large-v3 quality on this GPU.
+set CLIPFORGE_WHISPER_MODEL=large-v3-turbo
+REM Uncomment for AV1 output (better quality/bitrate; H.264 plays everywhere):
+REM set CLIPFORGE_CODEC=av1
 
 echo Starting ClipForge backend in a new window...
 start "ClipForge backend - close this window to stop" .venv\Scripts\python.exe -m uvicorn app.main:app --app-dir backend --port 8000

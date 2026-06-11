@@ -83,22 +83,22 @@ def _detect_cuda() -> bool:
         return False
 
 
-def _detect_nvenc(ffmpeg: str | None) -> bool:
-    """True if this ffmpeg build exposes the NVIDIA h264_nvenc encoder.
+def _detect_nvenc(ffmpeg: str | None) -> tuple[bool, bool]:
+    """(h264_nvenc, av1_nvenc) compiled into this ffmpeg build.
 
     Note: this only means the encoder is *compiled in*, not that a GPU is present
     — that's why ``use_nvenc`` additionally requires :func:`_detect_nvidia_gpu`.
     """
     if not ffmpeg:
-        return False
+        return False, False
     try:
         import subprocess
 
         out = subprocess.run([ffmpeg, "-hide_banner", "-encoders"],
                              capture_output=True, text=True, timeout=20)
-        return "h264_nvenc" in out.stdout
+        return "h264_nvenc" in out.stdout, "av1_nvenc" in out.stdout
     except Exception:
-        return False
+        return False, False
 
 
 def _detect_nvidia_gpu() -> bool:
@@ -168,6 +168,7 @@ class Settings:
     has_cuda: bool          # CUDA available for ML (ctranslate2/torch)
     has_nvenc: bool         # ffmpeg has the h264_nvenc encoder compiled in
     has_nvidia: bool        # an NVIDIA GPU + driver is actually present
+    has_av1_nvenc: bool = False  # ffmpeg has av1_nvenc (RTX 40/50 series)
     vram_mb: int = 0        # total VRAM of the first GPU (MB)
     auto_model: bool = True  # whisper model was auto-selected for this hardware
 
@@ -188,6 +189,9 @@ class Settings:
     # (the pyannote model is gated). Without it, whisperX still aligns words.
     hf_token: str | None = (os.environ.get("HF_TOKEN")
                             or os.environ.get("CLIPFORGE_HF_TOKEN") or None)
+    # Output codec: "h264" (default — universal playback) or "av1" (av1_nvenc,
+    # better quality per bitrate; needs an RTX 40/50-series GPU encoder).
+    codec: str = os.environ.get("CLIPFORGE_CODEC", "h264")
     # Output canvas (9:16). 1080x1920 is the platform-native short-form size.
     out_width: int = 1080
     out_height: int = 1920
@@ -228,8 +232,16 @@ class Settings:
         return self.has_nvenc and (self.has_nvidia or self.has_cuda)
 
     def video_encoder_args(self) -> list[str]:
-        """ffmpeg video-encode args — GPU (NVENC) when available, else x264."""
+        """ffmpeg video-encode args — GPU (NVENC) when available, else x264.
+
+        ``codec="av1"`` opts into av1_nvenc when the encoder exists; anything
+        else (or a missing AV1 encoder) degrades to the H.264 path so a bad
+        setting can never break rendering.
+        """
         if self.use_nvenc:
+            if self.codec == "av1" and self.has_av1_nvenc:
+                return ["-c:v", "av1_nvenc", "-preset", "p5", "-rc", "vbr",
+                        "-cq", "30", "-b:v", "0", "-pix_fmt", "yuv420p"]
             return ["-c:v", "h264_nvenc", "-preset", "p5", "-rc", "vbr",
                     "-cq", "21", "-b:v", "0", "-pix_fmt", "yuv420p", "-profile:v", "high"]
         return ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
@@ -245,6 +257,8 @@ class Settings:
             "url_import": self.has_ytdlp,
             "gpu": self.has_cuda,
             "gpu_encode": self.use_nvenc,
+            "codec": ("av1" if self.use_nvenc and self.codec == "av1"
+                      and self.has_av1_nvenc else "h264"),
             "device": self.device,
             "whisper_model": self.whisper_model,
             "auto_model": self.auto_model,
@@ -262,7 +276,7 @@ def get_settings() -> Settings:
 
     ffmpeg, ffprobe = _resolve_ffmpeg()
     has_cuda = _detect_cuda()
-    has_nvenc = _detect_nvenc(ffmpeg)
+    has_nvenc, has_av1_nvenc = _detect_nvenc(ffmpeg)
     has_nvidia = _detect_nvidia_gpu()
     vram_mb = _detect_vram_mb()
     device = os.environ.get("CLIPFORGE_DEVICE") or ("cuda" if has_cuda else "cpu")
@@ -286,6 +300,7 @@ def get_settings() -> Settings:
         has_cuda=has_cuda,
         has_nvenc=has_nvenc,
         has_nvidia=has_nvidia,
+        has_av1_nvenc=has_av1_nvenc,
         vram_mb=vram_mb,
         auto_model=model_env is None,
         device=device,

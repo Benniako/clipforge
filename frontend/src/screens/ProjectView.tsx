@@ -15,27 +15,68 @@ export default function ProjectView() {
   useEffect(() => {
     if (!projectId) return;
     let alive = true;
+    let polling = false;
+    let done = false;
+
+    // Returns true once the project hit a terminal state.
+    const handle = async (s: StatusPayload): Promise<boolean> => {
+      setStatus(s);
+      if (s.status === "ready") {
+        const full = await api.getProject(projectId);
+        if (alive) setProject(full);
+        return true;
+      }
+      return s.status === "failed";
+    };
 
     const poll = async () => {
       try {
         const s = await api.status(projectId);
         if (!alive) return;
-        setStatus(s);
-        if (s.status === "ready") {
-          const full = await api.getProject(projectId);
-          if (alive) setProject(full);
-          return; // stop polling
-        }
-        if (s.status === "failed") return;
+        if (await handle(s)) return;
         timer.current = window.setTimeout(poll, 1200);
       } catch (e: any) {
         if (alive) setError(e.message ?? "could not load project");
       }
     };
-    poll();
+    const startPolling = () => {
+      if (!polling && alive) {
+        polling = true;
+        poll();
+      }
+    };
+
+    // Live updates over WebSocket; any hiccup falls back to polling, so the
+    // old behaviour is always the floor.
+    let ws: WebSocket | null = null;
+    try {
+      const proto = location.protocol === "https:" ? "wss" : "ws";
+      ws = new WebSocket(`${proto}://${location.host}/api/projects/${projectId}/ws`);
+      ws.onmessage = (ev) => {
+        if (!alive) return;
+        const s = JSON.parse(ev.data);
+        if (s.error) {
+          setError(s.error);
+          done = true;
+          return;
+        }
+        if (s.status === "ready" || s.status === "failed") done = true;
+        void handle(s);
+      };
+      ws.onerror = () => {
+        if (!done) startPolling();
+      };
+      ws.onclose = () => {
+        if (!done && alive) startPolling();
+      };
+    } catch {
+      startPolling();
+    }
+
     return () => {
       alive = false;
       if (timer.current) window.clearTimeout(timer.current);
+      ws?.close();
     };
   }, [projectId]);
 

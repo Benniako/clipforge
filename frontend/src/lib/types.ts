@@ -43,6 +43,7 @@ export interface Reframe {
   keyframes: ReframeKeyframe[];
   tracked: boolean;
   overridden: boolean;
+  cx_overridden: boolean;
   facecam: Rect | null;
 }
 
@@ -59,6 +60,7 @@ export interface Clip {
   transcript_excerpt: string;
   captions: CaptionSet;
   reframe: Reframe;
+  aspect: string | null;
   status: ClipStatus;
   tightened_duration: number | null;
   export_url: string | null;

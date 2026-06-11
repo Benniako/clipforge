@@ -325,6 +325,24 @@ def test_encoder_args_switch():
     assert "h264_nvenc" in gpu
 
 
+def test_av1_codec_opt_in_with_safe_fallbacks():
+    # av1 requested + encoder present -> av1_nvenc
+    av1 = _settings(has_nvenc=True, has_nvidia=True, has_av1_nvenc=True,
+                    codec="av1").video_encoder_args()
+    assert "av1_nvenc" in av1
+    # av1 requested but the ffmpeg build lacks the encoder -> h264_nvenc
+    no_enc = _settings(has_nvenc=True, has_nvidia=True, has_av1_nvenc=False,
+                       codec="av1").video_encoder_args()
+    assert "h264_nvenc" in no_enc
+    # av1 requested with no GPU at all -> x264
+    no_gpu = _settings(has_nvenc=False, codec="av1").video_encoder_args()
+    assert "libx264" in no_gpu
+    # default codec ignores the AV1 encoder even when present
+    default = _settings(has_nvenc=True, has_nvidia=True,
+                        has_av1_nvenc=True).video_encoder_args()
+    assert "h264_nvenc" in default
+
+
 # --------------------------------------------------------------------------- #
 # Aspect ratios + hashtags
 # --------------------------------------------------------------------------- #
@@ -549,6 +567,39 @@ def test_logistic_learner_kicks_in_with_data():
     w = feedback.learned_weights(sc, _BASE)
     assert w["emotion"] == max(w.values())                  # right feature on top
     assert abs(sum(w.values()) - sum(_BASE.values())) < 1e-6
+
+
+def test_scene_showinfo_parse_and_snap():
+    from app.providers import scenes
+    err = ("[Parsed_showinfo_1 @ 0x1] n:   0 pts:  12345 pts_time:1.04  fmt:yuv420p\n"
+           "[Parsed_showinfo_1 @ 0x1] n:   1 pts:  98765 pts_time:7.5 fmt:yuv420p\n"
+           "frame=  2 fps=0.0 q=-0.0\n")
+    assert scenes.parse_showinfo_times(err) == [1.04, 7.5]
+    cuts = [10.0, 14.2]
+    assert scenes.snap(11.0, cuts, window=1.5) == 10.0   # nearest within window
+    assert scenes.snap(13.0, cuts, window=1.5) == 14.2   # 3.0 vs 1.2 -> closer cut
+    assert scenes.snap(12.0, cuts, window=1.0) == 12.0   # nothing in range
+    assert scenes.snap(5.0, [], window=2.0) == 5.0       # no cuts at all
+
+
+def test_status_ws_reports_missing_project():
+    from starlette.testclient import TestClient
+    from app import store
+    from app.main import create_app
+
+    store.init_db()  # TestClient without a context manager skips lifespan
+    c = TestClient(create_app(), raise_server_exceptions=False)
+    with c.websocket_connect("/api/projects/proj_missing/ws") as ws:
+        assert ws.receive_json() == {"error": "project not found"}
+
+
+def test_clip_aspect_override_falls_back_to_project_dims():
+    from app.models import ASPECTS
+    st = ImportSettings(aspect="9:16")
+    clip = Clip(start=0, end=5, aspect="16:9")
+    assert (ASPECTS.get(clip.aspect or "") or st.dims()) == (1920, 1080)
+    clip.aspect = None
+    assert (ASPECTS.get(clip.aspect or "") or st.dims()) == (1080, 1920)
 
 
 def test_llm_titles_safe_when_unavailable():

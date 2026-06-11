@@ -15,8 +15,8 @@ from pydantic import BaseModel
 
 from .. import feedback, store
 from ..config import get_settings
-from ..models import (CaptionWord, Clip, ClipStatus, LayoutType, Montage,
-                      Rect, Reframe, ReframeKeyframe)
+from ..models import (ASPECTS, CaptionWord, Clip, ClipStatus, LayoutType,
+                      Montage, Rect, Reframe, ReframeKeyframe)
 from ..pipeline import captionize
 from ..pipeline.captions import build_srt
 from ..pipeline import montage as montage_mod
@@ -47,6 +47,9 @@ class ClipEdit(BaseModel):
     reframe_cx: float | None = None                 # static manual crop centre [0,1]
     layout: str | None = None                       # "center"|"split"|"framed"
     facecam: Rect | None = None                     # facecam region override
+    # Per-clip output aspect: an ASPECTS key, or "" to return to the
+    # project default.
+    aspect: str | None = None
 
 
 @router.get("/styles")
@@ -113,6 +116,7 @@ def edit_clip(project_id: str, clip_id: str, edit: ClipEdit) -> Clip:
         clip.reframe = Reframe(layout=clip.reframe.layout,
                                keyframes=[ReframeKeyframe(t=0.0, cx=cx)],
                                tracked=False, overridden=True,
+                               cx_overridden=True,
                                facecam=clip.reframe.facecam)
     elif span_changed and project.source:
         if clip.kind == "gameplay":
@@ -130,6 +134,9 @@ def edit_clip(project_id: str, clip_id: str, edit: ClipEdit) -> Clip:
     if edit.facecam is not None:
         clip.reframe.facecam = edit.facecam.clamped()
         clip.reframe.overridden = True
+
+    if edit.aspect is not None:
+        clip.aspect = edit.aspect if edit.aspect in ASPECTS else None
 
     if edit.layout is not None:
         try:

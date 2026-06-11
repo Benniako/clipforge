@@ -26,6 +26,7 @@ from ..providers import detect as detect_mod
 from ..providers import detect_gameplay as gameplay_mod
 from ..providers import hashtags as hashtags_mod
 from ..providers import llm as llm_mod
+from ..providers import scenes as scenes_mod
 from ..providers import score as score_mod
 from ..providers import transcribe as transcribe_mod
 from ..styles import get_style
@@ -216,6 +217,18 @@ class Engine:
                                   kind="gameplay", score=gc.score, factors=gc.factors,
                                   features=gc.features,
                                   transcript_excerpt=" ".join(w.text for w in words)[:400]))
+            # Snap each highlight's start to a nearby hard cut (killcam wipe,
+            # replay transition) so the clip opens on a fresh shot.
+            self._advance(project_id, 2, "Snapping to scene cuts…")
+            for clip in clips:
+                try:
+                    cuts = scenes_mod.scene_cuts(
+                        src_path, max(clip.start - 2.0, 0.0), clip.start + 2.0)
+                    ns = scenes_mod.snap(clip.start, cuts, window=1.5)
+                    if ns != clip.start and clip.end - ns >= 3.0:
+                        clip.start = round(ns, 3)
+                except Exception as e:
+                    log.warning("scene snap failed for %s: %s", clip.id, e)
             self._advance(project_id, 2, "Ranking highlights by intensity…")
             bscope = feedback.bound_scope("gameplay", project.settings.game_profile)
         else:
@@ -437,7 +450,10 @@ class Engine:
                 raise RuntimeError("clip not found")
             src_path = str(get_settings().media_dir / project.source.path)
             info = ffmpeg.probe(src_path)
-            out_w, out_h = project.settings.dims()
+            # A clip may carry its own output aspect (editor override).
+            from ..models import ASPECTS
+            out_w, out_h = (ASPECTS.get(clip.aspect or "")
+                            or project.settings.dims())
             burn = project.settings.burn_captions
             with store.mutate(project_id) as p:
                 c = p.clip(clip_id)

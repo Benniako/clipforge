@@ -149,6 +149,7 @@ export const api = {
       caption_words: { t: number; d: number; text: string }[];
       layout: string;
       facecam: { x: number; y: number; w: number; h: number };
+      aspect: string;
     }>,
   ) =>
     fetch(`/api/projects/${projectId}/clips/${clipId}`, {
