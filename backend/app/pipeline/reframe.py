@@ -28,16 +28,22 @@ EMA_ALPHA = 0.22          # smoothing strength
 MAX_STEP = 0.05           # max centre move per sample (conservative pan)
 
 
-def compute_reframe(src: str, start: float, end: float,
-                    src_aspect: float) -> Reframe:
-    """Return a smoothed 9:16 crop path for the clip [start, end]."""
+def compute_reframe(src: str, start: float, end: float, src_aspect: float,
+                    *, speech: list[tuple[float, float]] | None = None) -> Reframe:
+    """Return a smoothed 9:16 crop path for the clip [start, end].
+
+    ``speech`` is an optional list of clip-relative (start, end) intervals
+    where someone is actually talking. During silence the crop holds its last
+    position instead of re-aiming — chasing a nodding listener between
+    sentences is the classic multi-cam reframe mistake.
+    """
     # A source already at/under 9:16 needs no horizontal tracking.
     if src_aspect and src_aspect <= 9 / 16 + 1e-3:
         return Reframe(layout=LayoutType.center,
                        keyframes=[ReframeKeyframe(t=0.0, cx=0.5)], tracked=False)
 
     s = get_settings()
-    centers = _track_faces(src, start, end) if s.has_opencv else None
+    centers = _track_faces(src, start, end, speech) if s.has_opencv else None
     if not centers:
         return Reframe(layout=LayoutType.center,
                        keyframes=[ReframeKeyframe(t=0.0, cx=0.5)], tracked=False)
@@ -47,7 +53,16 @@ def compute_reframe(src: str, start: float, end: float,
     return Reframe(layout=LayoutType.fill, keyframes=keyframes, tracked=True)
 
 
-def _track_faces(src: str, start: float, end: float) -> list[tuple[float, float]] | None:
+def _speech_active(t: float, intervals: list[tuple[float, float]] | None) -> bool:
+    """True when ``t`` falls inside a speech interval (or none are known)."""
+    if not intervals:
+        return True
+    return any(a <= t <= b for a, b in intervals)
+
+
+def _track_faces(src: str, start: float, end: float,
+                 speech: list[tuple[float, float]] | None = None
+                 ) -> list[tuple[float, float]] | None:
     """Sample frames and return [(t_rel, cx_fraction)], cx=None carried as gaps."""
     try:
         import cv2
@@ -87,9 +102,12 @@ def _track_faces(src: str, start: float, end: float) -> list[tuple[float, float]
             faces = faces_mod.detect_faces(img, min_size_frac=0.06)
             t_rel = i / SAMPLE_FPS
             if len(faces):
-                cx = (_pick_face(faces, gray, prev_gray, w) + 0.0)
-                last_cx = cx
                 hits += 1
+                # Re-aim only while someone is talking (or when we have no
+                # position yet); silence holds the current frame steady.
+                if last_cx is None or _speech_active(t_rel, speech):
+                    last_cx = _pick_face(faces, gray, prev_gray, w)
+                cx = last_cx
             else:
                 cx = last_cx  # hold last known position; may be None
             centers.append((t_rel, cx if cx is not None else 0.5))

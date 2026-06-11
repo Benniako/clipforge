@@ -15,7 +15,9 @@ jobs:
           python-version: "3.12"
           cache: pip
       - name: Install dependencies
-        run: pip install -r backend/requirements.txt httpx
+        run: pip install -r backend/requirements.txt httpx ruff
+      - name: Lint
+        run: ruff check backend
       - name: Unit tests
         working-directory: backend
         run: python -m tests.test_units

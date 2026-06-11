@@ -569,6 +569,60 @@ def test_logistic_learner_kicks_in_with_data():
     assert abs(sum(w.values()) - sum(_BASE.values())) < 1e-6
 
 
+def test_gameplay_detection_from_prepared_wav():
+    """The pipeline hands the detector its already-extracted wav — this path
+    must work without ffmpeg and find the loud moment."""
+    import math
+    import struct
+    import wave as wave_mod
+
+    from app.media.ffmpeg import MediaInfo
+    from app.providers.detect_gameplay import detect_gameplay
+
+    sr, dur = 16000, 60
+    fd, wav_name = tempfile.mkstemp(suffix=".wav")
+    os.close(fd)
+    with wave_mod.open(wav_name, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(sr)
+        frames = bytearray()
+        for i in range(sr * dur):
+            t = i / sr
+            amp = 0.7 if 30.0 <= t < 31.0 else 0.01   # one loud second at t=30
+            frames += struct.pack("<h", int(amp * 32767 * math.sin(2 * math.pi * 220 * t)))
+        wf.writeframes(bytes(frames))
+    try:
+        info = MediaInfo(duration=dur, width=1920, height=1080, fps=30,
+                         has_audio=True, has_video=True, codec=None)
+        st = ImportSettings(min_len=8, max_len=20, target_clips=3)
+        clips = detect_gameplay("unused.mp4", info, st, wav_path=wav_name)
+    finally:
+        os.unlink(wav_name)
+    assert clips
+    assert any(c.start <= 30.0 <= c.end for c in clips), \
+        f"no clip covers the burst: {[(c.start, c.end) for c in clips]}"
+
+
+def test_speech_aware_reframe_helpers():
+    from app.pipeline.orchestrator import _speech_intervals
+    from app.pipeline.reframe import _speech_active
+
+    # No intervals known -> always "active" (legacy behaviour).
+    assert _speech_active(1.0, None) is True
+    assert _speech_active(1.0, []) is True
+    assert _speech_active(1.0, [(0.5, 2.0)]) is True
+    assert _speech_active(3.0, [(0.5, 2.0)]) is False
+
+    # Synthetic transcripts opt out — their filler timing isn't real speech.
+    assert _speech_intervals(Transcript(provider="synthetic"), 0, 10) is None
+    assert _speech_intervals(None, 0, 10) is None
+    tr = _tight_transcript()  # two sentences around a 3s gap
+    iv = _speech_intervals(tr, 0.0, tr.words[-1].end + 0.2)
+    assert iv and len(iv) == 2
+    assert iv[0][0] >= 0.0 and iv[1][0] > iv[0][1]   # clip-relative, disjoint
+
+
 def test_scene_showinfo_parse_and_snap():
     from app.providers import scenes
     err = ("[Parsed_showinfo_1 @ 0x1] n:   0 pts:  12345 pts_time:1.04  fmt:yuv420p\n"

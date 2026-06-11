@@ -2,6 +2,8 @@
 
 # ◆ ClipForge
 
+![CI](https://github.com/Benniako/clipforge/actions/workflows/ci.yml/badge.svg)
+
 **One long video in. A batch of ranked, vertical, captioned short clips out.**
 
 Drop in a podcast, interview, webinar, or talk → ClipForge finds the best moments,

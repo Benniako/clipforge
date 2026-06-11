@@ -125,11 +125,13 @@ def edit_clip(project_id: str, clip_id: str, edit: ClipEdit) -> Clip:
                                    keyframes=[ReframeKeyframe(t=0.0, cx=0.5)],
                                    facecam=clip.reframe.facecam)
         else:
+            from ..pipeline.orchestrator import _speech_intervals
             clip.reframe = reframe_mod.compute_reframe(
                 str(get_settings().media_dir / project.source.path),
                 clip.start, clip.end,
                 (project.source.width / project.source.height)
-                if project.source.height else 1.78)
+                if project.source.height else 1.78,
+                speech=_speech_intervals(project.transcript, clip.start, clip.end))
 
     if edit.facecam is not None:
         clip.reframe.facecam = edit.facecam.clamped()

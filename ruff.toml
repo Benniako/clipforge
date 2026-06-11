@@ -1,0 +1,5 @@
+# Lint for what catches real bugs (pyflakes + syntax); no style bikeshedding.
+line-length = 120
+
+[lint]
+select = ["F", "E9"]

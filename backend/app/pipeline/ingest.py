@@ -58,8 +58,9 @@ def _download_ytdlp(url: str, dest_stem: Path) -> Path:
         "merge_output_format": "mp4",
         "quiet": True,
         "noprogress": True,
-        "ffmpeg_location": str(Path(get_settings().ffmpeg).parent) if get_settings().ffmpeg else None,
     }
+    if get_settings().ffmpeg:
+        opts["ffmpeg_location"] = str(Path(get_settings().ffmpeg).parent)
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=True)
         path = Path(ydl.prepare_filename(info))

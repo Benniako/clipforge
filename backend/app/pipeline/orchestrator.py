@@ -10,18 +10,16 @@ from __future__ import annotations
 
 import logging
 import queue
-import tempfile
 import threading
 import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from pathlib import Path
 
 from .. import feedback, store
 from ..config import get_settings
 from ..media import ffmpeg
 from ..media.ffmpeg import MediaInfo
 from ..models import (Clip, ClipStatus, ContentType, JobProgress, LayoutType,
-                      Project, ProjectStatus, Reframe, ReframeKeyframe)
+                      ProjectStatus, Reframe, ReframeKeyframe)
 from ..providers import detect as detect_mod
 from ..providers import detect_gameplay as gameplay_mod
 from ..providers import hashtags as hashtags_mod
@@ -37,6 +35,19 @@ from . import reframe as reframe_mod
 from . import render as render_mod
 
 log = logging.getLogger("clipforge.engine")
+
+def _speech_intervals(transcript, start: float, end: float
+                      ) -> list[tuple[float, float]] | None:
+    """Clip-relative speech spans for speech-aware reframing.
+
+    None for synthetic transcripts — their filler timing would mark the whole
+    clip as speech and defeat the hold-during-silence behaviour.
+    """
+    if transcript is None or transcript.provider == "synthetic":
+        return None
+    segs = captionize.compute_tight_segments(transcript, start, end)
+    return [(a - start, b - start) for a, b in segs]
+
 
 STAGES = ["transcribe", "detect", "score", "reframe", "caption", "render"]
 STAGE_LABELS = {
@@ -139,20 +150,24 @@ class Engine:
         info = ffmpeg.probe(src_path)
 
         # 1. transcribe ---------------------------------------------------
+        # The wav lives in the project dir (not a TemporaryDirectory) so the
+        # gameplay detector can reuse it — decoding an hour-long VOD's audio
+        # twice costs minutes. Deleted as soon as detection is done.
         self._advance(project_id, 0, "Extracting audio…")
-        with tempfile.TemporaryDirectory() as tmp:
-            wav = Path(tmp) / "audio.wav"
-            if info.has_audio:
-                ffmpeg.extract_audio_wav(src_path, wav)
-                transcript = transcribe_mod.transcribe(
-                    str(wav), language=project.settings.language,
-                    progress=lambda f: self._advance(project_id, 0,
-                                                     f"Transcribing… {int(f*100)}%", f),
-                )
-            else:
-                # No audio track — skip ASR entirely, go straight to synthetic.
-                transcript = transcribe_mod.synthetic_transcript(
-                    src_path, lang=project.settings.language)
+        wav = ingest.project_dir(project_id) / "audio16k.wav"
+        wav_path: str | None = None
+        if info.has_audio:
+            ffmpeg.extract_audio_wav(src_path, wav)
+            wav_path = str(wav)
+            transcript = transcribe_mod.transcribe(
+                wav_path, language=project.settings.language,
+                progress=lambda f: self._advance(project_id, 0,
+                                                 f"Transcribing… {int(f*100)}%", f),
+            )
+        else:
+            # No audio track — skip ASR entirely, go straight to synthetic.
+            transcript = transcribe_mod.synthetic_transcript(
+                src_path, lang=project.settings.language)
         with store.mutate(project_id) as p:
             p.transcript = transcript
 
@@ -191,7 +206,7 @@ class Engine:
             gweights = feedback.learned_weights(
                 feedback.score_scope("gameplay", prof), gameplay_mod.audio_weights(prof))
             gcs = gameplay_mod.detect_gameplay(src_path, info, project.settings,
-                                               weights=gweights)
+                                               weights=gweights, wav_path=wav_path)
             if not gcs:
                 raise RuntimeError("no highlights found in this footage")
             if cam_rect is not None:
@@ -261,6 +276,8 @@ class Engine:
                     clips[i].title = t
             bscope = feedback.bound_scope("talking", plat)
 
+        wav.unlink(missing_ok=True)  # audio no longer needed past detection
+
         # Learned boundary correction — nudge toward where you actually trim.
         cs, ce = feedback.boundary_correction(bscope)
         for clip in clips:
@@ -297,7 +314,8 @@ class Engine:
                 self._advance(project_id, 3, f"Tracking speaker {i+1}/{len(clips)}…",
                               i / max(len(clips), 1))
                 clip.reframe = reframe_mod.compute_reframe(
-                    src_path, clip.start, clip.end, info.aspect)
+                    src_path, clip.start, clip.end, info.aspect,
+                    speech=_speech_intervals(transcript, clip.start, clip.end))
         if kind == "gameplay":
             self._advance(project_id, 3, "Framing clips…", 1.0)
 
@@ -488,7 +506,7 @@ class Engine:
             if not mtg:
                 raise RuntimeError("montage not found")
             settings = get_settings()
-            mdir = ingest.project_dir(project_id).parent / project_id / "montages"
+            mdir = ingest.project_dir(project_id) / "montages"
             mdir.mkdir(parents=True, exist_ok=True)
             paths = []
             for cid in mtg.clip_ids:

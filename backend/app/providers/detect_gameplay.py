@@ -181,11 +181,14 @@ def _pick_peaks(times, rms, *, settings: ImportSettings, profile: dict):
 
 
 def detect_gameplay(src_path: str, info: MediaInfo, settings: ImportSettings,
-                    *, weights: dict[str, float] | None = None) -> list[GameplayClip]:
+                    *, weights: dict[str, float] | None = None,
+                    wav_path: str | None = None) -> list[GameplayClip]:
     """Return intensity-ranked highlight clips for gameplay footage.
 
     ``weights`` lets the caller pass personalised audio-feature weights (from the
-    learning loop); otherwise the per-game defaults are used.
+    learning loop); otherwise the per-game defaults are used. ``wav_path`` is an
+    already-extracted 16 kHz mono wav of the source (the pipeline reuses the
+    transcription extract); when absent the audio is extracted here.
     """
     import tempfile
     from pathlib import Path
@@ -196,20 +199,23 @@ def detect_gameplay(src_path: str, info: MediaInfo, settings: ImportSettings,
         return _uniform_fallback(info, settings)
 
     cue_events: list = []
-    with tempfile.TemporaryDirectory() as tmp:
-        wav = Path(tmp) / "a.wav"
-        try:
-            ffmpeg.extract_audio_wav(src_path, wav)
-        except Exception as e:
-            log.warning("gameplay audio extract failed: %s", e)
-            return _uniform_fallback(info, settings)
-        times, rms = _load_rms(str(wav))
-        cue_events = _cue_events(str(wav), settings)
+    if wav_path is not None:
+        times, rms = _load_rms(wav_path)
+        cue_events = _cue_events(wav_path, settings)
+    else:
+        with tempfile.TemporaryDirectory() as tmp:
+            wav = Path(tmp) / "a.wav"
+            try:
+                ffmpeg.extract_audio_wav(src_path, wav)
+            except Exception as e:
+                log.warning("gameplay audio extract failed: %s", e)
+                return _uniform_fallback(info, settings)
+            times, rms = _load_rms(str(wav))
+            cue_events = _cue_events(str(wav), settings)
 
     if times is None:
         return _uniform_fallback(info, settings)
 
-    import numpy as np
 
     profile = get_profile(settings.game_profile)
     peaks, thr, floor = _pick_peaks(times, rms, settings=settings, profile=profile)

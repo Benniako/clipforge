@@ -255,7 +255,7 @@ def render_clip(clip: Clip, src_path: str, info: MediaInfo, style: StyleTemplate
             if info.has_audio:
                 pairs = "".join(f"[v{i}][a{i}]" for i in range(n))
                 lines.append(f"{pairs}concat=n={n}:v=1:a=1[vc][ac];")
-                lines.append(f"[ac]loudnorm=I=-16:TP=-1.5:LRA=11[ao];")
+                lines.append("[ac]loudnorm=I=-16:TP=-1.5:LRA=11[ao];")
             else:
                 pairs = "".join(f"[v{i}]" for i in range(n))
                 lines.append(f"{pairs}concat=n={n}:v=1:a=0[vc];")

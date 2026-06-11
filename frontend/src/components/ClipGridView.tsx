@@ -99,8 +99,13 @@ export default function ClipGridView({
   };
 
   const rerun = async () => {
-    await api.reprocess(project.id).catch(() => {});
-    window.location.reload(); // restart the processing view + polling
+    try {
+      await api.reprocess(project.id);
+      window.location.reload(); // restart the processing view + polling
+    } catch (e: any) {
+      // e.g. 409 while a previous run is still processing
+      setMontageErr(e?.message ?? "Could not re-run this project.");
+    }
   };
 
   const refresh = async () => onChange(await api.getProject(project.id));
