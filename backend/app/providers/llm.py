@@ -20,25 +20,55 @@ import urllib.request
 log = logging.getLogger("clipforge.llm")
 
 _URL = os.environ.get("CLIPFORGE_OLLAMA_URL", "http://localhost:11434").rstrip("/")
-_MODEL = os.environ.get("CLIPFORGE_LLM_MODEL", "llama3.2")
+# Empty = auto-pick the strongest installed model (see _PREFERRED).
+_MODEL = os.environ.get("CLIPFORGE_LLM_MODEL", "")
 
-_avail: tuple[float, bool] | None = None  # (checked_at, ok) — cached briefly
+# Auto-pick order when CLIPFORGE_LLM_MODEL isn't set — strongest commonly-run
+# local models first; anything installed beats heuristic titles.
+_PREFERRED = ("qwen3:14b", "qwen3:8b", "qwen3", "llama3.1:8b", "llama3.1",
+              "gemma3", "qwen2.5", "mistral", "llama3.2")
+
+_avail: tuple[float, bool, str | None] | None = None  # (checked_at, ok, model)
 
 
-def available() -> bool:
-    """True if an Ollama server answers. Cached for 60s."""
+def _resolve_model(tags: list[str]) -> str | None:
+    """The model to use, given what the Ollama server has installed."""
+    if _MODEL:
+        return _MODEL  # explicit choice always wins
+    for pref in _PREFERRED:
+        for t in tags:
+            if t == pref or t.startswith(pref + ":") or t.startswith(pref):
+                return t
+    return tags[0] if tags else None
+
+
+def _refresh() -> None:
     global _avail
     now = time.time()
     if _avail and now - _avail[0] < 60:
-        return _avail[1]
-    ok = False
+        return
+    ok, model = False, None
     try:
         with urllib.request.urlopen(_URL + "/api/tags", timeout=1.5) as r:
-            ok = r.status == 200
+            data = json.loads(r.read())
+            tags = [m.get("name", "") for m in data.get("models", [])]
+            model = _resolve_model([t for t in tags if t])
+            ok = r.status == 200 and model is not None
     except Exception:
-        ok = False
-    _avail = (now, ok)
-    return ok
+        ok, model = False, None
+    _avail = (now, ok, model)
+
+
+def available() -> bool:
+    """True if an Ollama server answers and has a usable model. Cached 60s."""
+    _refresh()
+    return _avail[1] if _avail else False
+
+
+def active_model() -> str | None:
+    """The model that will actually write titles, or None."""
+    _refresh()
+    return _avail[2] if _avail and _avail[1] else None
 
 
 def _generate(prompt: str, *, timeout: float = 30.0) -> str | None:
@@ -46,8 +76,11 @@ def _generate(prompt: str, *, timeout: float = 30.0) -> str | None:
     # the whole token budget thinking and return an empty response. Models or
     # Ollama versions that don't know the flag get a retry without it (their
     # inline <think> text, if any, is stripped by _clean_title).
+    model = active_model()
+    if not model:
+        return None
     payload: dict = {
-        "model": _MODEL, "prompt": prompt, "stream": False, "think": False,
+        "model": model, "prompt": prompt, "stream": False, "think": False,
         "options": {"temperature": 0.7, "num_predict": 80},
     }
     for body in (payload, {k: v for k, v in payload.items() if k != "think"}):

@@ -73,6 +73,7 @@ def create_app() -> FastAPI:
         from .providers import llm
         caps = settings.capability_report()
         caps["llm"] = llm.available()
+        caps["llm_model"] = llm.active_model()
         return {
             "ok": True,
             "version": __version__,

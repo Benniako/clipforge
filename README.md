@@ -139,7 +139,7 @@ runs from a **single process on http://localhost:8000** — no second terminal.
 | `CLIPFORGE_DEVICE` | *auto* | `cuda` when a usable GPU is detected, else `cpu`. Set to force. |
 | `HF_TOKEN` | – | Hugging Face token; enables whisperX **speaker diarization** (gated pyannote model). |
 | `CLIPFORGE_OLLAMA_URL` | `http://localhost:11434` | Local LLM (Ollama) for AI titles/hooks; used only if reachable. |
-| `CLIPFORGE_LLM_MODEL` | `llama3.2` | Ollama model for titles. |
+| `CLIPFORGE_LLM_MODEL` | *auto* | Ollama model for titles — auto-picks the strongest installed (qwen3 → llama3.1 → …). Set to force. |
 | `CLIPFORGE_RENDER_WORKERS` | *auto* | Parallel clip renders (scaled to CPU cores). |
 | `CLIPFORGE_CODEC` | `h264` | `av1` opts into av1_nvenc (RTX 40/50 series) — better quality per bitrate. |
 | `CLIPFORGE_DATA_DIR` | `backend/data` | Where the DB + media live. |
