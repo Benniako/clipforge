@@ -1,16 +1,19 @@
 #!/usr/bin/env python3
-"""Add a reference game-sound cue to ClipForge (from a file or a direct URL).
+"""Add a reference game cue to ClipForge (from a file or a direct URL).
 
 Usage:
     python scripts/add_cue.py <game> <event> <file-or-url>
 
 Examples:
-    python scripts/add_cue.py valorant kill  C:/sounds/valo_kill.mp3
-    python scripts/add_cue.py eafc     goal  https://www.myinstants.com/media/sounds/goal.mp3
+    python scripts/add_cue.py valorant kill        C:/sounds/valo_kill.mp3
+    python scripts/add_cue.py eafc     goal        https://www.myinstants.com/media/sounds/goal.mp3
+    python scripts/add_cue.py valorant kill_banner C:/shots/kill_banner.png
 
-Grab isolated sounds from MyInstants/Voicy, an SFX pack, or FModel (see
-docs/GAME_CUES.md). The cue is normalised to 16 kHz mono and saved as
-<data>/game_cues/<game>/<event>.wav — ClipForge then finds every occurrence.
+Audio cues come from MyInstants/Voicy, an SFX pack, or FModel; visual cues are
+images cropped from a screenshot of the on-screen graphic (see docs/GAME_CUES.md).
+A sound is normalised to 16 kHz mono at <data>/game_cues/<game>/<event>.wav, an
+image to <data>/game_cues/<game>/visual/<event>.png — ClipForge then finds every
+occurrence.
 """
 from __future__ import annotations
 
@@ -21,9 +24,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 
-from app.config import get_settings          # noqa: E402
+from app import game_packs                   # noqa: E402
 from app.game_packs import PACKS             # noqa: E402
-from app.media import ffmpeg                 # noqa: E402
 
 
 def main() -> int:
@@ -36,12 +38,10 @@ def main() -> int:
     if game not in PACKS:
         print(f"[!] '{game}' isn't a known pack ({', '.join(PACKS)}). Adding anyway.")
     else:
-        names = [e[0] for e in PACKS[game]["events"]]
+        names = [e[0] for e in PACKS[game]["events"]] + \
+                [e[0] for e in PACKS[game].get("visual_events", [])]
         if event not in names:
             print(f"[!] '{event}' isn't a standard {game} event ({', '.join(names)}). Adding anyway.")
-
-    dest = get_settings().data_dir / "game_cues" / game / f"{event}.wav"
-    dest.parent.mkdir(parents=True, exist_ok=True)
 
     with tempfile.TemporaryDirectory() as tmp:
         if src.lower().startswith(("http://", "https://")):
@@ -56,11 +56,10 @@ def main() -> int:
             if not Path(src_path).exists():
                 print(f"[X] file not found: {src_path}")
                 return 1
-        # Normalise to a clean 16 kHz mono cue.
-        ffmpeg.run(["-i", src_path, "-vn", "-ac", "1", "-ar", "16000",
-                    "-c:a", "pcm_s16le", str(dest)])
+        # Sound or image is auto-detected and normalised by the pack installer.
+        game_packs.install_cue(game, event, src_path)
 
-    print(f"✓ cue added -> {dest}")
+    print(f"✓ cue added for {game}/{event}")
     print(f"  ClipForge will now match '{event}' in {game} footage.")
     return 0
 

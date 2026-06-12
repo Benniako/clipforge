@@ -12,6 +12,7 @@ export interface CueEvent {
   name: string;
   desc: string;
   hint: string;
+  kind: "audio" | "visual";
   configured: boolean;
 }
 export type CuesStatus = Record<

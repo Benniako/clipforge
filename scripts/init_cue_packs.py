@@ -23,6 +23,7 @@ def main() -> int:
     for game, pack in PACKS.items():
         d = base / game
         d.mkdir(parents=True, exist_ok=True)
+        (d / "visual").mkdir(exist_ok=True)
         lines = [f"# {pack['label']} cues", "",
                  "Add a sound for each event, then ClipForge pinpoints it in your footage.",
                  "Grab isolated sounds from MyInstants / an SFX pack / FModel.", ""]
@@ -34,6 +35,17 @@ def main() -> int:
                 f"- Add:  `python scripts/add_cue.py {game} {name} <file-or-url>`",
                 "",
             ]
+        if pack.get("visual_events"):
+            lines += ["## Visual cues (images go in ./visual/)",
+                      "Crop just the on-screen graphic from a screenshot — not the whole frame.", ""]
+            for name, desc, hint in pack["visual_events"]:
+                q = urllib.parse.quote(hint)
+                lines += [
+                    f"### {name} — {desc}",
+                    f"- Find: https://www.google.com/search?tbm=isch&q={q}",
+                    f"- Add:  `python scripts/add_cue.py {game} {name} <image-file-or-url>`",
+                    "",
+                ]
         (d / "README.md").write_text("\n".join(lines), encoding="utf-8")
         print(f"  {pack['label']:<16} -> {d}")
     print(f"\nScaffolded {len(PACKS)} cue packs under {base}")

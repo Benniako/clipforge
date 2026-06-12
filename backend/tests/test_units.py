@@ -677,6 +677,71 @@ def test_multikill_streaks_chain_and_outscore_single_kills():
     assert any("streak" in f.label for f in triple.factors)
 
 
+def test_same_moment_dedupe_keeps_only_the_best_template():
+    # One kill fires the near-identical kill/double_kill/ace banner-tone
+    # templates at once — it must NOT become a fake streak or get mislabelled.
+    from app.providers.detect_cues import CueEvent
+    from app.providers.detect_gameplay import dedupe_events
+
+    evs = [CueEvent(t=100.0, label="kill", similarity=0.91),
+           CueEvent(t=100.1, label="double_kill", similarity=0.74),
+           CueEvent(t=100.2, label="ace", similarity=0.66),
+           # a real second kill 4 s later survives
+           CueEvent(t=104.0, label="kill", similarity=0.88),
+           # the same kill also matched its visual banner — audio wins (stronger)
+           CueEvent(t=104.3, label="kill_banner", similarity=0.80, kind="visual")]
+    out = dedupe_events(evs)
+    assert [(e.t, e.label) for e in out] == [(100.0, "kill"), (104.0, "kill")]
+
+
+def test_visual_cue_clip_keeps_captions_and_names_the_graphic():
+    from app.media.ffmpeg import MediaInfo
+    from app.providers.detect_cues import CueEvent
+    from app.providers.detect_gameplay import _cue_clips
+
+    info = MediaInfo(duration=600, width=1920, height=1080, fps=30,
+                     has_audio=True, has_video=True, codec=None)
+    st = ImportSettings(min_len=15, max_len=45)
+    evs = [CueEvent(t=100.0, label="goal_banner", similarity=0.85, kind="visual")]
+    (clip,) = _cue_clips(evs, info, lead=10.0, tail=8.0, settings=st)
+    assert clip.cue_ts == []                      # nothing to mute: no announcer sound
+    assert "graphic" in clip.factors[0].label
+    assert "visual match" in clip.factors[0].detail
+
+
+def test_visual_nms_keeps_strongest_hit_per_window():
+    from app.providers.detect_visual_cues import nms_hits
+    hits = [(10.0, 0.8), (11.0, 0.9), (12.5, 0.75), (30.0, 0.85)]
+    assert nms_hits(hits, min_gap=4.0) == [(11.0, 0.9), (30.0, 0.85)]
+
+
+def test_image_cues_detected_by_magic_bytes(tmp_path=None):
+    import tempfile
+    from pathlib import Path
+    from app.game_packs import is_image_file
+
+    d = Path(tempfile.mkdtemp(prefix="clipforge-imgsniff-"))
+    png = d / "banner.dat"           # extension is irrelevant — content decides
+    png.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\0" * 16)
+    wav = d / "kill.wav"
+    wav.write_bytes(b"RIFF\x24\x00\x00\x00WAVEfmt ")
+    webp = d / "icon.bin"
+    webp.write_bytes(b"RIFF\x10\x00\x00\x00WEBPVP8 ")
+    assert is_image_file(png)
+    assert not is_image_file(wav)    # RIFF alone isn't an image — WAV stays audio
+    assert is_image_file(webp)
+
+
+def test_pack_status_lists_visual_events_with_kind():
+    from app.game_packs import pack_status
+    st = pack_status()
+    val = st["valorant"]["events"]
+    kinds = {e["name"]: e["kind"] for e in val}
+    assert kinds["kill"] == "audio"
+    assert kinds["kill_banner"] == "visual"
+    assert st["valorant"]["total"] == len(val)
+
+
 def test_caption_exclude_mutes_cue_windows():
     tr = Transcript(words=_words("streamer talking double kill more talk"),
                     provider="whisper")

@@ -19,7 +19,7 @@ from ..config import get_settings
 from ..media import ffmpeg
 from ..media.ffmpeg import MediaInfo
 from ..models import ImportSettings, ScoreFactor
-from . import detect_cues
+from . import detect_cues, detect_visual_cues
 
 log = logging.getLogger("clipforge.gameplay")
 
@@ -265,8 +265,12 @@ def detect_gameplay(src_path: str, info: MediaInfo, settings: ImportSettings,
         m, s = divmod(int(c.peak_t), 60)
         c.title = f"Highlight — {m}:{s:02d}"
 
-    # Cue-matched clips (exact game sounds) take priority over loudness clips.
-    cue_clips = _cue_clips(cue_events, info, lead, tail, settings)
+    # Cue-matched clips (exact game sounds/graphics) take priority over loudness
+    # clips. The same moment can fire several near-identical templates (Valorant's
+    # kill-1..ace banner tones, or an audio + visual cue of one kill), which would
+    # mislabel it and inflate the streak count — collapse to the best match first.
+    cue_events += _visual_cue_events(src_path, info, settings)
+    cue_clips = _cue_clips(dedupe_events(cue_events), info, lead, tail, settings)
     merged = _merge(cue_clips, clips, settings.target_clips)
     merged.sort(key=lambda c: c.start)
     return merged
@@ -287,6 +291,41 @@ def _cue_events(wav_path: str, settings: ImportSettings) -> list:
         except Exception as e:
             log.warning("cue matching failed for %s: %s", sub, e)
     return events
+
+
+def _visual_cue_events(src_path: str, info: MediaInfo,
+                       settings: ImportSettings) -> list:
+    """Match reference images from <data>/game_cues/<profile>/visual/ (+ /common)."""
+    if not info.has_video:
+        return []
+    base = get_settings().data_dir / "game_cues"
+    events = []
+    for sub in {_cue_dir(settings.game_profile), "common"}:
+        try:
+            events += detect_visual_cues.find_visual_events(
+                src_path, base / sub / "visual", width=info.width, height=info.height)
+        except Exception as e:
+            log.warning("visual cue matching failed for %s: %s", sub, e)
+    return events
+
+
+# Templates of the same moment (escalating Valorant kill-banner tones, an audio
+# + visual cue of one kill) all land within about a second of each other.
+SAME_MOMENT = 1.2
+
+
+def dedupe_events(events: list, *, window: float = SAME_MOMENT) -> list:
+    """Winner-takes-all per moment: keep only the best match within ``window``.
+
+    Without this, one kill fires the kill/double_kill/triple_kill/ace templates
+    at once (the tones are near-identical) and gets counted as a streak.
+    """
+    kept: list = []
+    for ev in sorted(events, key=lambda e: e.similarity, reverse=True):
+        if all(abs(ev.t - k.t) >= window for k in kept):
+            kept.append(ev)
+    kept.sort(key=lambda e: e.t)
+    return kept
 
 
 # Cue hits within this many seconds of each other chain into one streak —
@@ -335,9 +374,11 @@ def _cue_clips(events: list, info: MediaInfo, lead: float, tail: float,
         else:
             title = f"Streak: {n} events — {m}:{s:02d}"
 
-        factors = [ScoreFactor(label=f"Matched '{first.label}' sound",
+        best = max(grp, key=lambda e: e.similarity)
+        what = "graphic" if best.kind == "visual" else "sound"
+        factors = [ScoreFactor(label=f"Matched '{first.label}' {what}",
                                weight=round(sim * 15, 1),
-                               detail=f"{int(sim*100)}% audio match to your reference cue")]
+                               detail=f"{int(sim*100)}% {best.kind} match to your reference cue")]
         if n >= 2:
             span = max(last.t - first.t, 1.0)
             factors.insert(0, ScoreFactor(
@@ -347,7 +388,9 @@ def _cue_clips(events: list, info: MediaInfo, lead: float, tail: float,
 
         out.append(GameplayClip(
             start=round(start, 3), end=round(end, 3), score=score, peak_t=first.t,
-            title=title, cue_ts=[e.t for e in grp],
+            # Mute captions only around *audio* cues (announcer lines); a visual
+            # banner has no in-game voice to scrub from the transcript.
+            title=title, cue_ts=[e.t for e in grp if e.kind == "audio"],
             features={"cue": round(sim, 4), "streak": round(min(n / 5.0, 1.0), 4),
                       "intensity": 0.0, "sustain": 0.0, "transient": 0.0,
                       "spikes": 0.0},

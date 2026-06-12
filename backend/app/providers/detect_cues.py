@@ -35,6 +35,7 @@ class CueEvent:
     t: float          # timestamp in the source (s)
     label: str        # cue name (file stem, e.g. "kill", "goal")
     similarity: float  # 0..1 match confidence
+    kind: str = "audio"  # "audio" (sound template) or "visual" (image template)
 
 
 def _load_16k(path: str | Path):

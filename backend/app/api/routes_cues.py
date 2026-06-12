@@ -1,7 +1,8 @@
-"""Cue-pack management endpoints — add/remove reference game sounds from the UI.
+"""Cue-pack management endpoints — add/remove reference game cues from the UI.
 
-Lets the user paste a sound URL (e.g. a MyInstants link) or upload a file and
-have it installed as a matching cue — no command line. All local.
+Lets the user paste a URL (e.g. a MyInstants link) or upload a file — a sound
+*or* a reference image of an on-screen graphic — and have it installed as a
+matching cue — no command line. All local.
 """
 from __future__ import annotations
 
@@ -26,9 +27,9 @@ def list_cues() -> dict:
 async def add_cue(game: str, event: str,
                   url: str | None = Form(None),
                   file: UploadFile | None = File(None)) -> dict:
-    """Install a cue for <game>/<event> from a URL or an uploaded file."""
+    """Install a cue (sound or image) for <game>/<event> from a URL or upload."""
     if not url and not file:
-        raise HTTPException(400, "provide a sound url or file")
+        raise HTTPException(400, "provide a sound/image url or file")
     try:
         if file is not None:
             suffix = Path(file.filename or "cue").suffix or ".bin"

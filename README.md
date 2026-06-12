@@ -147,7 +147,8 @@ runs from a **single process on http://localhost:8000** — no second terminal.
 | `FFMPEG_BIN` / `FFPROBE_BIN` | auto | Override binary resolution. |
 
 Default spoken language is **German** (English/auto selectable per project).
-Game events can be pinpointed by matching reference **audio cues** — see
+Game events can be pinpointed by matching reference **audio & visual cues**
+(a sound or an on-screen graphic cropped from a screenshot) — see
 [docs/GAME_CUES.md](docs/GAME_CUES.md). Optional **AI titles** use a local
 [Ollama](https://ollama.com) model when running (otherwise heuristic titles).
 

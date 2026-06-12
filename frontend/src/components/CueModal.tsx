@@ -41,9 +41,10 @@ export default function CueModal({ onClose }: { onClose: () => void }) {
           </button>
         </div>
         <p className="muted tiny" style={{ marginTop: 0 }}>
-          Add a short reference sound per event (kill ding, goal horn, jump-scare sting…) and
-          ClipForge finds every occurrence in your footage by audio matching — exact moments
-          instead of loudness guesses. Paste a URL (e.g. MyInstants) or upload a file.
+          Add a short reference sound per event (kill ding, goal horn, jump-scare sting…) — or a
+          reference <b>image</b> for 🖼 events (kill banner, GOAL overlay, cropped from a
+          screenshot) — and ClipForge finds every occurrence in your footage by matching — exact
+          moments instead of loudness guesses. Paste a URL (e.g. MyInstants) or upload a file.
         </p>
         {cues ? (
           <>

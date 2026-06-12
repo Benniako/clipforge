@@ -76,8 +76,9 @@ export default function CueManager({
       </h3>
       <p className="muted tiny" style={{ marginBottom: 12 }}>
         Optional: paste a sound URL (a MyInstants page link works) or upload a file for each
-        event to detect it exactly. Without cues, ClipForge still finds the loud moments
-        automatically. <b>Typed URLs aren't stored until you hit Add or Save all.</b>
+        event to detect it exactly. 🖼 events take an <b>image</b> instead — crop just the
+        on-screen graphic from a screenshot. Without cues, ClipForge still finds the loud
+        moments automatically. <b>Typed URLs aren't stored until you hit Add or Save all.</b>
       </p>
       {err && (
         <p className="tiny" style={{ color: "var(--bad)", marginBottom: 10 }}>
@@ -87,33 +88,43 @@ export default function CueManager({
       <div className="caption-list">
         {pack.events.map((e) => (
           <div key={e.name} className="row" style={{ gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-            <span style={{ width: 130, fontWeight: 600, color: e.configured ? "var(--good)" : undefined }}>
-              {e.configured ? "✓" : "○"} {e.name}
+            <span style={{ width: 130, fontWeight: 600, color: e.configured ? "var(--good)" : undefined }}
+              title={e.kind === "visual" ? "Visual cue — reference image of the on-screen graphic" : "Audio cue — reference sound"}>
+              {e.configured ? "✓" : "○"} {e.kind === "visual" ? "🖼 " : ""}{e.name}
             </span>
             <input
               className="input"
               style={{ flex: 1, minWidth: 170 }}
-              placeholder={`${e.hint} — paste URL`}
+              placeholder={`${e.hint} — paste ${e.kind === "visual" ? "image " : ""}URL`}
               value={urls[e.name] || ""}
               onChange={(ev) => setUrls((u) => ({ ...u, [e.name]: ev.target.value }))}
             />
             <a
               className="btn sm ghost"
-              href={`https://www.myinstants.com/en/search/?name=${encodeURIComponent(e.hint)}`}
+              href={
+                e.kind === "visual"
+                  ? `https://www.google.com/search?tbm=isch&q=${encodeURIComponent(e.hint)}`
+                  : `https://www.myinstants.com/en/search/?name=${encodeURIComponent(e.hint)}`
+              }
               target="_blank"
               rel="noreferrer"
-              title={`Search MyInstants for "${e.hint}" — right-click the sound's Download link, copy the address, paste it here`}
+              title={
+                e.kind === "visual"
+                  ? `Search images for "${e.hint}" — right-click the image, copy the address, paste it here (or crop your own screenshot)`
+                  : `Search MyInstants for "${e.hint}" — right-click the sound's Download link, copy the address, paste it here`
+              }
             >
               🔍 Find
             </a>
             <button className="btn sm" disabled={busy === e.name} onClick={() => add(e.name)}>
               {busy === e.name ? "…" : "Add"}
             </button>
-            <label className="btn sm ghost" style={{ cursor: "pointer" }} title="Upload a sound file">
+            <label className="btn sm ghost" style={{ cursor: "pointer" }}
+              title={e.kind === "visual" ? "Upload a reference image" : "Upload a sound file"}>
               File
               <input
                 type="file"
-                accept="audio/*"
+                accept={e.kind === "visual" ? "image/*" : "audio/*"}
                 hidden
                 onChange={(ev) => {
                   const f = ev.target.files?.[0];
