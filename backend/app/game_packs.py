@@ -89,7 +89,10 @@ _IMG_MAGIC = (b"\x89PNG", b"\xff\xd8\xff", b"BM", b"GIF8")
 
 def is_image_file(path: str | Path) -> bool:
     try:
-        head = Path(path).open("rb").read(16)
+        # Close promptly — the API route unlinks this temp file right after,
+        # which Windows refuses while a handle is open ([WinError 32]).
+        with Path(path).open("rb") as f:
+            head = f.read(16)
     except OSError:
         return False
     if head.startswith(_IMG_MAGIC):
@@ -161,7 +164,8 @@ def install_cue_from_url(game: str, event: str, url: str) -> None:
             if not found:
                 raise ValueError(
                     "that page has no direct audio link — right-click the "
-                    "sound's download button and paste the copied address")
+                    "sound's download button (or the image itself, for visual "
+                    "cues) and paste the copied address")
             _download(found, dl)
         install_cue(game, event, str(dl))
 

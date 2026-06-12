@@ -709,13 +709,36 @@ def test_visual_cue_clip_keeps_captions_and_names_the_graphic():
     assert "visual match" in clip.factors[0].detail
 
 
+def test_visual_cues_survive_missing_audio():
+    """A muted VOD must still surface visually-matched moments (the old flow
+    bailed to the uniform fallback before cue matching ever merged)."""
+    from app.media.ffmpeg import MediaInfo
+    from app.providers import detect_gameplay as dg
+    from app.providers.detect_cues import CueEvent
+
+    info = MediaInfo(duration=300, width=1920, height=1080, fps=30,
+                     has_audio=False, has_video=True, codec=None)
+    st = ImportSettings(min_len=10, max_len=30, target_clips=4)
+    orig = dg._visual_cue_events
+    dg._visual_cue_events = lambda *a, **k: [
+        CueEvent(t=120.0, label="goal_banner", similarity=0.9, kind="visual")]
+    try:
+        clips = dg.detect_gameplay("unused.mp4", info, st)
+    finally:
+        dg._visual_cue_events = orig
+    cued = [c for c in clips if c.features.get("cue", 0.0) > 0]
+    assert len(cued) == 1 and cued[0].start <= 120.0 <= cued[0].end
+    assert "Goal Banner" in cued[0].title
+    assert len(clips) > 1                  # fallback segments still fill the batch
+
+
 def test_visual_nms_keeps_strongest_hit_per_window():
     from app.providers.detect_visual_cues import nms_hits
     hits = [(10.0, 0.8), (11.0, 0.9), (12.5, 0.75), (30.0, 0.85)]
     assert nms_hits(hits, min_gap=4.0) == [(11.0, 0.9), (30.0, 0.85)]
 
 
-def test_image_cues_detected_by_magic_bytes(tmp_path=None):
+def test_image_cues_detected_by_magic_bytes():
     import tempfile
     from pathlib import Path
     from app.game_packs import is_image_file

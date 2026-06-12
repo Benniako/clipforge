@@ -200,77 +200,76 @@ def detect_gameplay(src_path: str, info: MediaInfo, settings: ImportSettings,
     from pathlib import Path
 
     aw = weights or audio_weights(settings.game_profile)
-
-    if not info.has_audio:
-        return _uniform_fallback(info, settings)
-
-    cue_events: list = []
-    if wav_path is not None:
-        times, rms = _load_rms(wav_path)
-        cue_events = _cue_events(wav_path, settings)
-    else:
-        with tempfile.TemporaryDirectory() as tmp:
-            wav = Path(tmp) / "a.wav"
-            try:
-                ffmpeg.extract_audio_wav(src_path, wav)
-            except Exception as e:
-                log.warning("gameplay audio extract failed: %s", e)
-                return _uniform_fallback(info, settings)
-            times, rms = _load_rms(str(wav))
-            cue_events = _cue_events(str(wav), settings)
-
-    if times is None:
-        return _uniform_fallback(info, settings)
-
-
     profile = get_profile(settings.game_profile)
-    peaks, thr, floor = _pick_peaks(times, rms, settings=settings, profile=profile)
-    if not peaks:
-        return _uniform_fallback(info, settings)
-
     target = (settings.min_len + settings.max_len) / 2.0
     lead = target * profile["lead_frac"]   # show the build-up, then the payoff
     tail = target - lead
-    hop = float(times[1] - times[0]) if len(times) > 1 else 0.1
-    pre_n = max(int(2.0 / hop), 1)         # ~2s window before the peak
 
-    clips: list[GameplayClip] = []
-    for idx in peaks:
-        pt = float(times[idx])
-        start = max(0.0, pt - lead)
-        end = min(info.duration, pt + tail)
-        if end - start < settings.min_len:
-            start = max(0.0, end - settings.min_len)
-        # intensity 0..1 = how this peak ranks across the whole envelope
-        pct = float((rms < rms[idx]).mean())
-        # sustain: share of the window above the action threshold
-        w0 = int(start / hop); w1 = int(end / hop)
-        window = rms[w0:w1] if w1 > w0 else rms[idx:idx + 1]
-        sustain = float((window > thr).mean()) if len(window) else 0.0
-        spikes = _count_spikes(window, thr)
-        # transient: how much the peak jumps above the ~2s just before it
-        pre = rms[max(idx - pre_n, 0):max(idx - 2, 1)]
-        base = float(pre.mean()) if len(pre) else floor
-        transient = float(max(0.0, (rms[idx] - base) / (rms[idx] + 1e-6)))
-
-        feats = {"intensity": round(pct, 4), "sustain": round(sustain, 4),
-                 "transient": round(transient, 4),
-                 "spikes": round(min(spikes / 5.0, 1.0), 4), "cue": 0.0,
-                 "reaction": 0.0}
-        score, factors = score_audio(feats, aw)
-        clips.append(GameplayClip(start=round(start, 3), end=round(end, 3),
-                                  score=score, factors=factors, peak_t=pt, features=feats))
-
-    for i, c in enumerate(clips, 1):
-        m, s = divmod(int(c.peak_t), 60)
-        c.title = f"Highlight — {m}:{s:02d}"
+    # Visual cues need only the video, so they work even when the audio is
+    # missing, unreadable, or too flat for the loudness detector.
+    cue_events: list = _visual_cue_events(src_path, info, settings)
+    times = rms = None
+    if info.has_audio:
+        if wav_path is not None:
+            times, rms = _load_rms(wav_path)
+            cue_events += _cue_events(wav_path, settings)
+        else:
+            with tempfile.TemporaryDirectory() as tmp:
+                wav = Path(tmp) / "a.wav"
+                try:
+                    ffmpeg.extract_audio_wav(src_path, wav)
+                    times, rms = _load_rms(str(wav))
+                    cue_events += _cue_events(str(wav), settings)
+                except Exception as e:
+                    log.warning("gameplay audio extract failed: %s", e)
 
     # Cue-matched clips (exact game sounds/graphics) take priority over loudness
     # clips. The same moment can fire several near-identical templates (Valorant's
     # kill-1..ace banner tones, or an audio + visual cue of one kill), which would
     # mislabel it and inflate the streak count — collapse to the best match first.
-    cue_events += _visual_cue_events(src_path, info, settings)
     cue_clips = _cue_clips(dedupe_events(cue_events), info, lead, tail, settings)
+
+    clips: list[GameplayClip] = []
+    if times is not None:
+        peaks, thr, floor = _pick_peaks(times, rms, settings=settings, profile=profile)
+        hop = float(times[1] - times[0]) if len(times) > 1 else 0.1
+        pre_n = max(int(2.0 / hop), 1)         # ~2s window before the peak
+        for idx in peaks:
+            pt = float(times[idx])
+            start = max(0.0, pt - lead)
+            end = min(info.duration, pt + tail)
+            if end - start < settings.min_len:
+                start = max(0.0, end - settings.min_len)
+            # intensity 0..1 = how this peak ranks across the whole envelope
+            pct = float((rms < rms[idx]).mean())
+            # sustain: share of the window above the action threshold
+            w0 = int(start / hop); w1 = int(end / hop)
+            window = rms[w0:w1] if w1 > w0 else rms[idx:idx + 1]
+            sustain = float((window > thr).mean()) if len(window) else 0.0
+            spikes = _count_spikes(window, thr)
+            # transient: how much the peak jumps above the ~2s just before it
+            pre = rms[max(idx - pre_n, 0):max(idx - 2, 1)]
+            base = float(pre.mean()) if len(pre) else floor
+            transient = float(max(0.0, (rms[idx] - base) / (rms[idx] + 1e-6)))
+
+            feats = {"intensity": round(pct, 4), "sustain": round(sustain, 4),
+                     "transient": round(transient, 4),
+                     "spikes": round(min(spikes / 5.0, 1.0), 4), "cue": 0.0,
+                     "reaction": 0.0}
+            score, factors = score_audio(feats, aw)
+            clips.append(GameplayClip(start=round(start, 3), end=round(end, 3),
+                                      score=score, factors=factors, peak_t=pt,
+                                      features=feats))
+        for c in clips:
+            m, s = divmod(int(c.peak_t), 60)
+            c.title = f"Highlight — {m}:{s:02d}"
+
+    if not clips and not cue_clips:
+        return _uniform_fallback(info, settings)
+    if not clips:
+        # No usable loudness signal — fill around the cue clips with evenly
+        # spaced segments so the user still gets a full batch.
+        clips = _uniform_fallback(info, settings)
     merged = _merge(cue_clips, clips, settings.target_clips)
     merged.sort(key=lambda c: c.start)
     return merged
@@ -374,9 +373,11 @@ def _cue_clips(events: list, info: MediaInfo, lead: float, tail: float,
         else:
             title = f"Streak: {n} events — {m}:{s:02d}"
 
+        # Name the strongest match (label + kind together, so a group mixing an
+        # audio kill and a visual banner never reads "kill graphic").
         best = max(grp, key=lambda e: e.similarity)
         what = "graphic" if best.kind == "visual" else "sound"
-        factors = [ScoreFactor(label=f"Matched '{first.label}' {what}",
+        factors = [ScoreFactor(label=f"Matched '{best.label}' {what}",
                                weight=round(sim * 15, 1),
                                detail=f"{int(sim*100)}% {best.kind} match to your reference cue")]
         if n >= 2:
