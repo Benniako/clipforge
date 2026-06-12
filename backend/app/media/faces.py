@@ -33,6 +33,10 @@ _yunet = None
 _haar = None
 _mediapipe = None   # MediaPipe FaceDetector (opt-in, Apache 2.0)
 
+_MP_MODEL_URL = ("https://storage.googleapis.com/mediapipe-models/face_detector/"
+                 "blaze_face_short_range/float16/latest/blaze_face_short_range.tflite")
+_MP_MIN_BYTES = 100_000
+
 
 def _yunet_path() -> Path:
     env = os.environ.get("CLIPFORGE_YUNET_PATH")
@@ -61,11 +65,41 @@ def _fetch_yunet(dst: Path) -> bool:
         return False
 
 
+def _mp_model_path() -> Path:
+    env = os.environ.get("CLIPFORGE_MP_FACE_MODEL")
+    if env:
+        return Path(env)
+    return get_settings().data_dir / "models" / "blaze_face_short_range.tflite"
+
+
+def _fetch_mp_model(dst: Path) -> bool:
+    """One best-effort download of the BlazeFace TFLite model (~230 KB)."""
+    import urllib.request
+
+    try:
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        tmp = dst.with_suffix(".part")
+        req = urllib.request.Request(_MP_MODEL_URL,
+                                     headers={"User-Agent": "ClipForge/0.1"})
+        with urllib.request.urlopen(req, timeout=15) as resp, open(tmp, "wb") as f:
+            f.write(resp.read())
+        if tmp.stat().st_size < _MP_MIN_BYTES:
+            tmp.unlink(missing_ok=True)
+            return False
+        tmp.replace(dst)
+        log.info("downloaded MediaPipe BlazeFace model -> %s", dst)
+        return True
+    except Exception as e:
+        log.info("MediaPipe model unavailable (%s); using YuNet/Haar", e)
+        return False
+
+
 def _get_mediapipe():
     """MediaPipe BlazeFace detector (tier 1, opt-in).
 
-    30–70 FPS on CPU, handles side-profiles, Apache 2.0 — no GPU or model
-    download needed. Returns a detector or None when mediapipe isn't installed.
+    30–70 FPS on CPU, handles side-profiles, Apache 2.0.
+    Requires a one-time ~230 KB model download (same pattern as YuNet).
+    Returns the detector or None when mediapipe isn't installed or offline.
     """
     global _mediapipe
     if _mediapipe is not None:
@@ -73,8 +107,12 @@ def _get_mediapipe():
     try:
         import mediapipe as mp
 
+        path = _mp_model_path()
+        if not path.exists() and not _fetch_mp_model(path):
+            _mediapipe = "unavailable"
+            return None
         opts = mp.tasks.vision.FaceDetectorOptions(
-            base_options=mp.tasks.BaseOptions(model_asset_path=None),
+            base_options=mp.tasks.BaseOptions(model_asset_path=str(path)),
             running_mode=mp.tasks.vision.RunningMode.IMAGE,
             min_detection_confidence=0.5,
         )
