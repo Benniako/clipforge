@@ -82,17 +82,20 @@ def _band_spectrogram(samples):
 def match_template(sig, tmpl, *, threshold: float, min_gap: float):
     """Return [(t, similarity)] where template ``tmpl`` matches signal ``sig``."""
     import numpy as np
+    from numpy.lib.stride_tricks import as_strided
 
     sig_spec = _band_spectrogram(sig)
     tmpl_spec = _band_spectrogram(tmpl)
     tn = len(tmpl_spec)
     if tn < 2 or len(sig_spec) <= tn:
         return []
-    # similarity[k] = mean_i <sig_spec[k+i], tmpl_spec[i]>  (both L2-normalized)
-    sim = np.zeros(len(sig_spec) - tn + 1, dtype=np.float32)
-    for b in range(BANDS):
-        sim += np.correlate(sig_spec[:, b], tmpl_spec[:, b], mode="valid")
-    sim /= tn
+    n = len(sig_spec) - tn + 1
+    # Build a zero-copy sliding-window view of the signal spectrogram
+    # shape (n, tn, BANDS) so we can dot the whole thing in one einsum call
+    # instead of looping over BANDS with 40 serial np.correlate calls.
+    s0, s1 = sig_spec.strides
+    sig_win = as_strided(sig_spec, shape=(n, tn, BANDS), strides=(s0, s0, s1))
+    sim = np.einsum("ijk,jk->i", sig_win, tmpl_spec, dtype=np.float32) / tn
 
     gap = max(int(min_gap * SR / HOP), 1)
     out: list[tuple[float, float]] = []

@@ -202,9 +202,13 @@ def _whisperx_transcribe(audio_path, language, progress) -> Transcript:
 
 def _whisper_transcribe(audio_path, language, progress) -> Transcript:
     model = _load_whisper()
+    s = get_settings()
+    # beam_size=5 is the Whisper default and gives noticeably better accuracy;
+    # on CPU it's still slow, so we keep greedy (beam_size=1) there.
+    beam = 5 if s.device == "cuda" else 1
     segments, info = model.transcribe(
         audio_path, language=language, word_timestamps=True,
-        vad_filter=True, beam_size=1,
+        vad_filter=True, beam_size=beam,
     )
     total = max(getattr(info, "duration", 0.0), 0.001)
     words: list[Word] = []

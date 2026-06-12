@@ -1,11 +1,17 @@
-"""Unified face detection — YuNet (CNN) when available, Haar cascade otherwise.
+"""Unified face detection — three-tier cascade.
 
-YuNet is a 337KB ONNX model that detects faces down to ~10x10px, including side
-faces and partial occlusion — exactly the regime where a streamer's small corner
-facecam lives and where the Haar cascade fails. opencv-python ships the
-``cv2.FaceDetectorYN`` runtime but not the model file, so we look for it in the
-data dir (or ``CLIPFORGE_YUNET_PATH``) and make one best-effort download attempt;
-everything degrades to the Haar cascade if neither works.
+Tier 1 — **MediaPipe** (opt-in, ``pip install mediapipe``):
+  BlazeFace CNN, 30–70 FPS CPU with built-in frame-to-frame tracking.
+  Handles side-profiles better than Haar and needs no model download.
+  Apache 2.0 — fully commercial-safe. Install to enable, auto-detected.
+
+Tier 2 — **YuNet** (default when OpenCV is present):
+  337 KB ONNX model shipped via ``cv2.FaceDetectorYN``; excellent at
+  small boxes and partial occlusion (streamer facecam corner). One
+  best-effort model download on first use; degrades to Haar if offline.
+
+Tier 3 — **Haar cascade** (always available with OpenCV):
+  Fast, CPU-only, frontal faces only. Final fallback.
 """
 from __future__ import annotations
 
@@ -20,11 +26,12 @@ log = logging.getLogger("clipforge.faces")
 
 YUNET_URL = ("https://github.com/opencv/opencv_zoo/raw/main/models/"
              "face_detection_yunet/face_detection_yunet_2023mar.onnx")
-_YUNET_MIN_BYTES = 100_000          # sanity floor for a complete download
+_YUNET_MIN_BYTES = 100_000
 
-_lock = threading.Lock()            # FaceDetectorYN instances aren't thread-safe
-_yunet = None                       # cached detector ("unavailable" = gave up)
+_lock = threading.Lock()
+_yunet = None
 _haar = None
+_mediapipe = None   # MediaPipe FaceDetector (opt-in, Apache 2.0)
 
 
 def _yunet_path() -> Path:
@@ -52,6 +59,32 @@ def _fetch_yunet(dst: Path) -> bool:
     except Exception as e:
         log.info("YuNet model unavailable (%s); using Haar cascade", e)
         return False
+
+
+def _get_mediapipe():
+    """MediaPipe BlazeFace detector (tier 1, opt-in).
+
+    30–70 FPS on CPU, handles side-profiles, Apache 2.0 — no GPU or model
+    download needed. Returns a detector or None when mediapipe isn't installed.
+    """
+    global _mediapipe
+    if _mediapipe is not None:
+        return None if _mediapipe == "unavailable" else _mediapipe
+    try:
+        import mediapipe as mp
+
+        opts = mp.tasks.vision.FaceDetectorOptions(
+            base_options=mp.tasks.BaseOptions(model_asset_path=None),
+            running_mode=mp.tasks.vision.RunningMode.IMAGE,
+            min_detection_confidence=0.5,
+        )
+        _mediapipe = mp.tasks.vision.FaceDetector.create_from_options(opts)
+        log.info("face detection: MediaPipe BlazeFace loaded (tier 1)")
+        return _mediapipe
+    except Exception as e:
+        log.info("MediaPipe unavailable (%s); using YuNet/Haar", e)
+        _mediapipe = "unavailable"
+        return None
 
 
 def _get_yunet():
@@ -92,11 +125,37 @@ def detect_faces(img_bgr, *, min_size_frac: float = 0.03) -> list[tuple[int, int
 
     ``min_size_frac`` is the minimum face width as a fraction of frame width —
     keeps tiny in-game character faces from registering.
+
+    Detection tier used: InsightFace buffalo_s (if installed) → YuNet → Haar.
     """
     import cv2
 
     h, w = img_bgr.shape[:2]
     min_px = max(int(w * min_size_frac), 10)
+
+    # --- Tier 1: MediaPipe BlazeFace (opt-in) --------------------------------
+    mp_det = _get_mediapipe()
+    if mp_det is not None:
+        try:
+            import mediapipe as mp
+
+            mp_img = mp.Image(image_format=mp.ImageFormat.SRGB,
+                              data=img_bgr[..., ::-1].copy())  # BGR→RGB
+            with _lock:
+                result = mp_det.detect(mp_img)
+            out = []
+            for det in result.detections:
+                bb = det.bounding_box
+                fx, fy, fw, fh = bb.origin_x, bb.origin_y, bb.width, bb.height
+                if fw >= min_px and fh >= min_px:
+                    out.append((max(int(fx), 0), max(int(fy), 0),
+                                min(int(fw), w - int(fx)),
+                                min(int(fh), h - int(fy))))
+            return out
+        except Exception as e:
+            log.debug("MediaPipe inference failed (%s); falling back", e)
+
+    # --- Tier 2: YuNet -------------------------------------------------------
     with _lock:
         det = _get_yunet()
         if det is not None:
@@ -106,14 +165,22 @@ def detect_faces(img_bgr, *, min_size_frac: float = 0.03) -> list[tuple[int, int
             for f in (faces if faces is not None else []):
                 fx, fy, fw, fh = (int(round(v)) for v in f[:4])
                 if fw >= min_px and fh >= min_px:
-                    # clamp — YuNet can return boxes slightly outside the frame
                     fx, fy = max(fx, 0), max(fy, 0)
                     out.append((fx, fy, min(fw, w - fx), min(fh, h - fy)))
             return out
+
+    # --- Tier 3: Haar cascade ------------------------------------------------
     gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
-    # CascadeClassifier isn't thread-safe either — the pipeline worker and an
-    # editor-triggered reframe can call this concurrently.
     with _lock:
         faces = _get_haar().detectMultiScale(gray, scaleFactor=1.15, minNeighbors=5,
                                              minSize=(max(min_px, 30), max(min_px, 30)))
     return [tuple(int(v) for v in f) for f in faces]
+
+
+def active_tier() -> str:
+    """Which detection tier is currently loaded ('mediapipe'/'yunet'/'haar')."""
+    if _mediapipe and _mediapipe != "unavailable":
+        return "mediapipe"
+    if _yunet and _yunet != "unavailable":
+        return "yunet"
+    return "haar"

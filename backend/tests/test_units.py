@@ -305,8 +305,8 @@ def test_diarization_capability_requires_token():
 # --------------------------------------------------------------------------- #
 def test_auto_whisper_model_picks_for_hardware():
     from app.config import _auto_whisper_model
-    assert _auto_whisper_model(True, 16000, 12) == "large-v3"   # big GPU
-    assert _auto_whisper_model(True, 4000, 8) == "medium"       # small GPU
+    assert _auto_whisper_model(True, 16000, 12) == "large-v3-turbo"   # big GPU
+    assert _auto_whisper_model(True, 2000, 8) == "medium"       # small GPU (<3 GB VRAM)
     assert _auto_whisper_model(False, 0, 12) == "small"         # strong CPU
     assert _auto_whisper_model(False, 0, 6) == "base"
     assert _auto_whisper_model(False, 0, 2) == "tiny"           # weak CPU

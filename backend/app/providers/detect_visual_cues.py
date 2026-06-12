@@ -36,12 +36,18 @@ SAMPLE_FPS = 1.0     # game banners persist >= ~1 s, so 1 fps is enough
 _SCALES = (0.5, 0.7, 1.0, 1.4, 2.0)
 
 
-def _load_templates(cues_dir: Path, base_scale: float) -> list[tuple[str, list]]:
-    """[(label, [gray template at each usable scale])] for every reference image."""
+def _load_templates(cues_dir: Path, base_scale: float) -> list[tuple[str, list, object]]:
+    """[(label, scaled_variants, orb_descriptor)] for every reference image.
+
+    ``scaled_variants`` feed the matchTemplate pass.
+    ``orb_descriptor`` (keypoints+descriptors pre-computed on the full-size
+    reference) feeds the ORB fallback that handles rotated/warped banners.
+    """
     import cv2
     import numpy as np
 
-    out: list[tuple[str, list]] = []
+    orb = cv2.ORB_create(nfeatures=500)
+    out: list[tuple[str, list, object]] = []
     for p in sorted(cues_dir.iterdir()):
         if p.suffix.lower() not in IMG_EXTS:
             continue
@@ -53,16 +59,53 @@ def _load_templates(cues_dir: Path, base_scale: float) -> list[tuple[str, list]]
         for s in _SCALES:
             f = base_scale * s
             w, h = max(int(img.shape[1] * f), 8), max(int(img.shape[0] * f), 8)
-            if w >= FRAME_W or h >= FRAME_W:   # bigger than any frame — skip scale
+            if w >= FRAME_W or h >= FRAME_W:
                 continue
             variants.append(cv2.resize(img, (w, h), interpolation=cv2.INTER_AREA))
+        # Pre-compute ORB descriptors on the full-res reference (before scaling).
+        kp, des = orb.detectAndCompute(img, None)
+        orb_data = (kp, des)
         if variants:
-            out.append((p.stem, variants))
+            out.append((p.stem, variants, orb_data))
     return out
 
 
-def _best_match(frame, variants) -> float:
-    """Best TM_CCOEFF_NORMED score of any scale of one template in one frame."""
+# Minimum good ORB matches to count as a hit, and the Lowe ratio for filtering.
+_ORB_MIN_MATCHES = 8
+_ORB_LOWE = 0.75
+# ORB score reported when keypoint matching succeeds (it's binary pass/fail,
+# not a continuous similarity — report a fixed conservative confidence).
+_ORB_HIT_SIM = 0.80
+
+
+def _orb_match(frame, orb_data) -> float:
+    """ORB keypoint match score (0.0 or _ORB_HIT_SIM) for a single frame.
+
+    Handles rotated, slightly warped, and differently-scaled banners that
+    matchTemplate misses. Uses Lowe ratio test + minimum inlier count.
+    Falls back to 0.0 on any failure (no descriptors, tiny frame, etc.).
+    """
+    import cv2
+
+    kp_ref, des_ref = orb_data
+    if des_ref is None or len(des_ref) < _ORB_MIN_MATCHES:
+        return 0.0
+    orb = cv2.ORB_create(nfeatures=500)
+    kp_frame, des_frame = orb.detectAndCompute(frame, None)
+    if des_frame is None or len(des_frame) < _ORB_MIN_MATCHES:
+        return 0.0
+    bf = cv2.BFMatcher(cv2.NORM_HAMMING)
+    pairs = bf.knnMatch(des_ref, des_frame, k=2)
+    good = [m for m, n in pairs if m.distance < _ORB_LOWE * n.distance]
+    return _ORB_HIT_SIM if len(good) >= _ORB_MIN_MATCHES else 0.0
+
+
+# matchTemplate threshold below which we also try ORB (may be rotated/warped).
+_TM_ORB_FALLBACK = 0.50
+
+
+def _best_match(frame, variants, orb_data) -> float:
+    """Best similarity across matchTemplate (multi-scale) + ORB fallback."""
     import cv2
 
     best = 0.0
@@ -71,7 +114,13 @@ def _best_match(frame, variants) -> float:
         th, tw = t.shape
         if th >= fh or tw >= fw:
             continue
-        best = max(best, float(cv2.matchTemplate(frame, t, cv2.TM_CCOEFF_NORMED).max()))
+        s = float(cv2.matchTemplate(frame, t, cv2.TM_CCOEFF_NORMED).max())
+        if s > best:
+            best = s
+    # ORB handles rotation/warp that TM_CCOEFF_NORMED can't; only run it when
+    # TM didn't already give a confident hit (avoid double-counting).
+    if best < _TM_ORB_FALLBACK:
+        best = max(best, _orb_match(frame, orb_data))
     return best
 
 
@@ -127,11 +176,11 @@ def find_visual_events(video_path: str, cues_dir: Path, *, width: int, height: i
     if not templates:
         return []
 
-    hits: dict[str, list[tuple[float, float]]] = {label: [] for label, _ in templates}
+    hits: dict[str, list[tuple[float, float]]] = {label: [] for label, _, _orb in templates}
     try:
         for t, frame in _iter_frames(video_path, width, height, fps=fps):
-            for label, variants in templates:
-                s = _best_match(frame, variants)
+            for label, variants, orb_data in templates:
+                s = _best_match(frame, variants, orb_data)
                 if s >= threshold:
                     hits[label].append((t, s))
     except Exception as e:

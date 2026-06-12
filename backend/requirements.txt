@@ -20,10 +20,24 @@ yt-dlp>=2024.0              # optional: import from a pasted video URL
 # setup.bat/setup.sh install these automatically when nvidia-smi is present:
 #   pip install nvidia-cublas-cu12 nvidia-cudnn-cu12
 
-# Opt-in, higher-quality transcription: whisperX adds forced word-level
-# alignment (tighter caption timing) and speaker diarization. It is heavy
-# (pulls PyTorch + pyannote) and a CUDA GPU is recommended; diarization also
-# needs a Hugging Face token (set HF_TOKEN). When installed it is used
-# automatically, falling back to faster-whisper otherwise. Enable with:
+# ---------------------------------------------------------------------------
+# Opt-in engine upgrades (auto-detected at runtime; install any/all)
+# ---------------------------------------------------------------------------
+
+# Higher-quality transcription: whisperX adds forced word-level alignment
+# (tighter caption timing) and speaker diarization. Heavy — pulls PyTorch +
+# pyannote — GPU recommended. Diarization also needs HF_TOKEN. Enable with:
 #   pip install whisperx
 # whisperx>=3.1
+
+# Tier-1 face detection (MediaPipe BlazeFace, 30–70 FPS CPU):
+# Handles side-profiles and has built-in frame tracking; no model download.
+# Apache 2.0 — commercial-safe. Enable with:
+#   pip install mediapipe
+# mediapipe>=0.10
+
+# Tier-1 visual cue matching with rotation/scale invariance (SIFT):
+# Handles game banners that appear at different sizes or slight angles.
+# Already in opencv-contrib-python (SIFT patent expired 2020). Enable with:
+#   pip install opencv-contrib-python-headless
+# (replaces opencv-python-headless — same API, adds SIFT/SURF/ORB extras)

@@ -134,7 +134,7 @@ runs from a **single process on http://localhost:8000** — no second terminal.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `CLIPFORGE_WHISPER_MODEL` | *auto* | **Auto-selected for your hardware** (GPU→`large-v3`, strong CPU→`small`, weak→`tiny`). Set to override. |
+| `CLIPFORGE_WHISPER_MODEL` | *auto* | **Auto-selected for your hardware** (GPU→`large-v3-turbo` ≈8× faster than v3 with <1% extra WER, strong CPU→`small`, weak→`tiny`). Set to override. |
 | `CLIPFORGE_TRANSCRIBER` | `auto` | `auto` (whisperX if installed, else faster-whisper), or force `whisperx`/`faster`/`synthetic`. |
 | `CLIPFORGE_DEVICE` | *auto* | `cuda` when a usable GPU is detected, else `cpu`. Set to force. |
 | `HF_TOKEN` | – | Hugging Face token; enables whisperX **speaker diarization** (gated pyannote model). |

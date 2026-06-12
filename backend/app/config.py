@@ -133,11 +133,13 @@ def _detect_vram_mb() -> int:
 def _auto_whisper_model(has_cuda: bool, vram_mb: int, cpu: int) -> str:
     """Pick the best Whisper size for the actual compute device.
 
-    GPU (CUDA usable by ctranslate2) → large-v3 (or medium on a small card).
-    CPU only → scale by core count (large-v3 on CPU is impractically slow).
+    GPU path: large-v3-turbo is ~8x faster than large-v3 with <1% extra WER —
+    always preferred on GPU. Only fall back to the smaller ``medium`` on cards
+    too tight for the turbo model (~2.5 GB at int8).
+    CPU only: large-v3 is impractically slow; scale by core count.
     """
     if has_cuda:
-        return "large-v3" if vram_mb >= 4500 else "medium"
+        return "large-v3-turbo" if vram_mb >= 3000 else "medium"
     if cpu >= 12:
         return "small"
     if cpu >= 6:
@@ -168,6 +170,8 @@ class Settings:
     has_cuda: bool          # CUDA available for ML (ctranslate2/torch)
     has_nvenc: bool         # ffmpeg has the h264_nvenc encoder compiled in
     has_nvidia: bool        # an NVIDIA GPU + driver is actually present
+    # --- optional upgrade tiers (default False; installed packages enable them)
+    has_mediapipe: bool = False  # MediaPipe BlazeFace (tier-1 face detection)
     has_av1_nvenc: bool = False  # ffmpeg has av1_nvenc (RTX 40/50 series)
     vram_mb: int = 0        # total VRAM of the first GPU (MB)
     auto_model: bool = True  # whisper model was auto-selected for this hardware
@@ -262,6 +266,8 @@ class Settings:
             "transcription": self.transcription_engine,
             "diarization": self.has_whisperx and bool(self.hf_token),
             "face_tracking": self.has_opencv,
+            "face_tier": ("mediapipe" if self.has_mediapipe else
+                          "yunet" if self.has_opencv else "none"),
             "url_import": self.has_ytdlp,
             "gpu": self.has_cuda,
             "gpu_encode": self.use_nvenc,
@@ -304,6 +310,7 @@ def get_settings() -> Settings:
         has_whisper=_has_module("faster_whisper"),
         has_whisperx=_has_module("whisperx"),
         has_opencv=_has_module("cv2"),
+        has_mediapipe=_has_module("mediapipe"),
         has_ytdlp=_has_module("yt_dlp"),
         has_cuda=has_cuda,
         has_nvenc=has_nvenc,
