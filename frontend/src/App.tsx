@@ -23,7 +23,7 @@ function Caps({ health }: { health: Health | null }) {
     ["Face tracking", c.face_tracking, ""],
     [c.gpu_encode ? "GPU encode" : c.gpu ? "GPU" : "CPU render", c.gpu || c.gpu_encode, hw],
   ];
-  if (c.llm) items.push(["AI titles", true, ""]);
+  if (c.llm) items.push(["AI titles", true, c.llm_model ?? ""]);
   return (
     <div className="caps" title="Pipeline capabilities detected in this environment">
       {items.map(([label, on, title]) => (

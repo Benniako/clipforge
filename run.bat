@@ -13,9 +13,8 @@ REM 4 parallel renders: encoding runs on NVENC, so ffmpeg barely loads the CPU.
 set CLIPFORGE_RENDER_WORKERS=4
 REM ~6x faster transcription at near-large-v3 quality on this GPU.
 set CLIPFORGE_WHISPER_MODEL=large-v3-turbo
-REM Stronger local model for AI titles (pulled via Ollama; 16GB VRAM fits it
-REM alongside Whisper). Falls back to heuristic titles if Ollama is off.
-set CLIPFORGE_LLM_MODEL=qwen3:8b
+REM AI titles auto-pick the strongest installed Ollama model (qwen3:8b is
+REM pulled on this machine); set CLIPFORGE_LLM_MODEL to force one.
 REM Uncomment for AV1 output (better quality/bitrate; H.264 plays everywhere):
 REM set CLIPFORGE_CODEC=av1
 

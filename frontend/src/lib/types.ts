@@ -195,6 +195,7 @@ export interface Health {
     gpu_encode: boolean;
     device: string;
     llm: boolean;
+    llm_model: string | null;
     whisper_model: string;
     auto_model: boolean;
     vram_gb: number;

@@ -706,6 +706,14 @@ def test_gameplay_hashtags_lead_with_the_game():
     assert "#tiktok" in tags and len(tags) <= 7
 
 
+def test_ollama_model_autopick_prefers_strongest():
+    from app.providers import llm
+    assert llm._resolve_model(["llama3.2:latest", "qwen3:8b"]) == "qwen3:8b"
+    assert llm._resolve_model(["llama3.2:latest"]) == "llama3.2:latest"
+    assert llm._resolve_model(["some-custom:7b"]) == "some-custom:7b"  # anything > nothing
+    assert llm._resolve_model([]) is None
+
+
 def test_llm_title_strips_reasoning_blocks():
     from app.providers.llm import _clean_title
     assert _clean_title("<think>\nhmm what title\n</think>\nHe aced the round") \
