@@ -39,13 +39,24 @@ def _slug(word: str) -> str:
     return "#" + re.sub(r"[^a-z0-9]", "", word.lower())
 
 
+# Known game profiles -> their primary tag (feeds bucket clips by game, so
+# the game-specific tag should lead — generic #gaming reaches no one).
+_PROFILE_TAGS = {
+    "valorant": "#valorant", "cs2": "#cs2", "cs": "#cs2", "eafc": "#eafc",
+    "fifa": "#eafc", "rocketleague": "#rocketleague", "horror": "#horrorgaming",
+}
+
+
 def suggest_hashtags(text: str, *, content_type: str, platform: str,
-                     limit: int = 7) -> list[str]:
+                     limit: int = 7, game: str | None = None) -> list[str]:
     tags: list[str] = []
     toks = [w.lower() for w in _WORD.findall(text or "")]
 
     if content_type == "gameplay":
-        tags += ["#gaming", "#gameplay", "#clips", "#highlights"]
+        g = _PROFILE_TAGS.get((game or "").lower().replace(" ", ""))
+        if g:
+            tags += [g, g + "clips"]
+        tags += ["#gaming", "#gameplay", "#highlights"]
         for t in toks:
             if t in _GAMES and _GAMES[t] not in tags:
                 tags.append(_GAMES[t])

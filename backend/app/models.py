@@ -165,6 +165,9 @@ class Clip(BaseModel):
     # Jump-cut segments (absolute source times) when silence-tightening applied;
     # empty = render the plain start..end span.
     segments: list[list[float]] = Field(default_factory=list)
+    # Absolute source spans whose words are kept OUT of captions — in-game
+    # announcer/agent lines located by audio-cue matches.
+    caption_mute: list[list[float]] = Field(default_factory=list)
     tightened_duration: float | None = None
     feedback: str | None = None   # "up" | "down" | None (current user rating)
     export_url: str | None = None

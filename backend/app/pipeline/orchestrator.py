@@ -228,10 +228,15 @@ class Engine:
             for gc in gcs:
                 words = ([w for w in transcript.words if w.end > gc.start and w.t < gc.end]
                          if real_speech else [])  # never carry filler text
-                clips.append(Clip(start=gc.start, end=gc.end, title=gc.title,
-                                  kind="gameplay", score=gc.score, factors=gc.factors,
-                                  features=gc.features,
-                                  transcript_excerpt=" ".join(w.text for w in words)[:400]))
+                clips.append(Clip(
+                    start=gc.start, end=gc.end, title=gc.title,
+                    kind="gameplay", score=gc.score, factors=gc.factors,
+                    features=gc.features,
+                    # Mute captions around matched game sounds — the announcer
+                    # saying "Double Kill" isn't the streamer talking.
+                    caption_mute=[[round(t - 0.4, 3), round(t + 2.6, 3)]
+                                  for t in gc.cue_ts],
+                    transcript_excerpt=" ".join(w.text for w in words)[:400]))
             # Snap each highlight's start to a nearby hard cut (killcam wipe,
             # replay transition) so the clip opens on a fresh shot.
             self._advance(project_id, 2, "Snapping to scene cuts…")
@@ -346,10 +351,17 @@ class Engine:
                         transcript, clip.start, clip.end, style_id)
             else:
                 clip.captions = captionize.build_caption_set(
-                    transcript, clip.start, clip.end, style_id)
+                    transcript, clip.start, clip.end, style_id,
+                    exclude=[(a, b) for a, b in clip.caption_mute] or None)
+                if kind == "gameplay":
+                    # Strip stock announcer/agent lines the ASR picked up.
+                    clip.captions.words = captionize.remove_phrases(
+                        clip.captions.words,
+                        captionize.game_noise(project.settings.game_profile))
             clip.hashtags = hashtags_mod.suggest_hashtags(
                 clip.transcript_excerpt or clip.title,
-                content_type=kind, platform=project.settings.platform.value)
+                content_type=kind, platform=project.settings.platform.value,
+                game=project.settings.game_profile if kind == "gameplay" else None)
         with store.mutate(project_id) as p:
             # The user may have rated a clip while this stage ran; don't wipe
             # the marker with our (older) local copies.

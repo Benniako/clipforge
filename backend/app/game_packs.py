@@ -21,13 +21,17 @@ from .providers.detect_cues import CUE_EXTS
 
 PACKS: dict[str, dict] = {
     "valorant": {"label": "Valorant", "events": [
-        ("kill", "Kill banner ‘ding’", "valorant kill sound"),
+        ("kill", "Kill banner ‘ding’ (repeats = multi-kill, scores higher)", "valorant kill sound"),
+        ("double_kill", "2nd-kill banner tone", "valorant double kill sound"),
+        ("triple_kill", "3rd-kill banner tone", "valorant triple kill sound"),
+        ("quad_kill", "4th-kill banner tone", "valorant quadra kill sound"),
         ("ace", "Ace announcer line", "valorant ace sound"),
+        ("clutch", "Clutch announcer line", "valorant clutch sound"),
         ("spike_plant", "Spike planted", "valorant spike planted sound"),
         ("spike_defuse", "Spike defused", "valorant defuse sound"),
     ]},
     "cs2": {"label": "CS2", "events": [
-        ("kill", "Kill confirm", "cs2 kill sound"),
+        ("kill", "Kill confirm (repeats = multi-kill, scores higher)", "cs2 kill sound"),
         ("headshot", "Headshot ‘ding’", "cs2 headshot sound"),
         ("bomb_plant", "Bomb planted", "cs2 bomb planted sound"),
         ("bomb_defuse", "Bomb defused", "cs2 defuse sound"),

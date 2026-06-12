@@ -87,11 +87,18 @@ def build_tight_caption_set(transcript: Transcript,
 
 
 def build_caption_set(transcript: Transcript, start: float, end: float,
-                      style_id: str) -> CaptionSet:
+                      style_id: str,
+                      exclude: list[tuple[float, float]] | None = None) -> CaptionSet:
+    """``exclude`` lists absolute source-time spans whose words are dropped —
+    used to keep in-game announcer lines (matched audio cues) out of the
+    captions: ASR transcribes "Double Kill!" too, but the streamer didn't say it.
+    """
     dur = max(end - start, 0.01)
     words: list[CaptionWord] = []
     for w in transcript.words:
         if w.end <= start or w.t >= end:
+            continue
+        if exclude and any(w.t < b and w.end > a for a, b in exclude):
             continue
         text = _clean(w.text)
         if not text or not _ALNUM.search(text):  # skip pure-punctuation tokens
@@ -101,3 +108,52 @@ def build_caption_set(transcript: Transcript, start: float, end: float,
         d = max(wend - rel, 0.04)
         words.append(CaptionWord(t=round(rel, 3), d=round(d, 3), text=text))
     return CaptionSet(words=words, style_id=style_id)
+
+
+# --------------------------------------------------------------------------- #
+# In-game voice suppression (gameplay captions)
+# --------------------------------------------------------------------------- #
+# Stock announcer/agent lines per game profile — ASR picks these up from the
+# game audio, but they aren't the streamer talking and read as noise burned
+# into captions. Phrases are matched case-insensitively as whole-word n-grams.
+_GAME_NOISE: dict[str, frozenset[str]] = {
+    "valorant": frozenset({
+        "double kill", "triple kill", "quadra kill", "ace", "team ace",
+        "clutch", "last player standing", "spike planted", "spike defused",
+        "flawless", "match point", "lost lead", "taken lead",
+    }),
+    "cs2": frozenset({
+        "double kill", "triple kill", "headshot", "the bomb has been planted",
+        "the bomb has been defused", "counter terrorists win", "terrorists win",
+        "bomb has been planted", "bomb has been defused",
+    }),
+    "rocketleague": frozenset({"what a save", "nice shot", "great pass", "calculated"}),
+    # EA FC commentary is continuous prose — a phrase list can't separate it
+    # from the streamer; rely on the cue-window exclusion there.
+    "eafc": frozenset(),
+    "horror": frozenset(),
+}
+_NOISE_ALIAS = {"auto": "generic", "cs": "cs2", "fifa": "eafc"}
+_TOKEN_RE = re.compile(r"[^a-zà-ÿ0-9]")
+
+
+def game_noise(profile: str | None) -> frozenset[str]:
+    name = (profile or "").lower().replace(" ", "")
+    return _GAME_NOISE.get(_NOISE_ALIAS.get(name, name), frozenset())
+
+
+def remove_phrases(words: list[CaptionWord],
+                   phrases: frozenset[str]) -> list[CaptionWord]:
+    """Drop caption words that form any of the given phrases (n-gram match)."""
+    if not words or not phrases:
+        return words
+    toks = [_TOKEN_RE.sub("", w.text.lower()) for w in words]
+    drop = [False] * len(words)
+    for phrase in phrases:
+        ptoks = phrase.split()
+        n = len(ptoks)
+        for i in range(len(toks) - n + 1):
+            if toks[i:i + n] == ptoks:
+                for j in range(i, i + n):
+                    drop[j] = True
+    return [w for w, d in zip(words, drop) if not d]

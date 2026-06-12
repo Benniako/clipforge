@@ -76,8 +76,10 @@ _GW_FACTOR = {
 }
 
 # Share of the score the facecam reaction gets when a cam is present (the
-# audio weights are scaled down to make room — see orchestrator).
-REACTION_WEIGHT = 0.15
+# audio weights are scaled down to make room — see orchestrator). Clips with
+# a visible reaction earn ~2.3x the engagement of gameplay-only clips
+# (creator-platform data, 2026) — the reaction IS the content.
+REACTION_WEIGHT = 0.2
 
 
 def with_reaction(weights: dict[str, float]) -> dict[str, float]:
@@ -123,6 +125,10 @@ class GameplayClip:
     features: dict = field(default_factory=dict)   # signal values (for learning)
     title: str = "Highlight"
     peak_t: float = 0.0
+    # Timestamps of the cue events inside this clip (announcer lines etc.) —
+    # the caption stage mutes transcript words around them so in-game voices
+    # don't end up burned into the captions.
+    cue_ts: list[float] = field(default_factory=list)
 
     @property
     def duration(self) -> float:
@@ -283,24 +289,69 @@ def _cue_events(wav_path: str, settings: ImportSettings) -> list:
     return events
 
 
+# Cue hits within this many seconds of each other chain into one streak —
+# a multi-kill, a brace, a plant-into-retake. Streaks complete better than
+# single events, and completion is what the feed algorithms reward.
+STREAK_WINDOW = 12.0
+_STREAK_WORDS = {2: "Double", 3: "Triple", 4: "Quad", 5: "Penta"}
+
+
+def group_streaks(events: list, *, window: float = STREAK_WINDOW) -> list[list]:
+    """Chain time-sorted cue events into groups of quick succession."""
+    groups: list[list] = []
+    for ev in sorted(events, key=lambda e: e.t):
+        if groups and ev.t - groups[-1][-1].t <= window:
+            groups[-1].append(ev)
+        else:
+            groups.append([ev])
+    return groups
+
+
 def _cue_clips(events: list, info: MediaInfo, lead: float, tail: float,
                settings: ImportSettings) -> list["GameplayClip"]:
     out: list[GameplayClip] = []
-    for ev in events:
-        start = max(0.0, ev.t - lead)
-        end = min(info.duration, ev.t + tail)
+    for grp in group_streaks(events):
+        first, last = grp[0], grp[-1]
+        n = len(grp)
+        sim = max(e.similarity for e in grp)
+        start = max(0.0, first.t - lead)
+        end = min(info.duration, last.t + tail)
         if end - start < settings.min_len:
             start = max(0.0, end - settings.min_len)
-        score = int(round(max(1, min(99, 75 + ev.similarity * 20))))
-        m, s = divmod(int(ev.t), 60)
+        if end - start > settings.max_len:
+            # Keep the kills, sacrifice build-up: action > context for hooks.
+            start = max(first.t - 2.0, end - settings.max_len)
+
+        # More chained events = more viral: each extra kill adds points.
+        score = int(round(max(1, min(99, 70 + sim * 15 + (n - 1) * 7))))
+        m, s = divmod(int(first.t), 60)
+        label = first.label.replace("_", " ").title()
+        labels = {e.label for e in grp}
+        if n == 1:
+            title = f"{label} — {m}:{s:02d}"
+        elif len(labels) == 1:
+            word = _STREAK_WORDS.get(n, f"{n}x")
+            title = f"{word} {label} — {m}:{s:02d}"
+        else:
+            title = f"Streak: {n} events — {m}:{s:02d}"
+
+        factors = [ScoreFactor(label=f"Matched '{first.label}' sound",
+                               weight=round(sim * 15, 1),
+                               detail=f"{int(sim*100)}% audio match to your reference cue")]
+        if n >= 2:
+            span = max(last.t - first.t, 1.0)
+            factors.insert(0, ScoreFactor(
+                label=f"{n} events in {span:.0f}s — streak",
+                weight=round((n - 1) * 7, 1),
+                detail="Chained action holds viewers to the end (multi-kill effect)"))
+
         out.append(GameplayClip(
-            start=round(start, 3), end=round(end, 3), score=score, peak_t=ev.t,
-            title=f"{ev.label.replace('_', ' ').title()} — {m}:{s:02d}",
-            features={"cue": round(ev.similarity, 4), "intensity": 0.0,
-                      "sustain": 0.0, "transient": 0.0, "spikes": 0.0},
-            factors=[ScoreFactor(label=f"Matched '{ev.label}' sound",
-                                 weight=round(ev.similarity * 20, 1),
-                                 detail=f"{int(ev.similarity*100)}% audio match to your reference cue")]))
+            start=round(start, 3), end=round(end, 3), score=score, peak_t=first.t,
+            title=title, cue_ts=[e.t for e in grp],
+            features={"cue": round(sim, 4), "streak": round(min(n / 5.0, 1.0), 4),
+                      "intensity": 0.0, "sustain": 0.0, "transient": 0.0,
+                      "spikes": 0.0},
+            factors=factors))
     return out
 
 

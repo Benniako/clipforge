@@ -95,7 +95,11 @@ def edit_clip(project_id: str, clip_id: str, edit: ClipEdit) -> Clip:
         if clip.kind == "gameplay":
             if project.transcript.provider != "synthetic":
                 clip.captions = captionize.build_caption_set(
-                    project.transcript, clip.start, clip.end, clip.captions.style_id)
+                    project.transcript, clip.start, clip.end, clip.captions.style_id,
+                    exclude=[(a, b) for a, b in clip.caption_mute] or None)
+                clip.captions.words = captionize.remove_phrases(
+                    clip.captions.words,
+                    captionize.game_noise(project.settings.game_profile))
             else:
                 clip.captions.words = []
         else:

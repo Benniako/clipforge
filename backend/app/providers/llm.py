@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import time
 import urllib.request
 
@@ -41,22 +42,41 @@ def available() -> bool:
 
 
 def _generate(prompt: str, *, timeout: float = 30.0) -> str | None:
-    body = json.dumps({
-        "model": _MODEL, "prompt": prompt, "stream": False,
-        "options": {"temperature": 0.7, "num_predict": 40},
-    }).encode()
-    req = urllib.request.Request(_URL + "/api/generate", data=body,
-                                 headers={"Content-Type": "application/json"})
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            return json.loads(r.read()).get("response", "").strip()
-    except Exception as e:
-        log.warning("ollama generate failed: %s", e)
-        return None
+    # "think": False — reasoning models (qwen3, deepseek-r1) otherwise spend
+    # the whole token budget thinking and return an empty response. Models or
+    # Ollama versions that don't know the flag get a retry without it (their
+    # inline <think> text, if any, is stripped by _clean_title).
+    payload: dict = {
+        "model": _MODEL, "prompt": prompt, "stream": False, "think": False,
+        "options": {"temperature": 0.7, "num_predict": 80},
+    }
+    for body in (payload, {k: v for k, v in payload.items() if k != "think"}):
+        req = urllib.request.Request(_URL + "/api/generate",
+                                     data=json.dumps(body).encode(),
+                                     headers={"Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                return json.loads(r.read()).get("response", "").strip()
+        except urllib.error.HTTPError as e:
+            detail = e.read().decode("utf-8", errors="ignore")
+            if "think" in detail.lower() and "think" in body:
+                continue  # flag unsupported here — retry plain
+            log.warning("ollama generate failed: %s %s", e, detail[:200])
+            return None
+        except Exception as e:
+            log.warning("ollama generate failed: %s", e)
+            return None
+    return None
+
+
+_THINK_RE = re.compile(r"<think>.*?(?:</think>|$)", re.DOTALL)
 
 
 def _clean_title(text: str) -> str:
-    text = text.strip().splitlines()[0] if text else ""
+    # Reasoning models (qwen3, deepseek-r1) prepend a <think> block.
+    text = _THINK_RE.sub("", text or "").strip()
+    lines = [ln for ln in text.splitlines() if ln.strip()]
+    text = lines[0] if lines else ""
     text = text.strip().strip('"').strip("'").strip("#").strip()
     # drop a leading "Title:" the model sometimes adds
     for p in ("title:", "hook:", "caption:"):

@@ -652,6 +652,68 @@ def test_status_ws_reports_missing_project():
         assert ws.receive_json() == {"error": "project not found"}
 
 
+def test_multikill_streaks_chain_and_outscore_single_kills():
+    from app.media.ffmpeg import MediaInfo
+    from app.providers.detect_cues import CueEvent
+    from app.providers.detect_gameplay import _cue_clips, group_streaks
+
+    evs = [CueEvent(t=100.0, label="kill", similarity=0.8),
+           CueEvent(t=104.0, label="kill", similarity=0.9),
+           CueEvent(t=109.0, label="kill", similarity=0.85),
+           CueEvent(t=300.0, label="kill", similarity=0.9)]   # far away: own clip
+    groups = group_streaks(evs)
+    assert [len(g) for g in groups] == [3, 1]
+
+    info = MediaInfo(duration=600, width=1920, height=1080, fps=30,
+                     has_audio=True, has_video=True, codec=None)
+    st = ImportSettings(min_len=15, max_len=45)
+    clips = _cue_clips(evs, info, lead=10.0, tail=8.0, settings=st)
+    triple, single = clips[0], clips[1]
+    assert triple.score > single.score            # more kills = more viral
+    assert "Triple Kill" in triple.title
+    assert triple.features["streak"] > single.features["streak"]
+    assert triple.start <= 100.0 and triple.end >= 109.0   # covers all kills
+    assert len(triple.cue_ts) == 3
+    assert any("streak" in f.label for f in triple.factors)
+
+
+def test_caption_exclude_mutes_cue_windows():
+    tr = Transcript(words=_words("streamer talking double kill more talk"),
+                    provider="whisper")
+    # words at t=0,0.4,0.8,1.2,1.6,2.0 (d=0.34) — mute the span covering
+    # words 3+4 only; any overlap with the span mutes a word.
+    cs = captionize.build_caption_set(tr, 0.0, 3.0, "bold-pop",
+                                      exclude=[(0.75, 1.55)])
+    assert [w.text for w in cs.words] == ["streamer", "talking", "more", "talk"]
+
+
+def test_game_noise_phrases_removed_from_captions():
+    from app.models import CaptionWord
+    words = [CaptionWord(t=i * 0.4, d=0.3, text=t) for i, t in
+             enumerate("nice one Double Kill! let's go".split())]
+    out = captionize.remove_phrases(words, captionize.game_noise("valorant"))
+    assert [w.text for w in out] == ["nice", "one", "let's", "go"]
+    # aliases + unknown profiles
+    assert captionize.game_noise("fifa") == captionize.game_noise("eafc")
+    assert captionize.game_noise("unknown") == frozenset()
+
+
+def test_gameplay_hashtags_lead_with_the_game():
+    from app.providers import hashtags
+    tags = hashtags.suggest_hashtags("crazy round", content_type="gameplay",
+                                     platform="tiktok", game="valorant")
+    assert tags[0] == "#valorant" and tags[1] == "#valorantclips"
+    assert "#tiktok" in tags and len(tags) <= 7
+
+
+def test_llm_title_strips_reasoning_blocks():
+    from app.providers.llm import _clean_title
+    assert _clean_title("<think>\nhmm what title\n</think>\nHe aced the round") \
+        == "He aced the round"
+    assert _clean_title("<think>truncated reasoning with no close tag") == ""
+    assert _clean_title('"Title: My hook"') == "My hook"
+
+
 def test_audio_url_extracted_from_soundboard_page():
     from app.game_packs import audio_url_from_html
     base = "https://www.myinstants.com/en/instant/valorant-kill/"
