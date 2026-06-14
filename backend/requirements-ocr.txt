@@ -1,0 +1,23 @@
+# On-screen text detection (OCR) for gameplay — OPTIONAL, gameplay-tuned.
+#
+# Most games print their key moments on screen — a Valorant kill banner, an
+# EA FC scoreline ticking up, a "VICTORY" / "ELIMINATED" splash. With an OCR
+# engine installed, ClipForge reads those and turns them into highlights (and
+# learns a reusable audio cue from each one — see app/cue_learning.py).
+#
+# Install ONE of these (auto-detected at runtime; nothing else to configure):
+#
+#   pip install -r backend/requirements-ocr.txt
+#
+# EasyOCR is the most robust on noisy game overlays (kill feeds, HUDs) and is
+# the recommended default for gameplay. It pulls PyTorch; a CUDA GPU makes it
+# much faster but it runs on CPU too.
+easyocr>=1.7
+
+# Alternative — PaddleOCR (PP-OCRv5) is the most accurate overall. Use it
+# *instead of* EasyOCR if you prefer (comment out easyocr above):
+# paddleocr>=2.7
+# paddlepaddle>=2.6           # or paddlepaddle-gpu for CUDA
+
+# Lightweight fallback — Tesseract (needs the system `tesseract` binary too):
+# pytesseract>=0.3.10

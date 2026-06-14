@@ -18,12 +18,20 @@ function Caps({ health }: { health: Health | null }) {
       : `${engine} ${c.whisper_model}` + (c.diarization ? " +diariz." : "");
   const hw = `device: ${c.device}${c.vram_gb ? ` · ${c.vram_gb} GB VRAM` : ""} · ${c.cpu} cpu` +
     (c.auto_model ? " · model auto-selected" : "");
+  const ocrName = c.ocr
+    ? { paddleocr: "PaddleOCR", easyocr: "EasyOCR", tesseract: "Tesseract" }[c.ocr] ?? "OCR"
+    : "OCR";
   const items: [string, boolean, string][] = [
     [asr, c.transcription !== "synthetic", hw],
     ["Face tracking", c.face_tracking, ""],
+    [
+      c.ocr ? `${ocrName} cues` : "On-screen OCR",
+      Boolean(c.ocr),
+      c.ocr ? "Reads on-screen game text (kills/goals) & learns reusable audio cues" : "Install easyocr/paddleocr to detect on-screen game events",
+    ],
     [c.gpu_encode ? "GPU encode" : c.gpu ? "GPU" : "CPU render", c.gpu || c.gpu_encode, hw],
   ];
-  if (c.llm) items.push(["AI titles", true, c.llm_model ?? ""]);
+  if (c.llm) items.push(["AI titles + viral", true, c.llm_model ?? ""]);
   return (
     <div className="caps" title="Pipeline capabilities detected in this environment">
       {items.map(([label, on, title]) => (

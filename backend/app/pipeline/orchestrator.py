@@ -213,6 +213,21 @@ class Engine:
                 raise RuntimeError("no highlights found in this footage")
             with store.mutate(project_id) as p:
                 p.events = detected
+            # Learn reusable AUDIO cues from the on-screen (OCR) events: snip the
+            # game sound at each banner and save it, so the cheap audio matcher
+            # catches that event on future videos even with OCR off.
+            if info.has_audio:
+                ocr_evs = [e for e in detected if getattr(e, "source", "") == "ocr"]
+                if ocr_evs:
+                    try:
+                        from .. import cue_learning
+                        learned = cue_learning.save_audio_cues_from_ocr(
+                            src_path, ocr_evs, prof)
+                        if learned:
+                            log.info("learned %d audio cue(s) from OCR: %s",
+                                     len(learned), ", ".join(learned))
+                    except Exception as e:
+                        log.warning("cue learning failed: %s", e)
             if cam_rect is not None:
                 # Re-score with the facecam reaction folded in (cue-matched
                 # clips keep their exact-sound score).

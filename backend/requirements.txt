@@ -16,6 +16,11 @@ opencv-python-headless>=4.9  # face tracking for speaker-aware 9:16 reframe
 numpy>=1.26
 yt-dlp>=2024.0              # optional: import from a pasted video URL
 
+# Gameplay on-screen text detection (OCR) — optional, gameplay-tuned. Reads
+# kill banners / scorelines / "VICTORY" splashes and learns reusable audio cues
+# from them. Auto-detected when installed. Enable with:
+#   pip install -r backend/requirements-ocr.txt   (EasyOCR / PaddleOCR / Tesseract)
+
 # GPU transcription (NVIDIA): ctranslate2 needs cuBLAS + cuDNN at runtime.
 # setup.bat/setup.sh install these automatically when nvidia-smi is present:
 #   pip install nvidia-cublas-cu12 nvidia-cudnn-cu12

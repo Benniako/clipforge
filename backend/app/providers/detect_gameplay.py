@@ -288,8 +288,30 @@ def detect_gameplay(src_path: str, info: MediaInfo, settings: ImportSettings,
     cue_clips = _cue_clips(cue_events, info, lead, tail, settings)
     ocr_clips = _ocr_clips(ocr_events, info, settings, lead=lead, tail=tail)
     merged = _merge(cue_clips + ocr_clips, clips, settings.target_clips)
+    # Multimodal corroboration: a moment confirmed by BOTH the audio cue and the
+    # on-screen text is the surest highlight there is — reward the overlap.
+    apply_corroboration(merged, cue_events, ocr_events)
     merged.sort(key=lambda c: c.start)
     return merged
+
+
+def apply_corroboration(clips: list["GameplayClip"], cue_events: list,
+                        ocr_events: list) -> None:
+    """Bump clips whose window is backed by more than one signal source.
+
+    A kill *ding* + a kill-feed line, a goal *roar* + a rising score — when the
+    audio cue and the OCR banner agree on the same instant, it's a guaranteed
+    beat. Mutates clips in place: small score bonus + an explainable factor."""
+    for c in clips:
+        cues = [e for e in cue_events if c.start <= e.t <= c.end]
+        ocrs = [e for e in ocr_events if c.start <= e.t <= c.end]
+        if cues and ocrs:
+            bonus = min(12, 6 + 2 * (len(cues) + len(ocrs) - 2))
+            c.score = int(max(1, min(99, c.score + bonus)))
+            c.features["corroborated"] = 1.0
+            c.factors.insert(0, ScoreFactor(
+                label="Audio + on-screen confirm", weight=float(bonus),
+                detail="Both the game sound and the on-screen text fire here — a sure highlight"))
 
 
 def _record_events(events_out: list | None, cue_events: list,

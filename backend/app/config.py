@@ -204,6 +204,9 @@ class Settings:
     max_upload_mb: int = int(os.environ.get("CLIPFORGE_MAX_UPLOAD_MB", "0"))
     # Compute device for the neural models ("cpu" or "cuda").
     device: str = os.environ.get("CLIPFORGE_DEVICE", "cpu")
+    # Batched-inference batch size for faster-whisper on GPU (BatchedInference
+    # Pipeline) — bigger keeps the GPU saturated; 0 disables batching.
+    whisper_batch_size: int = int(os.environ.get("CLIPFORGE_WHISPER_BATCH", "8"))
     # Which transcriber to prefer: "auto" (whisperX if present, else faster-whisper),
     # or force one of "whisperx" / "faster" / "synthetic".
     transcriber: str = os.environ.get("CLIPFORGE_TRANSCRIBER", "auto")

@@ -83,9 +83,40 @@ def _load_whisper():
     _ensure_cuda_dlls()
     s = get_settings()
     ct = "float16" if s.device == "cuda" else "int8"
-    log.info("loading faster-whisper model %s (%s/%s)", s.whisper_model, s.device, ct)
-    _model = WhisperModel(s.whisper_model, device=s.device, compute_type=ct)
+    # Use every CPU core on the CPU path (ignored on GPU) so transcription
+    # isn't artificially single-threaded — the slowest stage should use the
+    # whole machine.
+    cpu_threads = os.cpu_count() or 4
+    log.info("loading faster-whisper model %s (%s/%s, cpu_threads=%d)",
+             s.whisper_model, s.device, ct, cpu_threads)
+    _model = WhisperModel(s.whisper_model, device=s.device, compute_type=ct,
+                          cpu_threads=cpu_threads)
     return _model
+
+
+_batched = None  # cached BatchedInferencePipeline wrapper (or False if N/A)
+
+
+def _batched_pipeline(model):
+    """A faster-whisper BatchedInferencePipeline on GPU (keeps the card
+    saturated → ~1.8x faster), or None when unavailable / on CPU."""
+    global _batched
+    if _batched is not None:
+        return _batched or None
+    s = get_settings()
+    if s.device != "cuda" or s.whisper_batch_size <= 0:
+        _batched = False
+        return None
+    try:
+        from faster_whisper import BatchedInferencePipeline
+
+        _batched = BatchedInferencePipeline(model=model)
+        log.info("faster-whisper batched inference on (batch_size=%d)",
+                 s.whisper_batch_size)
+    except Exception as e:
+        log.info("batched inference unavailable (%s); sequential", e)
+        _batched = False
+    return _batched or None
 
 
 def transcribe(audio_path: str, *, language: str | None = None,
@@ -202,10 +233,23 @@ def _whisperx_transcribe(audio_path, language, progress) -> Transcript:
 
 def _whisper_transcribe(audio_path, language, progress) -> Transcript:
     model = _load_whisper()
-    segments, info = model.transcribe(
-        audio_path, language=language, word_timestamps=True,
-        vad_filter=True, beam_size=1,
-    )
+    s = get_settings()
+    batched = _batched_pipeline(model)
+    if batched is not None:
+        try:
+            segments, info = batched.transcribe(
+                audio_path, language=language, word_timestamps=True,
+                vad_filter=True, batch_size=s.whisper_batch_size)
+        except Exception as e:  # any batched-path issue -> sequential, never fail
+            log.warning("batched transcribe failed (%s); sequential", e)
+            segments, info = model.transcribe(
+                audio_path, language=language, word_timestamps=True,
+                vad_filter=True, beam_size=1)
+    else:
+        segments, info = model.transcribe(
+            audio_path, language=language, word_timestamps=True,
+            vad_filter=True, beam_size=1,
+        )
     total = max(getattr(info, "duration", 0.0), 0.001)
     words: list[Word] = []
     for seg in segments:

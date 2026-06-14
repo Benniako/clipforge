@@ -36,10 +36,6 @@ def _ts(t: float) -> str:
     return f"{h:d}:{m:02d}:{s:02d}.{c:02d}"
 
 
-def _group_lines(words, n: int):
-    return [words[i:i + n] for i in range(0, len(words), max(n, 1))]
-
-
 # A word normally stays on screen until the next word starts (no flicker). But
 # across a real pause — silence, or a span where another (toggled-off) speaker
 # was talking — holding the last word that long leaves a caption frozen on a
@@ -47,6 +43,24 @@ def _group_lines(words, n: int):
 # clears LINGER_PAD after the word instead of lingering.
 SILENCE_GAP = 1.0
 LINGER_PAD = 0.4
+# Start a fresh caption line after a pause this long, even mid-count — keeps a
+# line from spanning silence so captions begin/end with the speech.
+LINE_GAP = 0.9
+
+
+def _group_lines(words, n: int, max_gap: float = LINE_GAP):
+    """Group words into on-screen lines: a new line every ``n`` words OR after a
+    speech pause longer than ``max_gap`` (whichever comes first)."""
+    lines: list = []
+    cur: list = []
+    for w in words:
+        if cur and (len(cur) >= n or (w.t - (cur[-1].t + cur[-1].d)) > max_gap):
+            lines.append(cur)
+            cur = []
+        cur.append(w)
+    if cur:
+        lines.append(cur)
+    return lines
 
 
 def _srt_ts(t: float) -> str:

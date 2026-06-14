@@ -899,6 +899,55 @@ def test_common_cue_pack_is_available_for_all_games():
     assert {e["name"] for e in status["common"]["events"]} >= {"airhorn", "hype", "laugh"}
 
 
+# --------------------------------------------------------------------------- #
+# Caption precision, hook front-loading, multimodal corroboration, cue learning
+# --------------------------------------------------------------------------- #
+def test_caption_line_breaks_on_speech_pause():
+    from app.models import CaptionWord
+    from app.pipeline.captions import _group_lines
+    # a big gap before the third word forces a new line even under the count cap
+    ws = [CaptionWord(t=0.0, d=0.3, text="a"), CaptionWord(t=0.4, d=0.3, text="b"),
+          CaptionWord(t=3.0, d=0.3, text="c")]
+    assert [len(l) for l in _group_lines(ws, 5)] == [2, 1]
+    # tight speech (no gaps) stays one line up to the count cap
+    ws2 = [CaptionWord(t=i * 0.4, d=0.3, text=str(i)) for i in range(3)]
+    assert len(_group_lines(ws2, 5)) == 1
+
+
+def test_hook_rewards_front_loaded_curiosity():
+    early = _words("Why does nobody do this one secret")        # hook word at t=0
+    late = [Word(t=0.0, d=0.3, text="um"), Word(t=0.6, d=0.3, text="okay"),
+            Word(t=1.2, d=0.3, text="anyway")]                  # no hook up front
+    he, _ = signals.hook_strength(early, signals.get_lexicon("en"))
+    hl, _ = signals.hook_strength(late, signals.get_lexicon("en"))
+    assert he > hl
+
+
+def test_corroboration_boosts_multi_signal_clips():
+    from app.providers.detect_cues import CueEvent
+    from app.providers.detect_gameplay import GameplayClip, apply_corroboration
+    from app.providers.detect_ocr import OcrEvent
+    c = GameplayClip(start=10, end=30, score=70)
+    apply_corroboration([c], [CueEvent(t=20, label="kill", similarity=0.9)],
+                        [OcrEvent(t=21, label="kill", text="kill", confidence=0.8)])
+    assert c.score > 70 and c.features.get("corroborated") == 1.0
+    assert any("confirm" in f.label.lower() for f in c.factors)
+    # a single source does not corroborate
+    c2 = GameplayClip(start=10, end=30, score=70)
+    apply_corroboration([c2], [CueEvent(t=20, label="kill", similarity=0.9)], [])
+    assert c2.score == 70
+
+
+def test_cue_learning_pending_labels():
+    from app.cue_learning import pending_labels
+    from app.providers.detect_ocr import OcrEvent
+    evs = [OcrEvent(t=5, label="kill", text="kill", confidence=0.8),
+           OcrEvent(t=9, label="kill", text="kill", confidence=0.8),       # dup label
+           OcrEvent(t=12, label="victory", text="victory", confidence=0.8)]
+    assert pending_labels(evs, set()) == ["kill", "victory"]      # one per label, time order
+    assert pending_labels(evs, {"kill"}) == ["victory"]           # skip already-saved
+
+
 if __name__ == "__main__":
     import sys
     # Windows consoles default to a legacy code page that can't print "✓".

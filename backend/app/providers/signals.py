@@ -129,23 +129,36 @@ def _clamp(x: float) -> float:
 # Features. Each returns (value 0..1, reason). `lex` defaults to English.
 # --------------------------------------------------------------------------- #
 def hook_strength(words: list[Word], lex: Lexicon = _EN) -> tuple[float, str]:
-    """Curiosity in the first ~3 seconds — does it stop the scroll?"""
+    """Curiosity in the first ~3 seconds — does it stop the scroll?
+
+    The feed commits in the first ~1.5s, so a hook that lands *immediately*
+    (a question, number, curiosity word or direct address in the opening beat)
+    is rewarded above one that only arrives by second three.
+    """
     if not words:
         return 0.0, ""
     start = words[0].t
     head = [w for w in words if w.t - start < 3.0] or words[:8]
+    head_early = [w for w in words if w.t - start < 1.5] or words[:4]
     toks = _tokens(head)
     if not toks:
         return 0.0, ""
+    toks_early = _tokens(head_early)
     hooks = sum(t in lex.hook for t in toks)
     second_person = sum(t in lex.second_person for t in toks)
     question = any(w.text.strip().endswith("?") for w in head)
     number = _has_number(head)
-    raw = 0.34 * min(hooks, 2) / 2 + 0.22 * min(second_person, 2) / 2
-    raw += 0.28 * question + 0.16 * number
-    reason = "Opens with a question" if question else (
-        "Curiosity hook up front" if hooks else (
-            "Speaks directly to the viewer" if second_person else "Opens on a concrete detail"))
+    # Front-loaded: a hook word / question / number / "you" inside the opening ~1.5s.
+    early = (any(t in lex.hook for t in toks_early)
+             or any(w.text.strip().endswith("?") for w in head_early)
+             or _has_number(head_early)
+             or any(t in lex.second_person for t in toks_early))
+    raw = 0.30 * min(hooks, 2) / 2 + 0.18 * min(second_person, 2) / 2
+    raw += 0.24 * question + 0.12 * number + 0.16 * early
+    reason = ("Hooks in the first 1.5s" if early and (hooks or question or number) else
+              "Opens with a question" if question else (
+                  "Curiosity hook up front" if hooks else (
+                      "Speaks directly to the viewer" if second_person else "Opens on a concrete detail")))
     return _clamp(raw), reason
 
 
