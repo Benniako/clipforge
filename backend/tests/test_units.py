@@ -305,7 +305,7 @@ def test_diarization_capability_requires_token():
 # --------------------------------------------------------------------------- #
 def test_auto_whisper_model_picks_for_hardware():
     from app.config import _auto_whisper_model
-    assert _auto_whisper_model(True, 16000, 12) == "large-v3"   # big GPU
+    assert _auto_whisper_model(True, 16000, 12) == "large-v3-turbo"  # big GPU: turbo
     assert _auto_whisper_model(True, 4000, 8) == "medium"       # small GPU
     assert _auto_whisper_model(False, 0, 12) == "small"         # strong CPU
     assert _auto_whisper_model(False, 0, 6) == "base"
@@ -946,6 +946,74 @@ def test_cue_learning_pending_labels():
            OcrEvent(t=12, label="victory", text="victory", confidence=0.8)]
     assert pending_labels(evs, set()) == ["kill", "victory"]      # one per label, time order
     assert pending_labels(evs, {"kill"}) == ["victory"]           # skip already-saved
+
+
+# --------------------------------------------------------------------------- #
+# Power-ups: VAD caption snapping, replay scoring, emotion blend, subject pick
+# --------------------------------------------------------------------------- #
+def test_vad_refine_clamps_and_drops_silent_words():
+    from app.providers.vad import refine_words
+    ws = [Word(t=0.0, d=2.0, text="hello"),      # overruns into silence -> clamp
+          Word(t=5.0, d=0.3, text="ghost"),      # entirely in a silent gap -> drop
+          Word(t=10.2, d=0.3, text="world")]
+    speech = [(0.0, 1.0), (10.0, 11.0)]
+    out = refine_words(ws, speech)
+    assert [w.text for w in out] == ["hello", "world"]
+    assert out[0].end <= 1.1                      # clamped to the speech end (+pad)
+    # no speech info -> unchanged
+    assert refine_words(ws, []) == ws
+
+
+def test_replay_value_rewards_clean_button():
+    looped = _words("here is the one secret that changes everything")
+    looped[-1].text = "everything."                # complete, strong, concise
+    dangling = _words("and then i was going to say something but")
+    hi, _ = signals.replay_value(looped, 20.0, signals.get_lexicon("en"))
+    lo, _ = signals.replay_value(dangling, 20.0, signals.get_lexicon("en"))
+    assert hi > lo
+
+
+def test_apply_replay_bonus_only_lifts():
+    from app.models import ScoreFactor
+    from app.providers.score import apply_replay_bonus
+    words = _words("this is the biggest secret ever")
+    words[-1].text = "ever."
+    s, f = apply_replay_bonus(60, [ScoreFactor(label="x", weight=1.0)], words, 18.0, lang="en")
+    assert s >= 60 and 1 <= s <= 99
+    # a long clip trailing off on a connective gets no bonus (never a penalty)
+    d = _words("then i was about to say and")  # ends on dangling "and", not concise
+    s2, f2 = apply_replay_bonus(60, [], d, 50.0, lang="en")
+    assert s2 == 60
+
+
+def test_emotion_excitement_blend_is_bounded():
+    from app.providers.emotion import _arousal_from_result, apply_excitement_bonus
+    hi, fh = apply_excitement_bonus(50, [], 1.0)
+    lo, _ = apply_excitement_bonus(50, [], 0.0)
+    assert hi > 50 and lo < 50 and 1 <= hi <= 99 and 1 <= lo <= 99
+    assert fh and "energy" in fh[0].label.lower()
+    # result parsing sums high-arousal label probabilities
+    res = [{"labels": ["生气/angry", "中立/neutral"], "scores": [0.7, 0.3]}]
+    assert abs(_arousal_from_result(res) - 0.7) < 1e-6
+
+
+def test_subject_center_prefers_people_then_largest():
+    from app.providers.subject import _center_from_boxes
+    # a small person box vs a big non-person box -> follow the person
+    boxes = [(True, 100, 200, 5000), (False, 800, 1000, 50000)]
+    assert abs(_center_from_boxes(boxes, 1000) - 0.15) < 1e-6
+    # no people -> largest object
+    boxes2 = [(False, 0, 100, 1000), (False, 800, 1000, 9000)]
+    assert abs(_center_from_boxes(boxes2, 1000) - 0.9) < 1e-6
+    assert _center_from_boxes([], 1000) is None
+
+
+def test_optional_powerups_off_by_default_in_ci():
+    s = _settings()
+    r = s.capability_report()
+    assert r["vad"] is False and r["emotion"] is False
+    assert r["scene_detect"] is False and r["active_speaker"] is False
+    assert r["reframe_engine"] in ("haar", "yolo", "mediapipe")
 
 
 if __name__ == "__main__":

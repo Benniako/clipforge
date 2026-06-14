@@ -147,6 +147,8 @@ runs from a **single process on http://localhost:8000** — no second terminal.
 | `CLIPFORGE_LLM_MODEL` | *auto* | Ollama model for titles — auto-picks the strongest installed (qwen3 → llama3.1 → …). Set to force. |
 | `CLIPFORGE_RENDER_WORKERS` | *auto* | Parallel clip renders (scaled to CPU cores). |
 | `CLIPFORGE_CODEC` | `h264` | `av1` opts into av1_nvenc (RTX 40/50 series) — better quality per bitrate. |
+| `CLIPFORGE_WHISPER_BATCH` | `8` | Batched-inference batch size for faster-whisper on GPU (keeps the card saturated). |
+| `CLIPFORGE_ASD_DIR` | – | Path to an [LR-ASD](https://github.com/Junhua-Liao/LR-ASD) checkout to enable active-speaker attribution. |
 | `CLIPFORGE_DATA_DIR` | `backend/data` | Where the DB + media live. |
 | `CLIPFORGE_MAX_UPLOAD_MB` | `0` (unlimited) | Upload / URL-import size cap in MB; set only to guard a small disk. |
 | `FFMPEG_BIN` / `FFPROBE_BIN` | auto | Override binary resolution. |
@@ -165,6 +167,28 @@ Tesseract binary); with none installed, the audio/cue path still finds highlight
 → synthetic. Install the optional, higher-quality engine with `pip install whisperx`
 (adds forced word-level alignment + speaker diarization; PyTorch-heavy, GPU
 recommended). When absent, faster-whisper is used; the active engine shows in the nav bar.
+
+## Optional power-ups (auto-detected)
+
+Every one of these is optional and **graceful** — install it and ClipForge uses
+it automatically; skip it and the core pipeline runs exactly as before. The
+setup scripts install the whole set best-effort (a failed wheel is skipped):
+
+```bash
+pip install -r backend/requirements-extras.txt
+```
+
+| Power-up | What it adds | How |
+| --- | --- | --- |
+| **Silero VAD** | Captions snapped to the *exact* speech — words clear the instant talking stops. | `silero-vad` |
+| **PySceneDetect** | More robust scene-cut snapping (adaptive detector) than the ffmpeg score. | `scenedetect` |
+| **emotion2vec** | A speech-emotion **excitement** signal (laughs/hype/rage) folded into virality as an explainable factor. | `funasr` |
+| **OCR** | On-screen game text (kill banners, scorelines, VICTORY) → highlights, and **learns reusable audio cues** from them. | `easyocr` / `paddleocr` |
+| **YOLO reframe** | Content-aware 9:16 — tracks people/objects through cuts when no face is visible. | `ultralytics` |
+| **LR-ASD** | Active-speaker detection: crop & captions follow the *real* talker in multi-person shots. | clone [LR-ASD](https://github.com/Junhua-Liao/LR-ASD), set `CLIPFORGE_ASD_DIR` |
+| **whisperX** | Forced word alignment + speaker diarization. | `whisperx` (+ `HF_TOKEN`) |
+
+The nav bar shows which are live in your environment.
 
 ## Language support
 

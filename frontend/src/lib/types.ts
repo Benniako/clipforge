@@ -204,6 +204,11 @@ export interface Health {
     transcription: string;
     diarization: boolean;
     ocr: string | false;
+    vad: boolean;
+    scene_detect: boolean;
+    emotion: boolean;
+    reframe_engine: string;
+    active_speaker: boolean;
     face_tracking: boolean;
     url_import: boolean;
     gpu: boolean;

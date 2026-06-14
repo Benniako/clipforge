@@ -168,6 +168,28 @@ class Engine:
             # No audio track — skip ASR entirely, go straight to synthetic.
             transcript = transcribe_mod.synthetic_transcript(
                 src_path, lang=project.settings.language)
+
+        # Pin caption words to the *exact* speech with Silero VAD (optional):
+        # clamp each word to its speech region and drop words stuck in silence,
+        # so captions start/stop precisely when the speaker is talking.
+        if wav_path and transcript.provider != "synthetic":
+            try:
+                from ..providers import vad as vad_mod
+                speech = vad_mod.speech_intervals(wav_path)
+                if speech:
+                    transcript.words = vad_mod.refine_words(transcript.words, speech)
+            except Exception as e:
+                log.warning("VAD refine failed: %s", e)
+            # Optional LR-ASD: attribute each word to the on-screen active speaker
+            # (no-op unless the LR-ASD checkout is wired via CLIPFORGE_ASD_DIR).
+            try:
+                from ..providers import active_speaker as asd_mod
+                if asd_mod.available():
+                    transcript.words = asd_mod.attribute_speakers(
+                        src_path, transcript.words)
+            except Exception as e:
+                log.warning("active-speaker attribution failed: %s", e)
+
         with store.mutate(project_id) as p:
             p.transcript = transcript
 
@@ -292,6 +314,10 @@ class Engine:
                 clip.score, clip.factors, clip.features = score_mod.score_clip(
                     words, clip.duration, project.settings,
                     lang=transcript.language, weights=weights)
+                # Reward a clean, loopable ending (rewatch signal).
+                clip.score, clip.factors = score_mod.apply_replay_bonus(
+                    clip.score, clip.factors, words, clip.duration,
+                    lang=transcript.language)
             # Optional: a local LLM (Ollama) gives a second opinion on virality
             # (re-ranks within ±12 pts, explainable) and writes sharper titles —
             # concurrent, budgeted so a slow model can't stall the pipeline.
@@ -309,6 +335,21 @@ class Engine:
                 for i, t in titles.items():
                     clips[i].title = t
             bscope = feedback.bound_scope("talking", plat)
+
+        # Optional speech-emotion excitement (emotion2vec): a high-arousal
+        # delivery — laughter, hype, rage — is the short-form viral driver, so
+        # fold it in as an explainable factor. Cheap per-clip, no-op when absent.
+        if settings.has_emotion and wav_path:
+            try:
+                from ..providers import emotion as emo_mod
+                for clip in clips:
+                    a = emo_mod.excitement(wav_path, clip.start, clip.end)
+                    if a is not None:
+                        clip.score, clip.factors = emo_mod.apply_excitement_bonus(
+                            clip.score, clip.factors, a)
+                        clip.features["excitement"] = round(a, 4)
+            except Exception as e:
+                log.warning("emotion scoring failed: %s", e)
 
         wav.unlink(missing_ok=True)  # audio no longer needed past detection
 

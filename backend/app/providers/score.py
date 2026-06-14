@@ -99,6 +99,22 @@ def score_clip(words: list[Word], duration: float, settings: ImportSettings,
     return score, factors, {k: round(v, 4) for k, (v, _) in feats.items()}
 
 
+def apply_replay_bonus(score: int, factors: list[ScoreFactor], words, duration: float,
+                       *, lang: str = "en", max_bonus: float = 8.0
+                       ) -> tuple[int, list[ScoreFactor]]:
+    """Lift clips that end on a clean, loopable button (rewatch signal).
+
+    Only positive — a weak ending shouldn't tank an otherwise strong clip; it
+    just won't get the loop boost. Shown as an explainable factor. Pure."""
+    val, reason = signals.replay_value(words, duration, signals.get_lexicon(lang))
+    bonus = round(val * max_bonus)
+    if bonus <= 0:
+        return score, factors
+    new_score = int(max(1, min(99, score + bonus)))
+    return new_score, [ScoreFactor(label="Loopable ending", weight=float(bonus),
+                                   detail=reason), *factors]
+
+
 def _calibrate(raw_points: float) -> float:
     """Spread raw weighted points across a usable 0-100 range."""
     centered = (raw_points - 45.0) * 1.35 + 52.0

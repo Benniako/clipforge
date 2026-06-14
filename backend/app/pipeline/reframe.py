@@ -89,6 +89,14 @@ def _track_faces(src: str, start: float, end: float,
 
         from ..media import faces as faces_mod
 
+        # Content-aware fallback (YOLO/MediaPipe): when no face is visible, follow
+        # the dominant subject (a turned-away player, a car, a pet) instead of
+        # freezing — only when that backend is installed.
+        use_subject = get_settings().reframe_engine == "yolo"
+        subject_center = None
+        if use_subject:
+            from ..providers.subject import subject_center  # noqa: F811
+
         centers: list[tuple[float, float]] = []
         last_cx: float | None = None
         prev_gray = None
@@ -109,7 +117,14 @@ def _track_faces(src: str, start: float, end: float,
                     last_cx = _pick_face(faces, gray, prev_gray, w)
                 cx = last_cx
             else:
-                cx = last_cx  # hold last known position; may be None
+                sc = subject_center(img) if use_subject else None
+                if sc is not None:
+                    hits += 1
+                    if last_cx is None or _speech_active(t_rel, speech):
+                        last_cx = sc
+                    cx = last_cx
+                else:
+                    cx = last_cx  # hold last known position; may be None
             centers.append((t_rel, cx if cx is not None else 0.5))
             prev_gray = gray
 

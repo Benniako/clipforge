@@ -31,6 +31,16 @@ if command -v nvidia-smi >/dev/null 2>&1; then
     || echo "[!] CUDA libraries failed to install - transcription will run on CPU."
 fi
 
+# 2c. Optional AI power-ups (VAD captions, OCR, scene detect, emotion, YOLO
+#     reframe, whisperX). Best-effort: a failed/conflicting wheel is logged and
+#     skipped, never aborting setup (the core pipeline runs without them).
+echo "Installing optional AI power-ups (large download; failures are skipped)..."
+while IFS= read -r pkg; do
+  case "$pkg" in ''|\#*) continue;; esac          # skip blanks/comments
+  echo "  -> $pkg"
+  "$VPY" -m pip install "$pkg" || echo "  [..] skipped $pkg (install failed/conflict)"
+done < backend/requirements-extras.txt
+
 # 3. (optional) YuNet face model — much better facecam/face detection than the
 #    Haar fallback. Skipped silently when offline; everything still works.
 MODEL=backend/data/models/face_detection_yunet_2023mar.onnx
@@ -46,4 +56,8 @@ fi
 ( cd frontend && npm install && npm run build )
 
 echo
-echo "=== Setup complete. Start it with: ./run.sh ==="
+echo "=== Setup complete. Launching ClipForge... ==="
+# Launch the app right away (you asked for run at the end). Skip with NO_RUN=1.
+if [ -z "${NO_RUN:-}" ] && [ -x ./run.sh ]; then
+  exec ./run.sh
+fi

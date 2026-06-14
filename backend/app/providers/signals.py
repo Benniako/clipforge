@@ -213,6 +213,27 @@ def length_fit(duration: float, min_len: float, max_len: float) -> tuple[float, 
     return raw, "Ideal length for the format"
 
 
+def replay_value(words: list[Word], duration: float, lex: Lexicon = _EN) -> tuple[float, str]:
+    """Rewatch/loopability — does it end on a clean 'button' that invites a loop?
+
+    Short clips that finish on a complete, punchy line read as a tight loop, and
+    the feeds reward rewatches. We reward: a complete close (terminal punctuation),
+    a strong/quotable final beat, and a concise length; we penalise trailing off
+    on a weak connective ("and…", "but…", "so…").
+    """
+    if not words:
+        return 0.0, ""
+    complete = _ends_complete(words)
+    tail = _tokens(words[-4:])
+    strong_close = any(t in (lex.hook | lex.emotion | lex.quote_extra) for t in tail)
+    last = (_WORD_RE.findall(words[-1].text.lower()) or [""])[-1]
+    dangling_close = last in lex.dangling
+    concise = duration <= 35.0
+    raw = (0.5 if complete else 0.0) + (0.25 if strong_close else 0.0) \
+        + (0.25 if concise else 0.0) - (0.35 if dangling_close else 0.0)
+    return _clamp(raw), "Loops cleanly — ends on a tight button"
+
+
 def list_payoff(words: list[Word], lex: Lexicon = _EN) -> tuple[float, str]:
     has_num = _has_number(words)
     toks = _tokens(words)

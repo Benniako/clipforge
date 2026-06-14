@@ -84,6 +84,19 @@ def _detect_ocr() -> str:
     return ""
 
 
+def _detect_reframe_engine() -> str:
+    """Best installed subject-tracking backend for content-aware 9:16 reframe.
+
+    ultralytics (YOLO) tracks people/objects through cuts > mediapipe pose/face
+    > the built-in OpenCV Haar/YuNet face crop (always available). Optional.
+    """
+    if _has_module("ultralytics"):
+        return "yolo"
+    if _has_module("mediapipe"):
+        return "mediapipe"
+    return "haar"
+
+
 def _detect_cuda() -> bool:
     """True if an NVIDIA GPU is usable for the neural models."""
     try:
@@ -155,7 +168,9 @@ def _auto_whisper_model(has_cuda: bool, vram_mb: int, cpu: int) -> str:
     CPU only → scale by core count (large-v3 on CPU is impractically slow).
     """
     if has_cuda:
-        return "large-v3" if vram_mb >= 4500 else "medium"
+        # large-v3-turbo: ~2x faster than large-v3 at +0.3% WER — the better
+        # default on a capable card. medium on a small GPU.
+        return "large-v3-turbo" if vram_mb >= 4500 else "medium"
     if cpu >= 12:
         return "small"
     if cpu >= 6:
@@ -188,6 +203,12 @@ class Settings:
     has_nvidia: bool        # an NVIDIA GPU + driver is actually present
     has_av1_nvenc: bool = False  # ffmpeg has av1_nvenc (RTX 40/50 series)
     ocr_engine: str = ""    # on-screen text OCR: "paddleocr"|"easyocr"|"tesseract"|""
+    # --- optional power-ups (graceful: no-op when absent) ---------------
+    has_vad: bool = False        # Silero VAD — snap captions to exact speech
+    has_scenedetect: bool = False  # PySceneDetect — better scene-cut snapping
+    has_emotion: bool = False    # emotion2vec/FunASR — excitement virality signal
+    reframe_engine: str = "haar"  # "yolo" | "mediapipe" | "haar"
+    has_asd: bool = False        # LR-ASD active-speaker detection wired in
     vram_mb: int = 0        # total VRAM of the first GPU (MB)
     auto_model: bool = True  # whisper model was auto-selected for this hardware
 
@@ -288,6 +309,11 @@ class Settings:
             "transcription": self.transcription_engine,
             "diarization": self.has_whisperx and bool(self.hf_token),
             "ocr": self.ocr_engine or False,
+            "vad": self.has_vad,
+            "scene_detect": self.has_scenedetect,
+            "emotion": self.has_emotion,
+            "reframe_engine": self.reframe_engine,
+            "active_speaker": self.has_asd,
             "face_tracking": self.has_opencv,
             "url_import": self.has_ytdlp,
             "gpu": self.has_cuda,
@@ -333,6 +359,11 @@ def get_settings() -> Settings:
         has_opencv=_has_module("cv2"),
         has_ytdlp=_has_module("yt_dlp"),
         ocr_engine=_detect_ocr(),
+        has_vad=_has_module("silero_vad"),
+        has_scenedetect=_has_module("scenedetect"),
+        has_emotion=_has_module("funasr"),
+        reframe_engine=_detect_reframe_engine(),
+        has_asd=bool(os.environ.get("CLIPFORGE_ASD_DIR")) and _has_module("torch"),
         has_cuda=has_cuda,
         has_nvenc=has_nvenc,
         has_nvidia=has_nvidia,

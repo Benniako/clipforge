@@ -31,6 +31,11 @@ function Caps({ health }: { health: Health | null }) {
     ],
     [c.gpu_encode ? "GPU encode" : c.gpu ? "GPU" : "CPU render", c.gpu || c.gpu_encode, hw],
   ];
+  if (c.vad) items.push(["VAD captions", true, "Captions snapped to exact speech (Silero VAD)"]);
+  if (c.emotion) items.push(["Emotion score", true, "Excitement/arousal virality signal (emotion2vec)"]);
+  if (c.reframe_engine && c.reframe_engine !== "haar")
+    items.push([`${c.reframe_engine === "yolo" ? "YOLO" : "MediaPipe"} reframe`, true, "Content-aware subject tracking for 9:16"]);
+  if (c.active_speaker) items.push(["Active speaker", true, "LR-ASD: crop/caption follow the real talker"]);
   if (c.llm) items.push(["AI titles + viral", true, c.llm_model ?? ""]);
   return (
     <div className="caps" title="Pipeline capabilities detected in this environment">
