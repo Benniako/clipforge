@@ -40,6 +40,15 @@ def _group_lines(words, n: int):
     return [words[i:i + n] for i in range(0, len(words), max(n, 1))]
 
 
+# A word normally stays on screen until the next word starts (no flicker). But
+# across a real pause — silence, or a span where another (toggled-off) speaker
+# was talking — holding the last word that long leaves a caption frozen on a
+# silent shot. So once the gap past a word exceeds SILENCE_GAP, the caption
+# clears LINGER_PAD after the word instead of lingering.
+SILENCE_GAP = 1.0
+LINGER_PAD = 0.4
+
+
 def _srt_ts(t: float) -> str:
     t = max(t, 0.0)
     h = int(t // 3600)
@@ -101,6 +110,10 @@ Format: Layer, Start, End, Style, MarginL, MarginR, MarginV, Effect, Text
             start = w.t
             # Hold until the next word in the line starts; last word holds to its end.
             end = line[idx + 1].t if idx + 1 < len(line) else max(w.t + w.d, line_end)
+            # Don't let a word freeze on screen through a silence/other-speaker
+            # gap — clear it shortly after it's spoken instead.
+            if end - (w.t + w.d) > SILENCE_GAP:
+                end = w.t + w.d + LINGER_PAD
             if end <= start:
                 end = start + 0.08
             events.append(_dialogue(line, idx, start, end, primary, highlight,

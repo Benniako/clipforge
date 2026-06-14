@@ -205,17 +205,23 @@ class Engine:
             prof = project.settings.game_profile
             gweights = feedback.learned_weights(
                 feedback.score_scope("gameplay", prof), gameplay_mod.audio_weights(prof))
+            detected: list = []
             gcs = gameplay_mod.detect_gameplay(src_path, info, project.settings,
-                                               weights=gweights, wav_path=wav_path)
+                                               weights=gweights, wav_path=wav_path,
+                                               events_out=detected)
             if not gcs:
                 raise RuntimeError("no highlights found in this footage")
+            with store.mutate(project_id) as p:
+                p.events = detected
             if cam_rect is not None:
                 # Re-score with the facecam reaction folded in (cue-matched
                 # clips keep their exact-sound score).
                 self._advance(project_id, 2, "Reading facecam reactions…")
                 gweights = gameplay_mod.with_reaction(gweights)
                 for gc in gcs:
-                    if gc.features.get("cue", 0.0) > 0.0:
+                    # Exact-event clips (cue / OCR) keep their guaranteed score —
+                    # the audio scorer would zero them out (their RMS feats are 0).
+                    if gc.features.get("cue", 0.0) > 0.0 or gc.features.get("ocr", 0.0) > 0.0:
                         continue
                     r = facecam_mod.reaction_energy(src_path, cam_rect,
                                                     gc.start, gc.end)
@@ -271,9 +277,17 @@ class Engine:
                 clip.score, clip.factors, clip.features = score_mod.score_clip(
                     words, clip.duration, project.settings,
                     lang=transcript.language, weights=weights)
-            # Optional: sharper titles from a local LLM (Ollama) — concurrent,
-            # with an overall budget so a slow model can't stall the pipeline.
+            # Optional: a local LLM (Ollama) gives a second opinion on virality
+            # (re-ranks within ±12 pts, explainable) and writes sharper titles —
+            # concurrent, budgeted so a slow model can't stall the pipeline.
             if llm_mod.available():
+                self._advance(project_id, 2, "AI reading virality…")
+                reads = llm_mod.score_virals(
+                    [c.transcript_excerpt for c in clips], lang=transcript.language)
+                for i, (viral, reason) in reads.items():
+                    clips[i].score, clips[i].factors = score_mod.apply_viral_boost(
+                        clips[i].score, clips[i].factors, viral, reason)
+                    clips[i].features["llm_viral"] = round(viral, 4)
                 self._advance(project_id, 2, "Writing AI titles…")
                 titles = llm_mod.suggest_titles(
                     [c.transcript_excerpt for c in clips], lang=transcript.language)
@@ -334,6 +348,11 @@ class Engine:
         do_tighten = (project.settings.tighten and kind == "talking"
                       and transcript.provider != "synthetic")
         for clip in clips:
+            # Speakers present in the clip (for the editor's per-speaker toggles)
+            # and the current keep-set (None = all) for caption building.
+            if not skip_captions and transcript.provider != "synthetic":
+                clip.speakers = captionize.speakers_in(transcript, clip.start, clip.end)
+            spk = set(clip.caption_speakers) if clip.caption_speakers is not None else None
             if skip_captions:
                 clip.captions.style_id = style_id  # keep the empty CaptionSet
             elif do_tighten:
@@ -342,17 +361,18 @@ class Engine:
                     clip.segments = [[round(a, 3), round(b, 3)] for a, b in segs]
                     clip.tightened_duration = round(sum(b - a for a, b in segs), 3)
                     clip.captions = captionize.build_tight_caption_set(
-                        transcript, segs, style_id)
+                        transcript, segs, style_id, speakers=spk)
                     # Remap speaker-tracking keyframes onto the tightened timeline.
                     for kf in clip.reframe.keyframes:
                         kf.t = round(captionize.map_to_tight(clip.start + kf.t, segs), 3)
                 else:
                     clip.captions = captionize.build_caption_set(
-                        transcript, clip.start, clip.end, style_id)
+                        transcript, clip.start, clip.end, style_id, speakers=spk)
             else:
                 clip.captions = captionize.build_caption_set(
                     transcript, clip.start, clip.end, style_id,
-                    exclude=[(a, b) for a, b in clip.caption_mute] or None)
+                    exclude=[(a, b) for a, b in clip.caption_mute] or None,
+                    speakers=spk)
                 if kind == "gameplay":
                     # Strip stock announcer/agent lines the ASR picked up.
                     clip.captions.words = captionize.remove_phrases(

@@ -155,6 +155,7 @@ export const api = {
       style_id: string;
       reframe_cx: number;
       caption_words: { t: number; d: number; text: string }[];
+      caption_speakers: number[] | null;
       layout: string;
       facecam: { x: number; y: number; w: number; h: number };
       aspect: string;

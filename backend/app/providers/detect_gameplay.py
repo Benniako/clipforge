@@ -18,8 +18,8 @@ from dataclasses import dataclass, field
 from ..config import get_settings
 from ..media import ffmpeg
 from ..media.ffmpeg import MediaInfo
-from ..models import ImportSettings, ScoreFactor
-from . import detect_cues
+from ..models import DetectedEvent, ImportSettings, ScoreFactor
+from . import detect_cues, detect_ocr
 
 log = logging.getLogger("clipforge.gameplay")
 
@@ -188,21 +188,35 @@ def _pick_peaks(times, rms, *, settings: ImportSettings, profile: dict):
 
 def detect_gameplay(src_path: str, info: MediaInfo, settings: ImportSettings,
                     *, weights: dict[str, float] | None = None,
-                    wav_path: str | None = None) -> list[GameplayClip]:
+                    wav_path: str | None = None,
+                    events_out: list | None = None) -> list[GameplayClip]:
     """Return intensity-ranked highlight clips for gameplay footage.
 
     ``weights`` lets the caller pass personalised audio-feature weights (from the
     learning loop); otherwise the per-game defaults are used. ``wav_path`` is an
     already-extracted 16 kHz mono wav of the source (the pipeline reuses the
-    transcription extract); when absent the audio is extracted here.
+    transcription extract); when absent the audio is extracted here. ``events_out``
+    (when given) is extended with the :class:`DetectedEvent`s that were matched
+    (audio cues + OCR) so the caller can persist them on the project.
     """
     import tempfile
     from pathlib import Path
 
     aw = weights or audio_weights(settings.game_profile)
 
+    # On-screen text markers (VICTORY / ELIMINATED / GOAL / kill-feed). Cheap
+    # no-op when no OCR backend is installed; never blocks the audio path.
+    ocr_events: list = []
+    try:
+        ocr_events = detect_ocr.find_text_events(src_path, info, settings)
+    except Exception as e:
+        log.warning("ocr detection failed: %s", e)
+
     if not info.has_audio:
-        return _uniform_fallback(info, settings)
+        clips = _uniform_fallback(info, settings)
+        ocr_clips = _ocr_clips(ocr_events, info, settings)
+        _record_events(events_out, [], ocr_events)
+        return _merge(ocr_clips, clips, settings.target_clips) if ocr_clips else clips
 
     cue_events: list = []
     if wav_path is not None:
@@ -219,8 +233,12 @@ def detect_gameplay(src_path: str, info: MediaInfo, settings: ImportSettings,
             times, rms = _load_rms(str(wav))
             cue_events = _cue_events(str(wav), settings)
 
+    _record_events(events_out, cue_events, ocr_events)
+
     if times is None:
-        return _uniform_fallback(info, settings)
+        clips = _uniform_fallback(info, settings)
+        ocr_clips = _ocr_clips(ocr_events, info, settings)
+        return _merge(ocr_clips, clips, settings.target_clips) if ocr_clips else clips
 
 
     profile = get_profile(settings.game_profile)
@@ -265,11 +283,62 @@ def detect_gameplay(src_path: str, info: MediaInfo, settings: ImportSettings,
         m, s = divmod(int(c.peak_t), 60)
         c.title = f"Highlight — {m}:{s:02d}"
 
-    # Cue-matched clips (exact game sounds) take priority over loudness clips.
+    # Exact-event clips (matched game sounds + OCR banners) take priority over
+    # plain loudness peaks: a "VICTORY" banner or a kill ding is a sure thing.
     cue_clips = _cue_clips(cue_events, info, lead, tail, settings)
-    merged = _merge(cue_clips, clips, settings.target_clips)
+    ocr_clips = _ocr_clips(ocr_events, info, settings, lead=lead, tail=tail)
+    merged = _merge(cue_clips + ocr_clips, clips, settings.target_clips)
     merged.sort(key=lambda c: c.start)
     return merged
+
+
+def _record_events(events_out: list | None, cue_events: list,
+                   ocr_events: list) -> None:
+    """Append matched cues + OCR hits to ``events_out`` as DetectedEvents."""
+    if events_out is None:
+        return
+    for e in cue_events:
+        events_out.append(DetectedEvent(
+            t=round(float(e.t), 3), source="cue", label=e.label,
+            detail=f"{e.label} sound", confidence=round(float(e.similarity), 3)))
+    for e in ocr_events:
+        events_out.append(DetectedEvent(
+            t=round(float(e.t), 3), source="ocr", label=e.label,
+            detail=e.text, confidence=round(float(e.confidence), 3)))
+    events_out.sort(key=lambda e: e.t)
+
+
+# On-screen markers that mean the moment already happened — open a little before
+# so the play that earned the banner is in-frame, with less tail.
+def _ocr_clips(events: list, info: MediaInfo, settings: ImportSettings, *,
+               lead: float | None = None, tail: float | None = None) -> list["GameplayClip"]:
+    if not events:
+        return []
+    target = (settings.min_len + settings.max_len) / 2.0
+    if lead is None:
+        lead = target * 0.7    # banners are the payoff — bias to the build-up
+    if tail is None:
+        tail = max(target - lead, 2.0)
+    out: list[GameplayClip] = []
+    for e in events:
+        start = max(0.0, e.t - lead)
+        end = min(info.duration, e.t + tail)
+        if end - start < settings.min_len:
+            start = max(0.0, end - settings.min_len)
+        if end - start > settings.max_len:
+            start = max(0.0, end - settings.max_len)
+        score = int(round(max(1, min(99, 68 + e.confidence * 20))))
+        m, s = divmod(int(e.t), 60)
+        label = e.label.replace("_", " ").title()
+        out.append(GameplayClip(
+            start=round(start, 3), end=round(end, 3), score=score, peak_t=e.t,
+            title=f"{label} — {m}:{s:02d}",
+            features={"ocr": round(e.confidence, 4), "intensity": 0.0,
+                      "sustain": 0.0, "transient": 0.0, "spikes": 0.0, "cue": 0.0},
+            factors=[ScoreFactor(
+                label=f"On-screen '{e.text}'", weight=round(e.confidence * 20, 1),
+                detail="Detected viral on-screen text (OCR) — a guaranteed beat")]))
+    return out
 
 
 def _cue_dir(profile_name: str) -> str:

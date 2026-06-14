@@ -67,31 +67,44 @@ def map_to_tight(t_abs: float, segments: list[tuple[float, float]]) -> float:
     return cum
 
 
+def _speaker_ok(w, speakers: set[int] | None) -> bool:
+    """Whether word ``w`` belongs to a speaker the user kept in captions."""
+    return speakers is None or (w.speaker or 0) in speakers
+
+
 def build_tight_caption_set(transcript: Transcript,
                             segments: list[tuple[float, float]],
-                            style_id: str) -> CaptionSet:
-    """Caption set retimed onto the tightened timeline."""
+                            style_id: str,
+                            speakers: set[int] | None = None) -> CaptionSet:
+    """Caption set retimed onto the tightened timeline. ``speakers`` (a set of
+    diarized speaker ids) keeps only those speakers' words; None keeps all."""
     words: list[CaptionWord] = []
     for a, b in segments:
         base = map_to_tight(a, segments)
         for w in transcript.words:
             if w.end <= a or w.t >= b:
                 continue
+            if not _speaker_ok(w, speakers):
+                continue
             text = _clean(w.text)
             if not text or not _ALNUM.search(text):
                 continue
             rel = base + max(w.t - a, 0.0)
             d = max(min(w.end, b) - max(w.t, a), 0.04)
-            words.append(CaptionWord(t=round(rel, 3), d=round(d, 3), text=text))
+            words.append(CaptionWord(t=round(rel, 3), d=round(d, 3), text=text,
+                                     speaker=w.speaker))
     return CaptionSet(words=words, style_id=style_id)
 
 
 def build_caption_set(transcript: Transcript, start: float, end: float,
                       style_id: str,
-                      exclude: list[tuple[float, float]] | None = None) -> CaptionSet:
+                      exclude: list[tuple[float, float]] | None = None,
+                      speakers: set[int] | None = None) -> CaptionSet:
     """``exclude`` lists absolute source-time spans whose words are dropped —
     used to keep in-game announcer lines (matched audio cues) out of the
     captions: ASR transcribes "Double Kill!" too, but the streamer didn't say it.
+    ``speakers`` (diarized speaker ids) keeps only those speakers' words; None
+    keeps all — the per-speaker caption toggle in the editor.
     """
     dur = max(end - start, 0.01)
     words: list[CaptionWord] = []
@@ -100,14 +113,27 @@ def build_caption_set(transcript: Transcript, start: float, end: float,
             continue
         if exclude and any(w.t < b and w.end > a for a, b in exclude):
             continue
+        if not _speaker_ok(w, speakers):
+            continue
         text = _clean(w.text)
         if not text or not _ALNUM.search(text):  # skip pure-punctuation tokens
             continue
         rel = max(w.t - start, 0.0)
         wend = min(w.end - start, dur)
         d = max(wend - rel, 0.04)
-        words.append(CaptionWord(t=round(rel, 3), d=round(d, 3), text=text))
+        words.append(CaptionWord(t=round(rel, 3), d=round(d, 3), text=text,
+                                 speaker=w.speaker))
     return CaptionSet(words=words, style_id=style_id)
+
+
+def speakers_in(transcript: Transcript, start: float, end: float) -> list[int]:
+    """Sorted distinct speaker ids that actually speak inside [start, end].
+
+    Drives the editor's per-speaker caption toggles — we only offer to mute a
+    speaker who is present in the clip."""
+    seen = {(w.speaker or 0) for w in transcript.words
+            if w.end > start and w.t < end and _ALNUM.search(w.text or "")}
+    return sorted(seen)
 
 
 # --------------------------------------------------------------------------- #

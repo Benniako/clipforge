@@ -84,6 +84,10 @@ class CaptionWord(BaseModel):
     t: float                    # start relative to the CLIP (s)
     d: float
     text: str
+    # Which diarized speaker said this word (0-based). None when diarization
+    # didn't run (single speaker). Lets the editor toggle a speaker's lines
+    # in/out of the burned captions.
+    speaker: int | None = None
 
 
 class CaptionSet(BaseModel):
@@ -93,6 +97,20 @@ class CaptionSet(BaseModel):
     # Words per on-screen line — keeps lines phone-readable. libass wraps any
     # line that is still too wide for the safe area (WrapStyle 0).
     max_words_per_line: int = 3
+
+
+# --------------------------------------------------------------------------- #
+# Detected events (audio cues + on-screen OCR) — saved per project
+# --------------------------------------------------------------------------- #
+class DetectedEvent(BaseModel):
+    """A pinpointed moment found in the source: a matched audio cue or a piece
+    of viral on-screen text (OCR). Persisted on the project so the user can see
+    exactly what ClipForge keyed off, and so OCR hits can be promoted to cues."""
+    t: float                    # source timeline (s)
+    source: str                 # "cue" | "ocr"
+    label: str                  # canonical event name, e.g. "kill", "victory"
+    detail: str = ""            # raw text / cue file matched
+    confidence: float = 0.0     # 0..1
 
 
 # --------------------------------------------------------------------------- #
@@ -168,6 +186,13 @@ class Clip(BaseModel):
     # Absolute source spans whose words are kept OUT of captions — in-game
     # announcer/agent lines located by audio-cue matches.
     caption_mute: list[list[float]] = Field(default_factory=list)
+    # Speakers (0-based diarization ids) whose words are burned into captions.
+    # None = show every speaker (the default). Set via the editor's per-speaker
+    # toggles; words from omitted speakers are dropped from the caption set.
+    caption_speakers: list[int] | None = None
+    # All diarized speakers present in this clip's span — drives the editor's
+    # toggle chips (kept even when a speaker is muted out of the captions).
+    speakers: list[int] = Field(default_factory=list)
     tightened_duration: float | None = None
     feedback: str | None = None   # "up" | "down" | None (current user rating)
     export_url: str | None = None
@@ -295,6 +320,9 @@ class Project(BaseModel):
     progress: JobProgress = Field(default_factory=JobProgress)
     content_type: str | None = None       # detected/used: "talking" | "gameplay"
     facecam: Rect | None = None           # detected streamer cam region, if any
+    # Audio-cue + OCR events found in the source, sorted by time — saved so the
+    # user can see what drove the highlights and reuse them.
+    events: list[DetectedEvent] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)  # non-fatal issues for the UI
     error: str | None = None
     created_at: float = Field(default_factory=now)

@@ -136,6 +136,74 @@ def suggest_title(transcript_excerpt: str, *, lang: str = "en") -> str | None:
     return title or None
 
 
+_SCORE_RE = re.compile(r"(\d{1,3})")
+
+
+def score_viral(transcript_excerpt: str, *, lang: str = "en"
+                ) -> tuple[float, str] | None:
+    """Ask the local model how viral a clip's content is.
+
+    Returns ``(potential 0..1, one-line reason)`` or None when unavailable /
+    unparseable. This is a *second opinion* layered on the transparent heuristic
+    scorer — it nudges the rank and adds an explainable reason, never replaces
+    the explainable signal sum. Cheap, optional, and fully local.
+    """
+    if not transcript_excerpt.strip() or not available():
+        return None
+    prompt = (
+        "You judge short-form video virality. Rate how likely the clip below is "
+        "to go viral on TikTok/Reels/Shorts, considering hook strength, emotion, "
+        "payoff, and quotability. Reply with EXACTLY one line:\n"
+        "SCORE: <0-100> | REASON: <max 8 words>\n\n"
+        f"Transcript: {transcript_excerpt[:600]}\n"
+    )
+    out = _generate(prompt, timeout=20.0)
+    if not out:
+        return None
+    return _parse_viral(out)
+
+
+def _parse_viral(text: str) -> tuple[float, str] | None:
+    """Parse 'SCORE: 72 | REASON: strong hook' from a model reply."""
+    text = _THINK_RE.sub("", text or "").strip()
+    line = next((ln for ln in text.splitlines() if "score" in ln.lower()), text)
+    m = _SCORE_RE.search(line)
+    if not m:
+        return None
+    val = max(0.0, min(100.0, float(m.group(1)))) / 100.0
+    reason = ""
+    if "reason" in line.lower():
+        reason = line[line.lower().index("reason") + len("reason"):].lstrip(": ").strip()
+    reason = reason.strip(' "\'.|')[:48]
+    return val, (reason or "AI virality read")
+
+
+def score_virals(excerpts: list[str], *, lang: str = "en",
+                 budget: float = 30.0) -> dict[int, tuple[float, str]]:
+    """LLM virality reads for many clips concurrently, capped by a time budget.
+
+    Returns {index: (potential, reason)} for whatever finished in time; the rest
+    keep their heuristic score untouched — a slow model can never stall a run."""
+    import concurrent.futures as cf
+
+    if not available():
+        return {}
+    out: dict[int, tuple[float, str]] = {}
+    ex = cf.ThreadPoolExecutor(max_workers=3)
+    futs = {ex.submit(score_viral, text, lang=lang): i
+            for i, text in enumerate(excerpts) if text.strip()}
+    done, _ = cf.wait(futs, timeout=budget)
+    for f in done:
+        try:
+            r = f.result()
+            if r is not None:
+                out[futs[f]] = r
+        except Exception:
+            pass
+    ex.shutdown(wait=False, cancel_futures=True)
+    return out
+
+
 def suggest_titles(excerpts: list[str], *, lang: str = "en",
                    budget: float = 45.0) -> dict[int, str]:
     """Titles for many clips concurrently, capped by an overall time budget.

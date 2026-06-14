@@ -28,6 +28,7 @@ export default function ClipEditor() {
   const [layout, setLayout] = useState<string>("center");
   const [cam, setCam] = useState<Rect | null>(null);
   const [aspect, setAspect] = useState<string>(""); // "" = project default
+  const [capSpeakers, setCapSpeakers] = useState<number[] | null>(null); // null = all
 
   useEffect(() => {
     alive.current = true;
@@ -74,6 +75,19 @@ export default function ClipEditor() {
     setLayout(c.reframe.layout);
     setCam(c.reframe.facecam ?? null);
     setAspect(c.aspect ?? "");
+    setCapSpeakers(c.caption_speakers ?? null);
+  };
+
+  // The set of speakers currently kept in captions (null on the clip = all).
+  const keptSpeakers = (c: Clip | null, sel: number[] | null): number[] =>
+    sel ?? c?.speakers ?? [];
+
+  const toggleSpeaker = (sp: number) => {
+    if (!clip) return;
+    const kept = keptSpeakers(clip, capSpeakers);
+    const next = kept.includes(sp) ? kept.filter((x) => x !== sp) : [...kept, sp].sort((a, b) => a - b);
+    // A full set is the default ("all") — store it as null so re-renders show every speaker.
+    setCapSpeakers(next.length === clip.speakers.length ? null : next);
   };
 
   const rate = async (r: "up" | "down") => {
@@ -95,10 +109,11 @@ export default function ClipEditor() {
       (cx !== null && (!clip.reframe.cx_overridden || Math.abs(cx - (clip.reframe.keyframes[0]?.cx ?? 0.5)) > 0.01)) ||
       layout !== clip.reframe.layout ||
       aspect !== (clip.aspect ?? "") ||
+      JSON.stringify(capSpeakers) !== JSON.stringify(clip.caption_speakers ?? null) ||
       (cam !== null && JSON.stringify(cam) !== JSON.stringify(clip.reframe.facecam)) ||
       JSON.stringify(words) !== JSON.stringify(clip.captions.words.map((w) => ({ t: w.t, d: w.d, text: w.text })))
     );
-  }, [clip, title, start, end, styleId, cx, words, layout, cam, aspect]);
+  }, [clip, title, start, end, styleId, cx, words, layout, cam, aspect, capSpeakers]);
 
   const spanChanged = clip && (Math.abs(start - clip.start) > 0.01 || Math.abs(end - clip.end) > 0.01);
 
@@ -117,6 +132,8 @@ export default function ClipEditor() {
       if (cx !== null) edit.reframe_cx = cx;
       if (layout !== clip.reframe.layout) edit.layout = layout;
       if (aspect !== (clip.aspect ?? "")) edit.aspect = aspect;
+      if (JSON.stringify(capSpeakers) !== JSON.stringify(clip.caption_speakers ?? null))
+        edit.caption_speakers = capSpeakers;
       if (cam !== null && JSON.stringify(cam) !== JSON.stringify(clip.reframe.facecam))
         edit.facecam = cam;
       // Only send manual caption edits if the span didn't change (a new span
@@ -401,6 +418,31 @@ export default function ClipEditor() {
                   </span>
                 </>
               )}
+            </div>
+          )}
+
+          {clip.speakers.length > 1 && (
+            <div className="panel section">
+              <h3>Speakers <span className="muted tiny">— toggle who appears in captions</span></h3>
+              <div className="seg" style={{ flexWrap: "wrap", marginBottom: 8 }}>
+                {clip.speakers.map((sp) => {
+                  const on = keptSpeakers(clip, capSpeakers).includes(sp);
+                  return (
+                    <button
+                      key={sp}
+                      className={on ? "on" : ""}
+                      onClick={() => toggleSpeaker(sp)}
+                      title={on ? "Shown in captions — click to hide" : "Hidden from captions — click to show"}
+                    >
+                      {on ? "🟢" : "⚪"} Speaker {sp + 1}
+                    </button>
+                  );
+                })}
+              </div>
+              <span className="muted tiny">
+                Captions only show the speakers turned on — useful when one mic picks up
+                cross-talk or you only want the host's lines.
+              </span>
             </div>
           )}
 

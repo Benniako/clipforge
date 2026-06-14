@@ -42,12 +42,17 @@ the local default without touching the pipeline.
 | **Moment detection** | Segments the transcript into sentences on punctuation + speech pauses, grows candidates that fit the target length, ranks them by an explainable salience blend, and de-duplicates overlaps (non-max suppression). Snaps to natural speech edges so a clip never cuts a word. |
 | **Auto-captions** | Word-timed captions from Whisper, rendered as ASS for **libass**: large, high-contrast, uppercase, positioned in the safe zone, with the spoken word **highlighted + popped** one at a time (TikTok style). Editable, with line-wrapping for phone readability. |
 | **Vertical reframing** | Samples frames, tracks the dominant face with OpenCV, and builds a **smoothed, velocity-limited** crop path so the camera glides instead of jittering. Falls back to a steady center crop when there's no face (screen-share, graphics). Manual override in the editor. |
-| **Virality scoring** | A 0–100 score that is a **transparent weighted sum** of signal features (hook, emotional payoff, standalone clarity, pace, quotability, length fit, list payoff). Weights are tuned per platform. The top contributing factors are shown verbatim as the "reasons" — never a black box. |
+| **Virality scoring** | A 0–100 score that is a **transparent weighted sum** of signal features (hook, emotional payoff, standalone clarity, pace, quotability, length fit, list payoff). Weights are tuned per platform. The top contributing factors are shown verbatim as the "reasons" — never a black box. When a local LLM (Ollama) is running, it adds an **explainable second-opinion re-rank** (±12 pts, shown as its own factor) — it refines the order, never overrides the signal sum. |
 
 Beyond talking-head content, ClipForge also handles **gameplay**: it auto-detects
 talking vs gameplay, and for games finds **audio-energy highlights** (kills,
 goals, clutches, jump-scares) tuned by an optional **per-game profile**
 (Valorant / CS2 / EA FC / Rocket League / Horror / generic — works for any game).
+It also reads the screen: an optional **OCR pass** (PaddleOCR → EasyOCR →
+Tesseract, whichever is installed) catches on-screen viral markers — a
+**VICTORY** / **DEFEAT** / **ELIMINATED** banner, a **GOAL!**, a kill-feed entry —
+and opens a clip on that guaranteed beat. Matched audio cues and OCR hits are
+**saved on the project** so you can see exactly what each highlight keyed off.
 A streamer **facecam** is found automatically (the one face that never moves —
 YuNet when available, Haar fallback); clips then use the TikTok-standard
 **stacked layout** (cam strip on top, gameplay below) or a **PiP overlay**, the
@@ -148,8 +153,13 @@ runs from a **single process on http://localhost:8000** — no second terminal.
 
 Default spoken language is **German** (English/auto selectable per project).
 Game events can be pinpointed by matching reference **audio cues** — see
-[docs/GAME_CUES.md](docs/GAME_CUES.md). Optional **AI titles** use a local
-[Ollama](https://ollama.com) model when running (otherwise heuristic titles).
+[docs/GAME_CUES.md](docs/GAME_CUES.md) — including a **Common (all games)** cue
+pack (airhorn, hype, laugh…) that's matched for every profile. Optional **AI
+titles** and the **virality re-rank** use a local [Ollama](https://ollama.com)
+model when running (otherwise heuristic titles/scores). **On-screen text
+detection (OCR)** is optional and auto-detected — install any one of
+`pip install paddleocr` (most accurate), `easyocr`, or `pytesseract` (+ the
+Tesseract binary); with none installed, the audio/cue path still finds highlights.
 
 **Transcription engines (auto-selected, with fallback):** whisperX → faster-whisper
 → synthetic. Install the optional, higher-quality engine with `pip install whisperx`
@@ -236,9 +246,11 @@ editor (trim, caption text, style, crop override), MP4 export + batch zip.
 **Should-have also in:** caption style templates, platform-specific scoring,
 project library/history, reframe override.
 
-**Deferred (PRD §4 "Could/Won't have v1"):** split-screen layouts, branding/intros,
-auto hashtags, direct posting/scheduling, team workspaces, full timeline editing.
-Speaker **diarization** is stubbed (single speaker); reframe uses face tracking,
+**Deferred (PRD §4 "Could/Won't have v1"):** branding/intros,
+direct posting/scheduling, team workspaces, full timeline editing.
+Speaker **diarization** runs when whisperX + an HF token are present (real
+per-speaker labels); the editor then lets you **toggle each speaker in/out of the
+captions** (handy when one mic catches cross-talk). Reframe uses face tracking,
 not audio-visual active-speaker detection.
 
 **On the PRD's open questions (§9):** scoring is explainable and platform-tunable

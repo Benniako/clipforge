@@ -764,6 +764,141 @@ def test_llm_titles_safe_when_unavailable():
     assert llm.suggest_titles(["some transcript"], lang="en", budget=2.0) == {}
 
 
+# --------------------------------------------------------------------------- #
+# OCR on-screen detection (pure helpers — no OCR backend needed)
+# --------------------------------------------------------------------------- #
+def test_ocr_keyword_matching_finds_viral_markers():
+    from app.providers import detect_ocr as O
+    # noisy OCR text still matches the marker as a normalized substring
+    assert ("victory", "victory") in O.match_keywords("|| VICT0RY ||".replace("0", "o"), "valorant")
+    assert any(l == "kill" for l, _ in O.match_keywords("ENEMY DOUBLE KILL", "cs2"))
+    assert any(l == "goal" for l, _ in O.match_keywords("GOOOAL!! what a save", "rocketleague"))
+    # word-boundary: "ko" must not fire inside "took"
+    assert all(l != "eliminated" for l, _ in O.match_keywords("he took the lead", "generic"))
+    # nothing viral -> no events
+    assert O.match_keywords("loading please wait", "generic") == []
+
+
+def test_ocr_frame_sampling_is_bounded_and_spaced():
+    from app.providers import detect_ocr as O
+    assert O.sample_frame_times(0) == []
+    ts = O.sample_frame_times(20, every=2.0)
+    assert ts and all(0 < t < 20 for t in ts)
+    assert all(b - a >= 1.9 for a, b in zip(ts, ts[1:]))
+    # a long VOD never exceeds the frame cap
+    assert len(O.sample_frame_times(100000, every=2.0, max_frames=400)) <= 400
+
+
+def test_ocr_dedupes_persisting_banner():
+    from app.providers.detect_ocr import OcrEvent, dedupe_events
+    evs = [OcrEvent(t=10.0, label="victory", text="victory", confidence=0.8),
+           OcrEvent(t=11.0, label="victory", text="victory", confidence=0.8),  # same banner
+           OcrEvent(t=12.0, label="victory", text="victory", confidence=0.8),
+           OcrEvent(t=40.0, label="victory", text="victory", confidence=0.8)]  # later round
+    out = dedupe_events(evs, min_gap=4.0)
+    assert [round(e.t) for e in out] == [10, 40]
+
+
+def test_ocr_clips_open_before_the_banner():
+    from app.media.ffmpeg import MediaInfo
+    from app.providers.detect_ocr import OcrEvent
+    from app.providers.detect_gameplay import _ocr_clips
+    info = MediaInfo(duration=600, width=1920, height=1080, fps=30,
+                     has_audio=True, has_video=True, codec=None)
+    st = ImportSettings(min_len=15, max_len=45)
+    clips = _ocr_clips([OcrEvent(t=120.0, label="victory", text="victory", confidence=0.9)],
+                       info, st)
+    assert len(clips) == 1
+    c = clips[0]
+    assert c.start < 120.0 <= c.end           # the banner moment is inside the clip
+    assert st.min_len <= c.duration <= st.max_len + 0.01
+    assert c.features["ocr"] == 0.9
+    assert any("on-screen" in f.detail.lower() for f in c.factors)
+
+
+# --------------------------------------------------------------------------- #
+# LLM virality re-rank (pure parse + boost — no Ollama needed)
+# --------------------------------------------------------------------------- #
+def test_llm_viral_parse():
+    from app.providers.llm import _parse_viral
+    assert _parse_viral("SCORE: 82 | REASON: strong hook")[0] == 0.82
+    assert _parse_viral("SCORE: 82 | REASON: strong hook")[1] == "strong hook"
+    assert _parse_viral("score: 5") == (0.05, "AI virality read")
+    assert _parse_viral("no number here") is None
+    assert _parse_viral("SCORE: 250")[0] == 1.0     # clamped
+
+
+def test_viral_boost_is_bounded_and_explainable():
+    from app.models import ScoreFactor
+    from app.providers.score import apply_viral_boost
+    base = [ScoreFactor(label="hook", weight=20.0)]
+    hi, fh = apply_viral_boost(50, base, 1.0, "great hook", max_swing=12)
+    lo, fl = apply_viral_boost(50, base, 0.0, "weak", max_swing=12)
+    mid, fm = apply_viral_boost(50, base, 0.5, "meh", max_swing=12)
+    assert hi == 62 and lo == 38 and mid == 50      # ±max_swing, centred at 0.5
+    assert fh[0].label.startswith("AI:") and fh[0].weight == 12.0
+    assert fm == base                                # no swing -> no added factor
+    # never escapes 1..99
+    assert apply_viral_boost(95, base, 1.0, "x", max_swing=12)[0] == 99
+
+
+def test_ocr_capability_detection_default_off():
+    # CI has no OCR backend installed -> capability is off, detection no-ops.
+    assert _settings().has_ocr is False
+    assert _settings().capability_report()["ocr"] is False
+
+
+# --------------------------------------------------------------------------- #
+# Per-speaker captions + the no-linger caption fix
+# --------------------------------------------------------------------------- #
+def _multi_speaker_transcript():
+    # speaker 0 then speaker 1, alternating
+    ws = [Word(t=0.0, d=0.3, text="hello", speaker=0),
+          Word(t=0.4, d=0.3, text="there", speaker=0),
+          Word(t=0.8, d=0.3, text="hi", speaker=1),
+          Word(t=1.2, d=0.3, text="back", speaker=1)]
+    return Transcript(words=ws, provider="whisper", speakers=2)
+
+
+def test_caption_speaker_filter_keeps_only_chosen():
+    tr = _multi_speaker_transcript()
+    both = captionize.build_caption_set(tr, 0.0, 2.0, "bold-pop")
+    assert [w.text for w in both.words] == ["hello", "there", "hi", "back"]
+    assert [w.speaker for w in both.words] == [0, 0, 1, 1]
+    only0 = captionize.build_caption_set(tr, 0.0, 2.0, "bold-pop", speakers={0})
+    assert [w.text for w in only0.words] == ["hello", "there"]
+    only1 = captionize.build_caption_set(tr, 0.0, 2.0, "bold-pop", speakers={1})
+    assert [w.text for w in only1.words] == ["hi", "back"]
+
+
+def test_speakers_in_lists_present_speakers():
+    tr = _multi_speaker_transcript()
+    assert captionize.speakers_in(tr, 0.0, 2.0) == [0, 1]
+    assert captionize.speakers_in(tr, 0.0, 0.6) == [0]   # only speaker 0 talks early
+
+
+def test_caption_does_not_linger_through_silence():
+    from app.models import CaptionSet, CaptionWord
+    # word at t=0, then a 3s gap, then a word — within one line the first word
+    # must NOT hold for 3s; it clears shortly after it's spoken.
+    cs = CaptionSet(words=[CaptionWord(t=0.0, d=0.3, text="alpha"),
+                           CaptionWord(t=3.3, d=0.3, text="beta")],
+                    max_words_per_line=3)
+    ass = C.build_ass(cs, get_style("bold-pop"), 1080, 1920)
+    first = next(l for l in ass.splitlines() if l.startswith("Dialogue:") and "ALPHA" in l)
+    # End timestamp (field 3) of the alpha event should be ~0.7s, not ~3.3s.
+    end_ts = first.split(",", 3)[2]
+    assert end_ts < "0:00:01.50", f"caption lingered through silence: {end_ts}"
+
+
+def test_common_cue_pack_is_available_for_all_games():
+    from app import game_packs
+    status = game_packs.pack_status()
+    assert "common" in status
+    assert status["common"]["label"].lower().startswith("common")
+    assert {e["name"] for e in status["common"]["events"]} >= {"airhorn", "hype", "laugh"}
+
+
 if __name__ == "__main__":
     import sys
     # Windows consoles default to a legacy code page that can't print "✓".

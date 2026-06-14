@@ -14,6 +14,15 @@ export interface CaptionWord {
   t: number;
   d: number;
   text: string;
+  speaker: number | null;
+}
+
+export interface DetectedEvent {
+  t: number;
+  source: "cue" | "ocr";
+  label: string;
+  detail: string;
+  confidence: number;
 }
 
 export interface CaptionSet {
@@ -62,6 +71,10 @@ export interface Clip {
   reframe: Reframe;
   aspect: string | null;
   status: ClipStatus;
+  // Diarized speakers present in this clip, and which are kept in captions
+  // (null = all). Drives the editor's per-speaker caption toggles.
+  speakers: number[];
+  caption_speakers: number[] | null;
   tightened_duration: number | null;
   export_url: string | null;
   thumb_url: string | null;
@@ -131,12 +144,13 @@ export interface Project {
   status: ProjectStatus;
   settings: ImportSettings;
   source: SourceMedia | null;
-  transcript: { provider: string; language: string; words: unknown[] } | null;
+  transcript: { provider: string; language: string; words: unknown[]; speakers: number } | null;
   clips: Clip[];
   montages: Montage[];
   progress: JobProgress;
   content_type: string | null;
   facecam: Rect | null;
+  events: DetectedEvent[];
   warnings: string[];
   error: string | null;
   created_at: number;
@@ -189,6 +203,7 @@ export interface Health {
     ffprobe: boolean;
     transcription: string;
     diarization: boolean;
+    ocr: string | false;
     face_tracking: boolean;
     url_import: boolean;
     gpu: boolean;

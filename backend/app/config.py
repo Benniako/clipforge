@@ -66,6 +66,24 @@ def _has_module(name: str) -> bool:
     return importlib.util.find_spec(name) is not None
 
 
+def _detect_ocr() -> str:
+    """Best available OCR backend for on-screen game text, or "" if none.
+
+    Preference follows accuracy on noisy game UI text (2026 benchmarks):
+    PaddleOCR (PP-OCRv5, most accurate) → EasyOCR (great on screenshots /
+    overlays) → Tesseract (lightweight fallback, needs the system binary too).
+    Every backend is optional — with none installed, OCR detection is skipped
+    and the audio-energy / cue path still finds highlights.
+    """
+    if _has_module("paddleocr"):
+        return "paddleocr"
+    if _has_module("easyocr"):
+        return "easyocr"
+    if _has_module("pytesseract") and shutil.which("tesseract"):
+        return "tesseract"
+    return ""
+
+
 def _detect_cuda() -> bool:
     """True if an NVIDIA GPU is usable for the neural models."""
     try:
@@ -169,6 +187,7 @@ class Settings:
     has_nvenc: bool         # ffmpeg has the h264_nvenc encoder compiled in
     has_nvidia: bool        # an NVIDIA GPU + driver is actually present
     has_av1_nvenc: bool = False  # ffmpeg has av1_nvenc (RTX 40/50 series)
+    ocr_engine: str = ""    # on-screen text OCR: "paddleocr"|"easyocr"|"tesseract"|""
     vram_mb: int = 0        # total VRAM of the first GPU (MB)
     auto_model: bool = True  # whisper model was auto-selected for this hardware
 
@@ -208,6 +227,10 @@ class Settings:
     @property
     def can_render(self) -> bool:
         return bool(self.ffmpeg)
+
+    @property
+    def has_ocr(self) -> bool:
+        return bool(self.ocr_engine)
 
     @property
     def upload_cap_bytes(self) -> int | None:
@@ -261,6 +284,7 @@ class Settings:
             "ffprobe": bool(self.ffprobe),
             "transcription": self.transcription_engine,
             "diarization": self.has_whisperx and bool(self.hf_token),
+            "ocr": self.ocr_engine or False,
             "face_tracking": self.has_opencv,
             "url_import": self.has_ytdlp,
             "gpu": self.has_cuda,
@@ -305,6 +329,7 @@ def get_settings() -> Settings:
         has_whisperx=_has_module("whisperx"),
         has_opencv=_has_module("cv2"),
         has_ytdlp=_has_module("yt_dlp"),
+        ocr_engine=_detect_ocr(),
         has_cuda=has_cuda,
         has_nvenc=has_nvenc,
         has_nvidia=has_nvidia,

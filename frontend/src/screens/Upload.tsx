@@ -342,8 +342,14 @@ export default function Upload({ health }: { health: Health | null }) {
         </div>
       </div>
 
-      {gameProfile !== "auto" && (
-        <CueManager game={gameProfile} cues={cues} onChange={setCues} />
+      {contentType !== "talking" && (
+        <>
+          {gameProfile !== "auto" && (
+            <CueManager game={gameProfile} cues={cues} onChange={setCues} />
+          )}
+          {/* Cross-game sounds (airhorn, hype, laugh…) — matched for any game. */}
+          <CueManager game="common" cues={cues} onChange={setCues} />
+        </>
       )}
 
       <div style={{ marginTop: 22, display: "flex", justifyContent: "center" }}>

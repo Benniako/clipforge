@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../lib/api";
 import type { Project } from "../lib/types";
-import { fmtDuration, scoreColor } from "../lib/format";
+import { fmtClock, fmtDuration, scoreColor } from "../lib/format";
 import ClipCard from "./ClipCard";
 import CueModal from "./CueModal";
 
@@ -171,6 +171,25 @@ export default function ClipGridView({
           {project.warnings.map((w, i) => (
             <div key={i}>⚠ {w}</div>
           ))}
+        </div>
+      )}
+
+      {project.events?.length > 0 && (
+        <div className="panel section" style={{ marginTop: 16 }}>
+          <span className="muted tiny">
+            Detected events ({project.events.length}) — the cues &amp; on-screen text the highlights keyed off
+          </span>
+          <div className="row" style={{ flexWrap: "wrap", gap: 6, marginTop: 8 }}>
+            {project.events.slice(0, 30).map((e, i) => (
+              <span key={i} className="pill"
+                title={`${e.detail || e.label} · ${Math.round(e.confidence * 100)}% match`}>
+                {e.source === "ocr" ? "🔤" : "🔊"} {e.label} · {fmtClock(e.t)}
+              </span>
+            ))}
+            {project.events.length > 30 && (
+              <span className="muted tiny">+{project.events.length - 30} more</span>
+            )}
+          </div>
         </div>
       )}
 
