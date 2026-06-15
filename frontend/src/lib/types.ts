@@ -207,6 +207,8 @@ export interface Health {
     vad: boolean;
     scene_detect: boolean;
     emotion: boolean;
+    denoise: boolean;
+    audio_events: boolean;
     reframe_engine: string;
     active_speaker: boolean;
     face_tracking: boolean;
@@ -216,6 +218,8 @@ export interface Health {
     device: string;
     llm: boolean;
     llm_model: string | null;
+    vlm: boolean;
+    vlm_model: string | null;
     whisper_model: string;
     auto_model: boolean;
     vram_gb: number;

@@ -277,6 +277,9 @@ class ImportSettings(BaseModel):
     game_profile: str = "auto"
     # Remove dead air inside talking clips (social-style jump cuts).
     tighten: bool = False
+    # Isolate the voice from background music/game audio (Demucs) so captions and
+    # speech sound studio-clean. Optional power-up; no-op without Demucs installed.
+    denoise: bool = False
     # Subtle camera motion: "none" or "push" (slow push-in across the clip).
     motion: str = "none"
     # Gameplay facecam handling: "auto" (stacked layout when a facecam is

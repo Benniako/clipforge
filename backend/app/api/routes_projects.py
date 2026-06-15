@@ -52,6 +52,7 @@ async def create_project(
     burn_captions: bool = Form(True),
     game_profile: str = Form("auto"),
     tighten: bool = Form(False),
+    denoise: bool = Form(False),
     motion: str = Form("none"),
     facecam_layout: str = Form("auto"),
     file: UploadFile | None = File(None),
@@ -79,6 +80,7 @@ async def create_project(
         burn_captions=burn_captions,
         game_profile=game_profile if game_profile in KNOWN_PROFILES else "auto",
         tighten=tighten,
+        denoise=denoise,
         motion=motion if motion in ("none", "push") else "none",
         facecam_layout=(facecam_layout
                         if facecam_layout in ("auto", "off", "split", "framed")

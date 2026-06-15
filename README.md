@@ -183,6 +183,9 @@ pip install -r backend/requirements-extras.txt
 | **Silero VAD** | Captions snapped to the *exact* speech — words clear the instant talking stops. | `silero-vad` |
 | **PySceneDetect** | More robust scene-cut snapping (adaptive detector) than the ffmpeg score. | `scenedetect` |
 | **emotion2vec** | A speech-emotion **excitement** signal (laughs/hype/rage) folded into virality as an explainable factor. | `funasr` |
+| **PANNs audio events** | Hears the *sounds* that signal a highlight — **cheering, laughter, applause, explosions** — as an explainable, zero-shot virality factor (no per-game cue needed). | `panns-inference` |
+| **Demucs clean voice** | Isolates the **voice** from background music / game audio so speech and captions sound studio-clean. Opt-in per project (*Clean voice*). | `demucs` |
+| **VLM vision read** | A local **vision-language second opinion** on virality from a clip's keyframes (expression, action, framing) — bounded & explainable, like the text re-rank. | `ollama pull qwen2.5vl` |
 | **OCR** | On-screen game text (kill banners, scorelines, VICTORY) → highlights, and **learns reusable audio cues** from them. | `easyocr` / `paddleocr` |
 | **YOLO reframe** | Content-aware 9:16 — tracks people/objects through cuts when no face is visible. | `ultralytics` |
 | **LR-ASD** | Active-speaker detection: crop & captions follow the *real* talker in multi-person shots. | clone [LR-ASD](https://github.com/Junhua-Liao/LR-ASD), set `CLIPFORGE_ASD_DIR` |

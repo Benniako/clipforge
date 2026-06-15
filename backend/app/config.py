@@ -207,6 +207,8 @@ class Settings:
     has_vad: bool = False        # Silero VAD — snap captions to exact speech
     has_scenedetect: bool = False  # PySceneDetect — better scene-cut snapping
     has_emotion: bool = False    # emotion2vec/FunASR — excitement virality signal
+    has_demucs: bool = False     # Demucs — isolate voice from music/game audio
+    has_audio_events: bool = False  # PANNs — cheering/laughter/explosion detection
     reframe_engine: str = "haar"  # "yolo" | "mediapipe" | "haar"
     has_asd: bool = False        # LR-ASD active-speaker detection wired in
     vram_mb: int = 0        # total VRAM of the first GPU (MB)
@@ -312,6 +314,8 @@ class Settings:
             "vad": self.has_vad,
             "scene_detect": self.has_scenedetect,
             "emotion": self.has_emotion,
+            "denoise": self.has_demucs,
+            "audio_events": self.has_audio_events,
             "reframe_engine": self.reframe_engine,
             "active_speaker": self.has_asd,
             "face_tracking": self.has_opencv,
@@ -362,6 +366,8 @@ def get_settings() -> Settings:
         has_vad=_has_module("silero_vad"),
         has_scenedetect=_has_module("scenedetect"),
         has_emotion=_has_module("funasr"),
+        has_demucs=_has_module("demucs"),
+        has_audio_events=_has_module("panns_inference"),
         reframe_engine=_detect_reframe_engine(),
         has_asd=bool(os.environ.get("CLIPFORGE_ASD_DIR")) and _has_module("torch"),
         has_cuda=has_cuda,

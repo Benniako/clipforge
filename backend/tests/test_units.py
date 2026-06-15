@@ -1029,7 +1029,33 @@ def test_optional_powerups_off_by_default_in_ci():
     r = s.capability_report()
     assert r["vad"] is False and r["emotion"] is False
     assert r["scene_detect"] is False and r["active_speaker"] is False
+    assert r["denoise"] is False and r["audio_events"] is False
     assert r["reframe_engine"] in ("haar", "yolo", "mediapipe")
+
+
+def test_audio_event_reduce_and_bonus():
+    from app.models import ScoreFactor
+    from app.providers import audio_events as AE
+    # a strong cheer + a weak laugh -> combined > the cheer alone, top reason cheer
+    res = AE.reduce_scores({"Cheering": 0.8, "Laughter": 0.3, "Speech": 0.9})
+    assert res is not None
+    hype, reason = res
+    assert reason == "crowd cheering" and hype > 0.8
+    # nothing viral in the tags -> no signal
+    assert AE.reduce_scores({"Speech": 0.95, "Silence": 0.4}) is None
+    # bonus is positive-only, bounded, and explainable
+    base = [ScoreFactor(label="hook", weight=10.0)]
+    ns, nf = AE.apply_event_bonus(60, base, 1.0, "crowd cheering", max_bonus=10.0)
+    assert ns == 70 and nf[0].weight == 10.0 and "cheering" in nf[0].label.lower()
+    assert AE.apply_event_bonus(60, base, 0.0, "x") == (60, base)  # quiet -> no-op
+
+
+def test_vlm_keyframe_times_are_inside_span():
+    from app.providers.vlm import keyframe_times
+    ts = keyframe_times(10.0, 22.0, n=3)
+    assert len(ts) == 3 and all(10.0 < t < 22.0 for t in ts)
+    assert ts == sorted(ts)
+    assert keyframe_times(5.0, 5.0) == [5.0]  # zero-length span is safe
 
 
 if __name__ == "__main__":

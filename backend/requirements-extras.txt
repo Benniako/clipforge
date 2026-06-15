@@ -31,6 +31,20 @@ ultralytics>=8.3
 # Diarization also needs a Hugging Face token (HF_TOKEN).
 whisperx>=3.1
 
+# Audio-event detection (PANNs / CNN14 on AudioSet) — score cheering, laughter,
+# applause, explosions as an explainable virality signal. Zero-shot (no per-game
+# cue needed). Pulls torch (installed above).
+panns-inference>=0.1.1
+
+# Vocal isolation (Demucs) — separate the voice from music/game audio so speech
+# and captions sound studio-clean. Heavy; a CUDA GPU is strongly recommended.
+demucs>=4.0
+
+# Vision-language virality second opinion: scores how a clip *looks* from a few
+# keyframes via a local Ollama vision model — no pip install, just pull one, e.g.
+#   ollama pull qwen2.5vl     (or llava / llama3.2-vision / minicpm-v)
+# Auto-detected; set CLIPFORGE_VLM_MODEL to force a specific model.
+
 # Active-speaker detection (LR-ASD / Light-ASD) is a GitHub checkout, not a pip
 # package. To enable: clone https://github.com/Junhua-Liao/LR-ASD , then set
 # CLIPFORGE_ASD_DIR to the checkout path. It needs torch (installed above).
