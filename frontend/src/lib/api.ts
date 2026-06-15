@@ -48,6 +48,7 @@ export interface CreateProjectInput {
   burn_captions: boolean;
   game_profile: string;
   tighten: boolean;
+  denoise: boolean;
   motion: string;
   facecam_layout: string;
   onProgress?: (pct: number) => void;
@@ -117,6 +118,7 @@ export const api = {
       fd.set("burn_captions", String(input.burn_captions));
       fd.set("game_profile", input.game_profile);
       fd.set("tighten", String(input.tighten));
+      fd.set("denoise", String(input.denoise));
       fd.set("motion", input.motion);
       fd.set("facecam_layout", input.facecam_layout);
       if (input.url) fd.set("url", input.url);

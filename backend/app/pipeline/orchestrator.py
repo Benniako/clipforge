@@ -351,7 +351,42 @@ class Engine:
             except Exception as e:
                 log.warning("emotion scoring failed: %s", e)
 
+        # Optional audio-event detection (PANNs): hear the *sounds* that signal a
+        # highlight — cheering, laughter, applause, an explosion — and fold them
+        # in as an explainable factor. Zero-shot, so it needs no per-game cue.
+        if settings.has_audio_events and wav_path:
+            try:
+                from ..providers import audio_events as ae_mod
+                self._advance(project_id, 2, "Listening for crowd / hype…")
+                for clip in clips:
+                    res = ae_mod.event_score(wav_path, clip.start, clip.end)
+                    if res is not None:
+                        hype, reason = res
+                        clip.score, clip.factors = ae_mod.apply_event_bonus(
+                            clip.score, clip.factors, hype, reason)
+                        clip.features["audio_event"] = round(hype, 4)
+            except Exception as e:
+                log.warning("audio-event scoring failed: %s", e)
+
         wav.unlink(missing_ok=True)  # audio no longer needed past detection
+
+        # Optional vision-language second opinion (Ollama VLM): score how each
+        # clip *looks* from a few keyframes — expression, action, framing — and
+        # blend it like the text read (bounded ±, explainable). No-op without a
+        # local vision model.
+        try:
+            from ..providers import vlm as vlm_mod
+            if vlm_mod.available():
+                self._advance(project_id, 2, "AI watching the clips…")
+                reads = vlm_mod.score_visuals([(c.start, c.end) for c in clips])
+                for i, (viral, reason) in reads.items():
+                    clips[i].score, clips[i].factors = score_mod.apply_viral_boost(
+                        clips[i].score, clips[i].factors, viral,
+                        f"looks {reason}" if reason else "strong visual")
+                    clips[i].features["vlm_viral"] = round(viral, 4)
+                clips.sort(key=lambda c: c.score, reverse=True)
+        except Exception as e:
+            log.warning("VLM scoring failed: %s", e)
 
         # Learned boundary correction — nudge toward where you actually trim.
         cs, ce = feedback.boundary_correction(bscope)
@@ -446,10 +481,25 @@ class Engine:
                 clip.feedback = prev.get(clip.id, clip.feedback)
             p.clips = clips
 
+        # Optional Demucs vocal isolation: separate the voice once and render
+        # from a denoised copy (video stream copied, untouched) so every clip
+        # gets studio-clean speech. Falls back to the original on any failure.
+        render_src = src_path
+        if project.settings.denoise and settings.has_demucs and info.has_audio:
+            self._advance(project_id, 5, "Isolating voice (Demucs)…")
+            try:
+                from ..providers import separate as sep_mod
+                dst = str(ingest.project_dir(project_id) / "source.denoised.mp4")
+                cleaned = sep_mod.denoise_source(src_path, dst)
+                if cleaned:
+                    render_src = cleaned
+            except Exception as e:
+                log.warning("denoise failed: %s", e)
+
         # 6. render (parallel per clip) ----------------------------------
         out_w, out_h = project.settings.dims()
         self._advance(project_id, 5, "Rendering clips…")
-        self._render_all(project_id, clips, src_path, info, out_w, out_h,
+        self._render_all(project_id, clips, render_src, info, out_w, out_h,
                          project.settings.burn_captions, project.settings.motion)
 
         with store.mutate(project_id) as p:
@@ -559,7 +609,7 @@ class Engine:
             clip = project.clip(clip_id)
             if not clip:
                 raise RuntimeError("clip not found")
-            src_path = str(get_settings().media_dir / project.source.path)
+            src_path = self._render_source(project_id, project)
             info = ffmpeg.probe(src_path)
             # _render_one resolves a per-clip aspect override on its own.
             out_w, out_h = project.settings.dims()
@@ -583,7 +633,7 @@ class Engine:
             project = store.get(project_id)
             if not project or not project.source:
                 raise RuntimeError("project or source media missing")
-            src_path = str(get_settings().media_dir / project.source.path)
+            src_path = self._render_source(project_id, project)
             info = ffmpeg.probe(src_path)
             out_w, out_h = project.settings.dims()
             self._render_all(project_id, project.clips, src_path, info,
@@ -604,6 +654,14 @@ class Engine:
                     p.progress.message = f"Format change failed: {e}"
             except Exception:
                 pass  # project deleted underneath us
+
+    def _render_source(self, project_id: str, project) -> str:
+        """The video to render clips from: a Demucs-denoised copy when one was
+        produced for this project, else the original source."""
+        denoised = ingest.project_dir(project_id) / "source.denoised.mp4"
+        if project.settings.denoise and denoised.exists():
+            return str(denoised)
+        return str(get_settings().media_dir / project.source.path)
 
     def _mark_clip_failed(self, project_id: str, clip_id: str, err: Exception) -> None:
         try:
