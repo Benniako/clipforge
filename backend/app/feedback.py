@@ -74,9 +74,14 @@ def _connect():
     global _initialized
     con = sqlite3.connect(get_settings().db_path, timeout=30)
     con.execute("PRAGMA journal_mode=WAL")
+    # Double-checked under the lock so two threads racing the first connect
+    # (API pool + background worker share this DB) can't let a reader hit a
+    # table before the schema DDL runs → "no such table". The DDL is idempotent.
     if not _initialized:
-        con.executescript(_SCHEMA)  # idempotent; self-heals if called before init
-        _initialized = True
+        with _lock:
+            if not _initialized:
+                con.executescript(_SCHEMA)
+                _initialized = True
     try:
         yield con
         con.commit()

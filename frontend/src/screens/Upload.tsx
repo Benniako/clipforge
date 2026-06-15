@@ -36,6 +36,7 @@ export default function Upload({ health }: { health: Health | null }) {
   const [burnCaptions, setBurnCaptions] = useState(true);
   const [gameProfile, setGameProfile] = useState("auto");
   const [tighten, setTighten] = useState(false);
+  const [denoise, setDenoise] = useState(false);
   const [motion, setMotion] = useState("none");
   const [facecamLayout, setFacecamLayout] = useState("auto");
   const [styles, setStyles] = useState<StyleTemplate[]>([]);
@@ -95,6 +96,7 @@ export default function Upload({ health }: { health: Health | null }) {
         burn_captions: burnCaptions,
         game_profile: gameProfile,
         tighten,
+        denoise,
         motion,
         facecam_layout: facecamLayout,
         onProgress: setPct,
@@ -274,6 +276,12 @@ export default function Upload({ health }: { health: Health | null }) {
               onChange={(e) => setMotion(e.target.checked ? "push" : "none")} />
             Slow push-in (zoom)
           </label>
+          <label className="row tiny" style={{ gap: 8, cursor: "pointer", paddingTop: 4 }}
+            title="Isolate the voice from background music/game audio (Demucs) so speech and captions sound studio-clean. Needs the Demucs power-up installed.">
+            <input type="checkbox" checked={denoise}
+              onChange={(e) => setDenoise(e.target.checked)} />
+            Clean voice (remove background audio)
+          </label>
         </div>
         <div className="field">
           <label>Optimize for</label>
@@ -342,8 +350,14 @@ export default function Upload({ health }: { health: Health | null }) {
         </div>
       </div>
 
-      {gameProfile !== "auto" && (
-        <CueManager game={gameProfile} cues={cues} onChange={setCues} />
+      {contentType !== "talking" && (
+        <>
+          {gameProfile !== "auto" && (
+            <CueManager game={gameProfile} cues={cues} onChange={setCues} />
+          )}
+          {/* Cross-game sounds (airhorn, hype, laugh…) — matched for any game. */}
+          <CueManager game="common" cues={cues} onChange={setCues} />
+        </>
       )}
 
       <div style={{ marginTop: 22, display: "flex", justifyContent: "center" }}>

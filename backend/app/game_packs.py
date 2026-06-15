@@ -51,7 +51,21 @@ PACKS: dict[str, dict] = {
         ("scream", "Scream", "scream sound effect"),
         ("jumpscare", "Jump-scare hit", "jumpscare sound"),
     ]},
+    # Cross-game sounds: imported here, they're matched for EVERY game profile
+    # (the detector scans <data>/game_cues/common/ alongside the active game).
+    "common": {"label": "Common (all games)", "events": [
+        ("airhorn", "Airhorn / hype blast", "airhorn sound"),
+        ("hype", "Hype / let's go shout", "lets go hype sound"),
+        ("laugh", "Laughter burst", "laugh sound effect"),
+        ("applause", "Applause / crowd cheer", "applause sound"),
+        ("bruh", "Bruh / fail moment", "bruh sound effect"),
+        ("wow", "Wow / shocked reaction", "wow sound effect"),
+    ]},
 }
+
+# Folder scanned for cues that apply regardless of game — kept out of the
+# per-game cue dir so it's reused everywhere (see detect_gameplay._cue_events).
+COMMON_PACK = "common"
 
 
 def _safe(name: str) -> str:
