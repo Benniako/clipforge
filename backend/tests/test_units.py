@@ -1,0 +1,1045 @@
+"""Fast, dependency-light unit tests for the pure pipeline logic.
+
+These don't need ffmpeg, Whisper, or OpenCV — they lock the behaviour of the
+parts most prone to silent regressions (caption ASS formatting, the language
+lexicons, detection ranking, scoring range, crop geometry).
+
+    cd backend && python -m pytest tests/test_units.py        # or:
+    cd backend && python -m tests.test_units                  # no pytest needed
+"""
+from __future__ import annotations
+
+import os
+import tempfile
+
+# Isolate the learning DB before anything imports settings.
+os.environ.setdefault("CLIPFORGE_DATA_DIR", tempfile.mkdtemp(prefix="clipforge-test-"))
+
+from app.models import (Clip, ImportSettings, Platform, Reframe,
+                        ReframeKeyframe, Transcript, Word)
+from app.pipeline import captionize, render
+from app.pipeline import captions as C
+from app.providers import detect, score, signals
+from app.styles import get_style
+
+
+def _words(text: str, per: float = 0.4, d: float = 0.34) -> list[Word]:
+    out, t = [], 0.0
+    for tok in text.split():
+        out.append(Word(t=round(t, 3), d=d, text=tok))
+        t += per
+    return out
+
+
+# --------------------------------------------------------------------------- #
+# Captions — the ASS field-count bug must never come back.
+# --------------------------------------------------------------------------- #
+def test_dialogue_has_exactly_eight_commas_before_text():
+    cs = captionize.build_caption_set(Transcript(words=_words("alpha beta gamma")),
+                                      0.0, 2.0, "bold-pop")
+    ass = C.build_ass(cs, get_style("bold-pop"), 1080, 1920)
+    dialogues = [l for l in ass.splitlines() if l.startswith("Dialogue:")]
+    assert dialogues
+    for line in dialogues:
+        prefix = line[len("Dialogue: "):]
+        # Text is field 9; the 8 preceding commas delimit fields 1..8.
+        head = prefix.split(",", 8)
+        assert len(head) == 9
+        text = head[8]
+        assert not text.lstrip().startswith(","), f"leading comma in text: {text!r}"
+
+
+def test_caption_cleaning_strips_leading_punct_and_drops_pure_punct():
+    tr = Transcript(words=[Word(t=0, d=0.3, text=", hello"),
+                           Word(t=0.4, d=0.3, text=","),
+                           Word(t=0.8, d=0.3, text="world.")])
+    cs = captionize.build_caption_set(tr, 0.0, 2.0, "bold-pop")
+    assert [w.text for w in cs.words] == ["hello", "world."]
+
+
+def test_ass_timestamp_never_emits_60_seconds():
+    from app.pipeline.captions import _ts
+    assert _ts(59.999) == "0:01:00.00"   # float edge must roll over, not ":60.00"
+    assert _ts(0.0) == "0:00:00.00"
+    assert _ts(3661.5) == "1:01:01.50"
+    assert _ts(-1.0) == "0:00:00.00"     # clamped
+
+
+def test_srt_output_format():
+    from app.models import CaptionSet, CaptionWord
+    from app.pipeline.captions import build_srt
+    cs = CaptionSet(words=[CaptionWord(t=0.0, d=0.4, text="Hallo"),
+                           CaptionWord(t=0.5, d=0.4, text="Welt")],
+                    max_words_per_line=2)
+    srt = build_srt(cs)
+    assert srt.startswith("1\n00:00:00,000 --> 00:00:00,900\nHallo Welt")
+
+
+def test_spa_fallback_serves_index_for_client_routes(tmp_path=None):
+    import tempfile
+    from pathlib import Path
+    from starlette.applications import Starlette
+    from starlette.testclient import TestClient
+    from app.main import SPAStaticFiles
+
+    d = Path(tempfile.mkdtemp())
+    (d / "index.html").write_text("<html>app</html>")
+    app = Starlette()
+    app.mount("/", SPAStaticFiles(directory=str(d), html=True), name="spa")
+    c = TestClient(app, raise_server_exceptions=False)
+    assert c.get("/").status_code == 200
+    assert c.get("/p/proj_abc").status_code == 200          # client-side route
+    assert "app" in c.get("/p/proj_abc/clip/c1").text       # nested route too
+
+
+def test_caption_uppercase_and_highlight_present():
+    cs = captionize.build_caption_set(Transcript(words=_words("one two three")),
+                                      0.0, 2.0, "bold-pop")
+    ass = C.build_ass(cs, get_style("bold-pop"), 1080, 1920)
+    assert "ONE" in ass  # bold-pop is uppercase
+    assert "\\fscx112" in ass  # active-word pop
+
+
+# --------------------------------------------------------------------------- #
+# Language-aware signals
+# --------------------------------------------------------------------------- #
+def test_german_lexicon_beats_english_on_german_text():
+    w = _words("Warum macht das niemand? Das ist unglaublich und verrückt.")
+    h_de, _ = signals.hook_strength(w, signals.get_lexicon("de"))
+    h_en, _ = signals.hook_strength(w, signals.get_lexicon("en"))
+    e_de, _ = signals.emotional_payoff(w, signals.get_lexicon("de"))
+    assert h_de > h_en
+    assert e_de > 0.0
+
+
+def test_unknown_language_falls_back_to_english():
+    assert signals.get_lexicon("xx") is signals.get_lexicon("en")
+    assert signals.get_lexicon(None) is signals.get_lexicon("en")
+
+
+# --------------------------------------------------------------------------- #
+# Detection + scoring
+# --------------------------------------------------------------------------- #
+def test_detection_returns_within_length_and_count():
+    st = ImportSettings(platform=Platform.tiktok, min_len=5, max_len=15, target_clips=3)
+    text = ("So here is the biggest secret nobody tells you about this. "
+            "What would change if you tried it every single day for a year? "
+            "The truth is that small habits compound into something incredible. "
+            "I learned this the hard way and it honestly changed everything.")
+    cands = detect.detect_moments(_words(text), st, lang="en")
+    assert 1 <= len(cands) <= 3
+    for c in cands:
+        assert 5 <= c.duration <= 15.01
+
+
+def test_window_fallback_terminates_on_overlong_word():
+    # A single word spanning the whole target window (bad ASR timestamp) used
+    # to leave the fallback's index stuck — the loop never terminated.
+    st = ImportSettings(platform=Platform.tiktok, min_len=5, max_len=15, target_clips=3)
+    words = [Word(t=0.0, d=30.0, text="stuck"), Word(t=30.0, d=0.4, text="end")]
+    cands = detect._window_fallback(words, st, signals.get_lexicon("en"))
+    assert 1 <= len(cands) <= 2  # returning at all means it terminated
+
+
+def test_synthetic_transcript_stays_within_duration():
+    from app.providers import transcribe
+    # probe fails on a missing file -> the documented 60s fallback duration
+    tr = transcribe.synthetic_transcript("/nonexistent.mp4", lang="en")
+    assert tr.words
+    assert all(w.t + w.d <= 60.0 for w in tr.words)
+
+
+def test_score_in_range_and_has_factors():
+    st = ImportSettings(platform=Platform.tiktok)
+    w = _words("What would change if you showed up every single day? It is incredible.")
+    s, factors, feats = score.score_clip(w, 18.0, st, lang="en")
+    assert 1 <= s <= 99
+    assert len(factors) >= 2
+    assert all(f.label for f in factors)
+    assert "hook" in feats and 0.0 <= feats["hook"] <= 1.0  # features returned for learning
+
+
+def test_platform_weights_shift_score():
+    st_tt = ImportSettings(platform=Platform.tiktok)
+    st_sh = ImportSettings(platform=Platform.shorts)
+    w = _words("Why does nobody talk about this? It is the biggest secret ever.")
+    s_tt, _, _ = score.score_clip(w, 18.0, st_tt, lang="en")
+    s_sh, _, _ = score.score_clip(w, 18.0, st_sh, lang="en")
+    assert s_tt != s_sh  # hook-heavy clip scores differently per platform
+
+
+# --------------------------------------------------------------------------- #
+# Reframe / crop geometry (no ffmpeg needed)
+# --------------------------------------------------------------------------- #
+def test_build_crop_static_when_subject_steady():
+    clip = Clip(start=0, end=5, reframe=Reframe(keyframes=[ReframeKeyframe(t=0, cx=0.5)]))
+    cw, ch, x = render.build_crop(clip, 1920, 1080)
+    assert cw == 606 and ch == 1080  # 9:16 of 1080 height (even)
+    assert x.lstrip("-").isdigit()  # static => plain number
+
+
+def test_build_crop_dynamic_when_subject_moves():
+    clip = Clip(start=0, end=6, reframe=Reframe(keyframes=[
+        ReframeKeyframe(t=0, cx=0.2), ReframeKeyframe(t=6, cx=0.8)]))
+    _, _, x = render.build_crop(clip, 1920, 1080)
+    assert "if(" in x and "t" in x  # time-varying expression
+
+
+def test_reframe_skips_already_vertical_source():
+    from app.pipeline import reframe as RF
+    rf = RF.compute_reframe("/nonexistent.mp4", 0.0, 5.0, src_aspect=9 / 16)
+    assert rf.tracked is False
+    assert rf.keyframes[0].cx == 0.5
+
+
+# --------------------------------------------------------------------------- #
+# Facecam — clustering + layout geometry (no cv2/ffmpeg needed)
+# --------------------------------------------------------------------------- #
+def test_facecam_cluster_finds_stable_corner_face():
+    from app.pipeline import facecam as FC
+    # A small face pinned bottom-left in every sample + random in-game faces.
+    cam = (0.05, 0.70, 0.08, 0.14)
+    noise = [(0.4, 0.3, 0.05, 0.09), (0.7, 0.5, 0.04, 0.07), (0.55, 0.2, 0.06, 0.1)]
+    samples = [[cam, noise[i % 3]] for i in range(12)]
+    rect = FC.stable_face_cluster(samples)
+    assert rect is not None
+    assert abs((rect.x + rect.w / 2) - 0.09) < 0.02   # centred on the cam face
+    overlay = FC.expand_to_overlay(rect)
+    assert overlay.w > rect.w and overlay.h > rect.h
+    assert 0.0 <= overlay.x and overlay.x + overlay.w <= 1.0
+    assert 0.0 <= overlay.y and overlay.y + overlay.h <= 1.0
+
+
+def test_facecam_cluster_rejects_moving_and_big_faces():
+    from app.pipeline import facecam as FC
+    # Moving face (a talking head pan) — positions drift too much.
+    moving = [[(0.1 + i * 0.03, 0.4, 0.1, 0.16)] for i in range(12)]
+    assert FC.stable_face_cluster(moving) is None
+    # Stable but huge face — that's talking content, not an overlay.
+    big = [[(0.3, 0.2, 0.35, 0.5)] for _ in range(12)]
+    assert FC.stable_face_cluster(big) is None
+    # Too few samples to trust.
+    assert FC.stable_face_cluster([[(0.05, 0.7, 0.08, 0.14)]] * 3) is None
+
+
+def test_rect_crop_grows_to_aspect_and_clamps():
+    from app.models import Rect
+    cam = Rect(x=0.02, y=0.72, w=0.18, h=0.24)   # bottom-left cam on 1920x1080
+    w, h, x, y = render.rect_crop(cam, 1920, 1080, aspect=1080 / 576)
+    assert abs(w / h - 1080 / 576) < 0.02        # grown to the pane aspect
+    assert x >= 0 and y >= 0 and x + w <= 1920 and y + h <= 1080
+
+
+def test_game_pane_crop_dodges_facecam():
+    from app.models import Rect
+    aspect = 1080 / 1344                          # split-layout gameplay pane
+    cam = Rect(x=0.0, y=0.6, w=0.30, h=0.4)       # wide cam on the left
+    w, h, x, y = render.game_pane_crop(0.25, cam, 1920, 1080, aspect)
+    assert x >= int(0.30 * 1920) - 1              # shifted right of the cam
+    # No cam -> stays where the action centroid put it.
+    w2, h2, x2, _ = render.game_pane_crop(0.5, None, 1920, 1080, aspect)
+    assert abs((x2 + w2 / 2) - 960) <= 1
+
+
+def test_reaction_weights_make_room_and_renormalise():
+    from app.providers import detect_gameplay as G
+    w = G.with_reaction(G.audio_weights("valorant"))
+    assert abs(sum(w.values()) - 1.0) < 1e-6
+    assert w["reaction"] == G.REACTION_WEIGHT
+    s_calm, _ = G.score_audio({"intensity": 0.8, "reaction": 0.0}, w)
+    s_hype, f_hype = G.score_audio({"intensity": 0.8, "reaction": 1.0}, w)
+    assert s_hype > s_calm                        # a big reaction raises the score
+    assert any("react" in f.label.lower() for f in f_hype)
+
+
+def test_composed_graph_split_and_framed():
+    from app.models import Rect
+    cam = Rect(x=0.02, y=0.70, w=0.20, h=0.26)
+    clip = Clip(start=0, end=10, reframe=Reframe(
+        layout="split", facecam=cam, keyframes=[ReframeKeyframe(t=0, cx=0.5)]))
+    info = type("I", (), {"width": 1920, "height": 1080})()
+    g = "\n".join(render._composed_graph(clip, cam, info, 1080, 1920, "ass=f=cap.ass"))
+    assert "vstack=inputs=2" in g and "[vo]" in g and "ass=f=cap.ass" in g
+    clip.reframe.layout = "framed"
+    g2 = "\n".join(render._composed_graph(clip, cam, info, 1080, 1920, None))
+    assert "overlay=" in g2 and "vstack" not in g2
+
+
+# --------------------------------------------------------------------------- #
+# Transcription engine selection (whisperX > faster-whisper > synthetic)
+# --------------------------------------------------------------------------- #
+def _settings(**kw):
+    from pathlib import Path
+    from app.config import Settings
+    base = dict(data_dir=Path("/tmp"), db_path=Path("/tmp/x.db"), media_dir=Path("/tmp"),
+                ffmpeg="ff", ffprobe="fp", has_whisper=True, has_whisperx=False,
+                has_opencv=True, has_ytdlp=True, has_cuda=False, has_nvenc=False,
+                has_nvidia=False)
+    base.update(kw)
+    return Settings(**base)
+
+
+def test_transcription_engine_prefers_whisperx_then_faster_then_synthetic():
+    assert _settings(has_whisperx=True).transcription_engine == "whisperx"
+    assert _settings(has_whisperx=False, has_whisper=True).transcription_engine == "whisper"
+    assert _settings(has_whisperx=False, has_whisper=False).transcription_engine == "synthetic"
+
+
+def test_transcription_engine_respects_explicit_preference():
+    # force faster-whisper even when whisperX is available
+    assert _settings(has_whisperx=True, transcriber="faster").transcription_engine == "whisper"
+    # force synthetic
+    assert _settings(has_whisperx=True, transcriber="synthetic").transcription_engine == "synthetic"
+    # ask for whisperX but it's not installed -> falls back, never crashes
+    assert _settings(has_whisperx=False, transcriber="whisperx").transcription_engine == "whisper"
+
+
+def test_diarization_capability_requires_token():
+    assert _settings(has_whisperx=True, hf_token="tok").capability_report()["diarization"] is True
+    assert _settings(has_whisperx=True, hf_token=None).capability_report()["diarization"] is False
+    assert _settings(has_whisperx=False, hf_token="tok").capability_report()["diarization"] is False
+
+
+# --------------------------------------------------------------------------- #
+# GPU encoding gating — never try NVENC without a real GPU
+# --------------------------------------------------------------------------- #
+def test_auto_whisper_model_picks_for_hardware():
+    from app.config import _auto_whisper_model
+    assert _auto_whisper_model(True, 16000, 12) == "large-v3-turbo"  # big GPU: turbo
+    assert _auto_whisper_model(True, 4000, 8) == "medium"       # small GPU
+    assert _auto_whisper_model(False, 0, 12) == "small"         # strong CPU
+    assert _auto_whisper_model(False, 0, 6) == "base"
+    assert _auto_whisper_model(False, 0, 2) == "tiny"           # weak CPU
+
+
+def test_nvenc_requires_a_real_gpu():
+    assert _settings(has_nvenc=True, has_nvidia=False, has_cuda=False).use_nvenc is False
+    assert _settings(has_nvenc=True, has_nvidia=True).use_nvenc is True
+    assert _settings(has_nvenc=False, has_nvidia=True).use_nvenc is False  # no encoder
+
+
+def test_upload_cap_unlimited_by_default():
+    assert _settings(max_upload_mb=0).upload_cap_bytes is None      # 0 = no cap
+    assert _settings(max_upload_mb=10).upload_cap_bytes == 10 * 1024 * 1024
+
+
+def test_encoder_args_switch():
+    cpu = _settings(has_nvenc=False).video_encoder_args()
+    gpu = _settings(has_nvenc=True, has_nvidia=True).video_encoder_args()
+    assert "libx264" in cpu
+    assert "h264_nvenc" in gpu
+
+
+def test_av1_codec_opt_in_with_safe_fallbacks():
+    # av1 requested + encoder present -> av1_nvenc
+    av1 = _settings(has_nvenc=True, has_nvidia=True, has_av1_nvenc=True,
+                    codec="av1").video_encoder_args()
+    assert "av1_nvenc" in av1
+    # av1 requested but the ffmpeg build lacks the encoder -> h264_nvenc
+    no_enc = _settings(has_nvenc=True, has_nvidia=True, has_av1_nvenc=False,
+                       codec="av1").video_encoder_args()
+    assert "h264_nvenc" in no_enc
+    # av1 requested with no GPU at all -> x264
+    no_gpu = _settings(has_nvenc=False, codec="av1").video_encoder_args()
+    assert "libx264" in no_gpu
+    # default codec ignores the AV1 encoder even when present
+    default = _settings(has_nvenc=True, has_nvidia=True,
+                        has_av1_nvenc=True).video_encoder_args()
+    assert "h264_nvenc" in default
+
+
+# --------------------------------------------------------------------------- #
+# Aspect ratios + hashtags
+# --------------------------------------------------------------------------- #
+def test_aspect_dims():
+    from app.models import ImportSettings
+    assert ImportSettings(aspect="9:16").dims() == (1080, 1920)
+    assert ImportSettings(aspect="1:1").dims() == (1080, 1080)
+    assert ImportSettings(aspect="4:5").dims() == (1080, 1350)
+    assert ImportSettings(aspect="bogus").dims() == (1080, 1920)  # safe default
+
+
+def test_hashtags_talking_vs_gameplay():
+    from app.providers import hashtags
+    talk = hashtags.suggest_hashtags("consistency discipline mindset success habits",
+                                     content_type="talking", platform="reels")
+    assert any(t.startswith("#") for t in talk)
+    assert "#reels" in talk
+    game = hashtags.suggest_hashtags("insane valorant ace clutch round",
+                                     content_type="gameplay", platform="tiktok")
+    assert "#gaming" in game and "#valorant" in game and "#tiktok" in game
+
+
+def test_speech_coverage_drives_classification_inputs():
+    from app.pipeline.classify import speech_coverage
+    from app.models import Transcript, Word
+    tr = Transcript(words=[Word(t=0, d=0.5, text="a"), Word(t=1, d=0.5, text="b")])
+    assert abs(speech_coverage(tr, 10.0) - 0.1) < 1e-6
+    assert speech_coverage(None, 10.0) == 0.0
+
+
+# --------------------------------------------------------------------------- #
+# Aspect 16:9, game profiles, montage scoring
+# --------------------------------------------------------------------------- #
+def test_horizontal_aspect():
+    from app.models import ImportSettings
+    assert ImportSettings(aspect="16:9").dims() == (1920, 1080)
+
+
+def test_game_profiles_bias_signals():
+    from app.providers.detect_gameplay import get_profile
+    assert get_profile("auto") is get_profile("generic")
+    assert get_profile("fifa") is get_profile("eafc")
+    # horror rewards sudden spikes; EA FC rewards sustained loudness
+    assert get_profile("horror")["w_transient"] > get_profile("eafc")["w_transient"]
+    assert get_profile("eafc")["w_sustain"] > get_profile("horror")["w_sustain"]
+    assert get_profile("nonsense") is get_profile("generic")  # safe default
+
+
+def test_cue_template_matching_finds_inserted_sound():
+    import numpy as np
+    from app.providers.detect_cues import match_template, SR
+    t = np.linspace(0, 0.4, int(0.4 * SR), endpoint=False)
+    chirp = (0.8 * np.sin(2 * np.pi * (800 + 1500 * t) * t)).astype(np.float32)
+    rng = np.random.default_rng(0)
+    sig = (0.02 * rng.standard_normal(15 * SR)).astype(np.float32)
+    for at in (4.0, 10.0):
+        i = int(at * SR)
+        sig[i:i + len(chirp)] += chirp
+    hits = sorted(round(t0) for t0, _ in match_template(sig, chirp, threshold=0.5, min_gap=2.0))
+    assert any(abs(h - 4) <= 1 for h in hits)
+    assert any(abs(h - 10) <= 1 for h in hits)
+
+
+def test_montage_score_weights_opening():
+    from app.pipeline.montage import score_montage
+    strong_open = score_montage([Clip(start=0, end=5, score=90),
+                                 Clip(start=0, end=5, score=50)])[0]
+    weak_open = score_montage([Clip(start=0, end=5, score=50),
+                               Clip(start=0, end=5, score=90)])[0]
+    assert 1 <= strong_open <= 99 and 1 <= weak_open <= 99
+    assert strong_open > weak_open  # same clips, better hook first -> higher score
+    score, factors = score_montage([Clip(start=0, end=5, score=80),
+                                    Clip(start=0, end=5, score=78)])
+    assert len(factors) >= 1
+
+
+# --------------------------------------------------------------------------- #
+# Local learning loop (feedback.py)
+# --------------------------------------------------------------------------- #
+_BASE = {"hook": 0.30, "emotion": 0.20, "clarity": 0.20, "quote": 0.10,
+         "pace": 0.10, "length": 0.05, "list": 0.05}
+
+
+def _feats(**over):
+    f = {k: 0.3 for k in _BASE}
+    f.update(over)
+    return f
+
+
+def test_learning_cold_start_returns_base():
+    from app import feedback
+    feedback.init_db()
+    feedback.reset("score:cold")
+    w = feedback.learned_weights("score:cold", _BASE)
+    assert w == _BASE  # no feedback -> defaults unchanged
+
+
+def test_learning_shifts_weights_toward_liked_features():
+    from app import feedback
+    feedback.init_db()
+    sc = "score:shift"
+    feedback.reset(sc)
+    # You keep emotional clips and reject hooky ones.
+    for i in range(12):
+        feedback.record_rating(f"up{i}", sc, 1.0, _feats(emotion=0.9, hook=0.1))
+        feedback.record_rating(f"dn{i}", sc, 0.0, _feats(emotion=0.1, hook=0.9))
+    w = feedback.learned_weights(sc, _BASE)
+    assert w["emotion"] > _BASE["emotion"]      # learned you like payoff
+    assert w["hook"] < _BASE["hook"]            # and care less about hooks
+    assert abs(sum(w.values()) - sum(_BASE.values())) < 1e-6  # total preserved
+
+
+def test_learning_confidence_grows_with_data():
+    from app import feedback
+    feedback.init_db()
+    few, many = "score:few", "score:many"
+    feedback.reset(few)
+    feedback.reset(many)
+    feedback.record_rating("f1", few, 1.0, _feats(emotion=0.9, hook=0.1))
+    feedback.record_rating("f2", few, 0.0, _feats(emotion=0.1, hook=0.9))
+    for i in range(15):
+        feedback.record_rating(f"m_up{i}", many, 1.0, _feats(emotion=0.9, hook=0.1))
+        feedback.record_rating(f"m_dn{i}", many, 0.0, _feats(emotion=0.1, hook=0.9))
+    shift_few = feedback.learned_weights(few, _BASE)["emotion"] - _BASE["emotion"]
+    shift_many = feedback.learned_weights(many, _BASE)["emotion"] - _BASE["emotion"]
+    assert shift_few > 0                  # even a little feedback nudges
+    assert shift_many > shift_few         # more feedback -> stronger personalization
+
+
+def test_gameplay_scoring_respects_profile():
+    from app.providers.detect_gameplay import audio_weights, score_audio
+    transient = {"intensity": 0.5, "sustain": 0.1, "transient": 0.9, "spikes": 0.1, "cue": 0.0}
+    sustained = {"intensity": 0.5, "sustain": 0.9, "transient": 0.1, "spikes": 0.1, "cue": 0.0}
+    assert score_audio(transient, audio_weights("horror"))[0] > \
+        score_audio(sustained, audio_weights("horror"))[0]
+    assert score_audio(sustained, audio_weights("eafc"))[0] > \
+        score_audio(transient, audio_weights("eafc"))[0]
+
+
+def test_gameplay_learns_from_feedback():
+    from app import feedback
+    from app.providers.detect_gameplay import audio_weights
+    feedback.init_db()
+    sc = feedback.score_scope("gameplay", "eafc")
+    feedback.reset(sc)
+    base = audio_weights("eafc")
+    transient = {"intensity": 0.5, "sustain": 0.1, "transient": 0.9, "spikes": 0.1, "cue": 0.0}
+    sustained = {"intensity": 0.5, "sustain": 0.9, "transient": 0.1, "spikes": 0.1, "cue": 0.0}
+    for i in range(12):  # you actually prefer sudden plays, even in EA FC
+        feedback.record_rating(f"u{i}", sc, 1.0, transient)
+        feedback.record_rating(f"d{i}", sc, 0.0, sustained)
+    w = feedback.learned_weights(sc, base)
+    assert w["transient"] > base["transient"]
+
+
+def test_boundary_correction_converges_and_gates():
+    from app import feedback
+    feedback.init_db()
+    sc = "bound:test"
+    feedback.reset(sc)
+    feedback.record_trim(sc, 1.0, -0.5)
+    feedback.record_trim(sc, 1.0, -0.5)
+    assert feedback.boundary_correction(sc) == (0.0, 0.0)  # < min samples
+    feedback.record_trim(sc, 1.0, -0.5)
+    cs, ce = feedback.boundary_correction(sc)
+    assert 0.7 <= cs <= 0.9 and -0.5 <= ce <= -0.3        # damped median, clamped
+    feedback.reset(sc)
+    assert feedback.boundary_correction(sc) == (0.0, 0.0)  # reset works
+
+
+# --------------------------------------------------------------------------- #
+# Silence tightening (jump cuts)
+# --------------------------------------------------------------------------- #
+def _tight_transcript():
+    # two sentences separated by 3s of dead air
+    words = []
+    t = 0.0
+    for tok in "this is the first sentence".split():
+        words.append(Word(t=t, d=0.3, text=tok)); t += 0.35
+    t += 3.0
+    for tok in "and here comes the payoff".split():
+        words.append(Word(t=t, d=0.3, text=tok)); t += 0.35
+    return Transcript(words=words, provider="whisper")
+
+
+def test_tight_segments_cut_dead_air():
+    from app.pipeline.captionize import compute_tight_segments
+    tr = _tight_transcript()
+    end = tr.words[-1].end + 0.2
+    segs = compute_tight_segments(tr, 0.0, end)
+    assert len(segs) == 2
+    kept = sum(b - a for a, b in segs)
+    assert kept < end - 2.0                       # the 3s gap mostly removed
+    # and a clip with no long gaps stays whole
+    segs1 = compute_tight_segments(tr, 0.0, tr.words[4].end + 0.1)
+    assert len(segs1) == 1
+
+
+def test_map_to_tight_and_caption_retime():
+    from app.pipeline.captionize import (build_tight_caption_set,
+                                         compute_tight_segments, map_to_tight)
+    tr = _tight_transcript()
+    end = tr.words[-1].end + 0.2
+    segs = compute_tight_segments(tr, 0.0, end)
+    (a1, b1), (a2, b2) = segs
+    assert map_to_tight(a1, segs) == 0.0
+    assert abs(map_to_tight(a2, segs) - (b1 - a1)) < 1e-6   # 2nd seg starts where 1st ends
+    cs = build_tight_caption_set(tr, segs, "bold-pop")
+    total = sum(b - a for a, b in segs)
+    assert all(w.t < total + 0.01 for w in cs.words)        # all words inside tight timeline
+    assert len(cs.words) == len(tr.words)
+
+
+def test_logistic_learner_kicks_in_with_data():
+    from app import feedback
+    feedback.init_db()
+    sc = "score:logreg"
+    feedback.reset(sc)
+    for i in range(20):  # 40 weighted samples -> logistic path
+        feedback.record_rating(f"u{i}", sc, 1.0, _feats(emotion=0.9, hook=0.15))
+        feedback.record_rating(f"d{i}", sc, 0.0, _feats(emotion=0.1, hook=0.85))
+    w = feedback.learned_weights(sc, _BASE)
+    assert w["emotion"] == max(w.values())                  # right feature on top
+    assert abs(sum(w.values()) - sum(_BASE.values())) < 1e-6
+
+
+def test_gameplay_detection_from_prepared_wav():
+    """The pipeline hands the detector its already-extracted wav — this path
+    must work without ffmpeg and find the loud moment."""
+    import math
+    import struct
+    import wave as wave_mod
+
+    from app.media.ffmpeg import MediaInfo
+    from app.providers.detect_gameplay import detect_gameplay
+
+    sr, dur = 16000, 60
+    fd, wav_name = tempfile.mkstemp(suffix=".wav")
+    os.close(fd)
+    with wave_mod.open(wav_name, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(sr)
+        frames = bytearray()
+        for i in range(sr * dur):
+            t = i / sr
+            amp = 0.7 if 30.0 <= t < 31.0 else 0.01   # one loud second at t=30
+            frames += struct.pack("<h", int(amp * 32767 * math.sin(2 * math.pi * 220 * t)))
+        wf.writeframes(bytes(frames))
+    try:
+        info = MediaInfo(duration=dur, width=1920, height=1080, fps=30,
+                         has_audio=True, has_video=True, codec=None)
+        st = ImportSettings(min_len=8, max_len=20, target_clips=3)
+        clips = detect_gameplay("unused.mp4", info, st, wav_path=wav_name)
+    finally:
+        os.unlink(wav_name)
+    assert clips
+    assert any(c.start <= 30.0 <= c.end for c in clips), \
+        f"no clip covers the burst: {[(c.start, c.end) for c in clips]}"
+
+
+def test_speech_aware_reframe_helpers():
+    from app.pipeline.orchestrator import _speech_intervals
+    from app.pipeline.reframe import _speech_active
+
+    # No intervals known -> always "active" (legacy behaviour).
+    assert _speech_active(1.0, None) is True
+    assert _speech_active(1.0, []) is True
+    assert _speech_active(1.0, [(0.5, 2.0)]) is True
+    assert _speech_active(3.0, [(0.5, 2.0)]) is False
+
+    # Synthetic transcripts opt out — their filler timing isn't real speech.
+    assert _speech_intervals(Transcript(provider="synthetic"), 0, 10) is None
+    assert _speech_intervals(None, 0, 10) is None
+    tr = _tight_transcript()  # two sentences around a 3s gap
+    iv = _speech_intervals(tr, 0.0, tr.words[-1].end + 0.2)
+    assert iv and len(iv) == 2
+    assert iv[0][0] >= 0.0 and iv[1][0] > iv[0][1]   # clip-relative, disjoint
+
+
+def test_scene_showinfo_parse_and_snap():
+    from app.providers import scenes
+    err = ("[Parsed_showinfo_1 @ 0x1] n:   0 pts:  12345 pts_time:1.04  fmt:yuv420p\n"
+           "[Parsed_showinfo_1 @ 0x1] n:   1 pts:  98765 pts_time:7.5 fmt:yuv420p\n"
+           "frame=  2 fps=0.0 q=-0.0\n")
+    assert scenes.parse_showinfo_times(err) == [1.04, 7.5]
+    cuts = [10.0, 14.2]
+    assert scenes.snap(11.0, cuts, window=1.5) == 10.0   # nearest within window
+    assert scenes.snap(13.0, cuts, window=1.5) == 14.2   # 3.0 vs 1.2 -> closer cut
+    assert scenes.snap(12.0, cuts, window=1.0) == 12.0   # nothing in range
+    assert scenes.snap(5.0, [], window=2.0) == 5.0       # no cuts at all
+
+
+def test_status_ws_reports_missing_project():
+    from starlette.testclient import TestClient
+    from app import store
+    from app.main import create_app
+
+    store.init_db()  # TestClient without a context manager skips lifespan
+    c = TestClient(create_app(), raise_server_exceptions=False)
+    with c.websocket_connect("/api/projects/proj_missing/ws") as ws:
+        assert ws.receive_json() == {"error": "project not found"}
+
+
+def test_multikill_streaks_chain_and_outscore_single_kills():
+    from app.media.ffmpeg import MediaInfo
+    from app.providers.detect_cues import CueEvent
+    from app.providers.detect_gameplay import _cue_clips, group_streaks
+
+    evs = [CueEvent(t=100.0, label="kill", similarity=0.8),
+           CueEvent(t=104.0, label="kill", similarity=0.9),
+           CueEvent(t=109.0, label="kill", similarity=0.85),
+           CueEvent(t=300.0, label="kill", similarity=0.9)]   # far away: own clip
+    groups = group_streaks(evs)
+    assert [len(g) for g in groups] == [3, 1]
+
+    info = MediaInfo(duration=600, width=1920, height=1080, fps=30,
+                     has_audio=True, has_video=True, codec=None)
+    st = ImportSettings(min_len=15, max_len=45)
+    clips = _cue_clips(evs, info, lead=10.0, tail=8.0, settings=st)
+    triple, single = clips[0], clips[1]
+    assert triple.score > single.score            # more kills = more viral
+    assert "Triple Kill" in triple.title
+    assert triple.features["streak"] > single.features["streak"]
+    assert triple.start <= 100.0 and triple.end >= 109.0   # covers all kills
+    assert len(triple.cue_ts) == 3
+    assert any("streak" in f.label for f in triple.factors)
+
+
+def test_caption_exclude_mutes_cue_windows():
+    tr = Transcript(words=_words("streamer talking double kill more talk"),
+                    provider="whisper")
+    # words at t=0,0.4,0.8,1.2,1.6,2.0 (d=0.34) — mute the span covering
+    # words 3+4 only; any overlap with the span mutes a word.
+    cs = captionize.build_caption_set(tr, 0.0, 3.0, "bold-pop",
+                                      exclude=[(0.75, 1.55)])
+    assert [w.text for w in cs.words] == ["streamer", "talking", "more", "talk"]
+
+
+def test_game_noise_phrases_removed_from_captions():
+    from app.models import CaptionWord
+    words = [CaptionWord(t=i * 0.4, d=0.3, text=t) for i, t in
+             enumerate("nice one Double Kill! let's go".split())]
+    out = captionize.remove_phrases(words, captionize.game_noise("valorant"))
+    assert [w.text for w in out] == ["nice", "one", "let's", "go"]
+    # aliases + unknown profiles
+    assert captionize.game_noise("fifa") == captionize.game_noise("eafc")
+    assert captionize.game_noise("unknown") == frozenset()
+
+
+def test_gameplay_hashtags_lead_with_the_game():
+    from app.providers import hashtags
+    tags = hashtags.suggest_hashtags("crazy round", content_type="gameplay",
+                                     platform="tiktok", game="valorant")
+    assert tags[0] == "#valorant" and tags[1] == "#valorantclips"
+    assert "#tiktok" in tags and len(tags) <= 7
+
+
+def test_ollama_model_autopick_prefers_strongest():
+    from app.providers import llm
+    assert llm._resolve_model(["llama3.2:latest", "qwen3:8b"]) == "qwen3:8b"
+    assert llm._resolve_model(["llama3.2:latest"]) == "llama3.2:latest"
+    assert llm._resolve_model(["some-custom:7b"]) == "some-custom:7b"  # anything > nothing
+    assert llm._resolve_model([]) is None
+
+
+def test_llm_title_strips_reasoning_blocks():
+    from app.providers.llm import _clean_title
+    assert _clean_title("<think>\nhmm what title\n</think>\nHe aced the round") \
+        == "He aced the round"
+    assert _clean_title("<think>truncated reasoning with no close tag") == ""
+    assert _clean_title('"Title: My hook"') == "My hook"
+
+
+def test_audio_url_extracted_from_soundboard_page():
+    from app.game_packs import audio_url_from_html
+    base = "https://www.myinstants.com/en/instant/valorant-kill/"
+    # MyInstants-style relative path in an onclick handler
+    html = """<html><button onclick="play('/media/sounds/valorant-kill.mp3', ...)">▶</button></html>"""
+    assert (audio_url_from_html(html, base)
+            == "https://www.myinstants.com/media/sounds/valorant-kill.mp3")
+    # absolute URL wins
+    html2 = '<a href="https://cdn.example.com/sfx/goal.mp3">download</a>'
+    assert audio_url_from_html(html2, base) == "https://cdn.example.com/sfx/goal.mp3"
+    # a page with no audio reference
+    assert audio_url_from_html("<html><p>nothing here</p></html>", base) is None
+
+
+def test_set_aspect_endpoint_validation():
+    from starlette.testclient import TestClient
+    from app import store
+    from app.main import create_app
+
+    store.init_db()
+    c = TestClient(create_app(), raise_server_exceptions=False)
+    r = c.post("/api/projects/proj_missing/aspect", json={"aspect": "21:9"})
+    assert r.status_code == 400          # unknown aspect rejected first
+    r = c.post("/api/projects/proj_missing/aspect", json={"aspect": "16:9"})
+    assert r.status_code == 404          # then the project must exist
+
+
+def test_clip_aspect_override_falls_back_to_project_dims():
+    from app.models import ASPECTS
+    st = ImportSettings(aspect="9:16")
+    clip = Clip(start=0, end=5, aspect="16:9")
+    assert (ASPECTS.get(clip.aspect or "") or st.dims()) == (1920, 1080)
+    clip.aspect = None
+    assert (ASPECTS.get(clip.aspect or "") or st.dims()) == (1080, 1920)
+
+
+def test_llm_titles_safe_when_unavailable():
+    from app.providers import llm
+    # no Ollama in CI -> must return {} fast instead of raising/hanging
+    assert llm.suggest_titles(["some transcript"], lang="en", budget=2.0) == {}
+
+
+# --------------------------------------------------------------------------- #
+# OCR on-screen detection (pure helpers — no OCR backend needed)
+# --------------------------------------------------------------------------- #
+def test_ocr_keyword_matching_finds_viral_markers():
+    from app.providers import detect_ocr as O
+    # noisy OCR text still matches the marker as a normalized substring
+    assert ("victory", "victory") in O.match_keywords("|| VICT0RY ||".replace("0", "o"), "valorant")
+    assert any(l == "kill" for l, _ in O.match_keywords("ENEMY DOUBLE KILL", "cs2"))
+    assert any(l == "goal" for l, _ in O.match_keywords("GOOOAL!! what a save", "rocketleague"))
+    # word-boundary: "ko" must not fire inside "took"
+    assert all(l != "eliminated" for l, _ in O.match_keywords("he took the lead", "generic"))
+    # nothing viral -> no events
+    assert O.match_keywords("loading please wait", "generic") == []
+    # exact matching must never fire on clean unrelated text (fuzzy off here)
+    assert O.match_keywords("the quick brown fox", "generic", fuzzy=False) == []
+
+
+def test_ocr_fuzzy_matches_garbled_text():
+    from app.providers import detect_ocr as O
+    try:
+        import rapidfuzz  # noqa: F401
+    except Exception:
+        return  # graceful: fuzzy path is a no-op without rapidfuzz
+    # OCR mangles stylized game fonts; fuzzy still resolves the marker.
+    assert any(l == "eliminated" for l, _ in O.match_keywords("YOU WERE ELiMlNATED", "generic"))
+    assert any(l == "kill" for l, _ in O.match_keywords("DOUBLE KlLL", "cs2"))
+    assert any(l == "kill" for l, _ in O.match_keywords("HEADSH0T", "cs2"))
+    # but a high threshold must not invent markers out of unrelated prose
+    assert O.match_keywords("the quick brown fox jumps", "generic", threshold=95) == []
+
+
+def test_ocr_frame_sampling_is_bounded_and_spaced():
+    from app.providers import detect_ocr as O
+    assert O.sample_frame_times(0) == []
+    ts = O.sample_frame_times(20, every=2.0)
+    assert ts and all(0 < t < 20 for t in ts)
+    assert all(b - a >= 1.9 for a, b in zip(ts, ts[1:]))
+    # a long VOD never exceeds the frame cap
+    assert len(O.sample_frame_times(100000, every=2.0, max_frames=400)) <= 400
+
+
+def test_ocr_dedupes_persisting_banner():
+    from app.providers.detect_ocr import OcrEvent, dedupe_events
+    evs = [OcrEvent(t=10.0, label="victory", text="victory", confidence=0.8),
+           OcrEvent(t=11.0, label="victory", text="victory", confidence=0.8),  # same banner
+           OcrEvent(t=12.0, label="victory", text="victory", confidence=0.8),
+           OcrEvent(t=40.0, label="victory", text="victory", confidence=0.8)]  # later round
+    out = dedupe_events(evs, min_gap=4.0)
+    assert [round(e.t) for e in out] == [10, 40]
+
+
+def test_ocr_clips_open_before_the_banner():
+    from app.media.ffmpeg import MediaInfo
+    from app.providers.detect_ocr import OcrEvent
+    from app.providers.detect_gameplay import _ocr_clips
+    info = MediaInfo(duration=600, width=1920, height=1080, fps=30,
+                     has_audio=True, has_video=True, codec=None)
+    st = ImportSettings(min_len=15, max_len=45)
+    clips = _ocr_clips([OcrEvent(t=120.0, label="victory", text="victory", confidence=0.9)],
+                       info, st)
+    assert len(clips) == 1
+    c = clips[0]
+    assert c.start < 120.0 <= c.end           # the banner moment is inside the clip
+    assert st.min_len <= c.duration <= st.max_len + 0.01
+    assert c.features["ocr"] == 0.9
+    assert any("on-screen" in f.detail.lower() for f in c.factors)
+
+
+# --------------------------------------------------------------------------- #
+# LLM virality re-rank (pure parse + boost — no Ollama needed)
+# --------------------------------------------------------------------------- #
+def test_llm_viral_parse():
+    from app.providers.llm import _parse_viral
+    assert _parse_viral("SCORE: 82 | REASON: strong hook")[0] == 0.82
+    assert _parse_viral("SCORE: 82 | REASON: strong hook")[1] == "strong hook"
+    assert _parse_viral("score: 5") == (0.05, "AI virality read")
+    assert _parse_viral("no number here") is None
+    assert _parse_viral("SCORE: 250")[0] == 1.0     # clamped
+
+
+def test_viral_boost_is_bounded_and_explainable():
+    from app.models import ScoreFactor
+    from app.providers.score import apply_viral_boost
+    base = [ScoreFactor(label="hook", weight=20.0)]
+    hi, fh = apply_viral_boost(50, base, 1.0, "great hook", max_swing=12)
+    lo, fl = apply_viral_boost(50, base, 0.0, "weak", max_swing=12)
+    mid, fm = apply_viral_boost(50, base, 0.5, "meh", max_swing=12)
+    assert hi == 62 and lo == 38 and mid == 50      # ±max_swing, centred at 0.5
+    assert fh[0].label.startswith("AI:") and fh[0].weight == 12.0
+    assert fm == base                                # no swing -> no added factor
+    # never escapes 1..99
+    assert apply_viral_boost(95, base, 1.0, "x", max_swing=12)[0] == 99
+
+
+def test_ocr_capability_detection_default_off():
+    # CI has no OCR backend installed -> capability is off, detection no-ops.
+    assert _settings().has_ocr is False
+    assert _settings().capability_report()["ocr"] is False
+
+
+# --------------------------------------------------------------------------- #
+# Per-speaker captions + the no-linger caption fix
+# --------------------------------------------------------------------------- #
+def _multi_speaker_transcript():
+    # speaker 0 then speaker 1, alternating
+    ws = [Word(t=0.0, d=0.3, text="hello", speaker=0),
+          Word(t=0.4, d=0.3, text="there", speaker=0),
+          Word(t=0.8, d=0.3, text="hi", speaker=1),
+          Word(t=1.2, d=0.3, text="back", speaker=1)]
+    return Transcript(words=ws, provider="whisper", speakers=2)
+
+
+def test_caption_speaker_filter_keeps_only_chosen():
+    tr = _multi_speaker_transcript()
+    both = captionize.build_caption_set(tr, 0.0, 2.0, "bold-pop")
+    assert [w.text for w in both.words] == ["hello", "there", "hi", "back"]
+    assert [w.speaker for w in both.words] == [0, 0, 1, 1]
+    only0 = captionize.build_caption_set(tr, 0.0, 2.0, "bold-pop", speakers={0})
+    assert [w.text for w in only0.words] == ["hello", "there"]
+    only1 = captionize.build_caption_set(tr, 0.0, 2.0, "bold-pop", speakers={1})
+    assert [w.text for w in only1.words] == ["hi", "back"]
+
+
+def test_speakers_in_lists_present_speakers():
+    tr = _multi_speaker_transcript()
+    assert captionize.speakers_in(tr, 0.0, 2.0) == [0, 1]
+    assert captionize.speakers_in(tr, 0.0, 0.6) == [0]   # only speaker 0 talks early
+
+
+def test_caption_does_not_linger_through_silence():
+    from app.models import CaptionSet, CaptionWord
+    # word at t=0, then a 3s gap, then a word — within one line the first word
+    # must NOT hold for 3s; it clears shortly after it's spoken.
+    cs = CaptionSet(words=[CaptionWord(t=0.0, d=0.3, text="alpha"),
+                           CaptionWord(t=3.3, d=0.3, text="beta")],
+                    max_words_per_line=3)
+    ass = C.build_ass(cs, get_style("bold-pop"), 1080, 1920)
+    first = next(l for l in ass.splitlines() if l.startswith("Dialogue:") and "ALPHA" in l)
+    # End timestamp (field 3) of the alpha event should be ~0.7s, not ~3.3s.
+    end_ts = first.split(",", 3)[2]
+    assert end_ts < "0:00:01.50", f"caption lingered through silence: {end_ts}"
+
+
+def test_common_cue_pack_is_available_for_all_games():
+    from app import game_packs
+    status = game_packs.pack_status()
+    assert "common" in status
+    assert status["common"]["label"].lower().startswith("common")
+    assert {e["name"] for e in status["common"]["events"]} >= {"airhorn", "hype", "laugh"}
+
+
+# --------------------------------------------------------------------------- #
+# Caption precision, hook front-loading, multimodal corroboration, cue learning
+# --------------------------------------------------------------------------- #
+def test_caption_line_breaks_on_speech_pause():
+    from app.models import CaptionWord
+    from app.pipeline.captions import _group_lines
+    # a big gap before the third word forces a new line even under the count cap
+    ws = [CaptionWord(t=0.0, d=0.3, text="a"), CaptionWord(t=0.4, d=0.3, text="b"),
+          CaptionWord(t=3.0, d=0.3, text="c")]
+    assert [len(l) for l in _group_lines(ws, 5)] == [2, 1]
+    # tight speech (no gaps) stays one line up to the count cap
+    ws2 = [CaptionWord(t=i * 0.4, d=0.3, text=str(i)) for i in range(3)]
+    assert len(_group_lines(ws2, 5)) == 1
+
+
+def test_hook_rewards_front_loaded_curiosity():
+    early = _words("Why does nobody do this one secret")        # hook word at t=0
+    late = [Word(t=0.0, d=0.3, text="um"), Word(t=0.6, d=0.3, text="okay"),
+            Word(t=1.2, d=0.3, text="anyway")]                  # no hook up front
+    he, _ = signals.hook_strength(early, signals.get_lexicon("en"))
+    hl, _ = signals.hook_strength(late, signals.get_lexicon("en"))
+    assert he > hl
+
+
+def test_corroboration_boosts_multi_signal_clips():
+    from app.providers.detect_cues import CueEvent
+    from app.providers.detect_gameplay import GameplayClip, apply_corroboration
+    from app.providers.detect_ocr import OcrEvent
+    c = GameplayClip(start=10, end=30, score=70)
+    apply_corroboration([c], [CueEvent(t=20, label="kill", similarity=0.9)],
+                        [OcrEvent(t=21, label="kill", text="kill", confidence=0.8)])
+    assert c.score > 70 and c.features.get("corroborated") == 1.0
+    assert any("confirm" in f.label.lower() for f in c.factors)
+    # a single source does not corroborate
+    c2 = GameplayClip(start=10, end=30, score=70)
+    apply_corroboration([c2], [CueEvent(t=20, label="kill", similarity=0.9)], [])
+    assert c2.score == 70
+
+
+def test_cue_learning_pending_labels():
+    from app.cue_learning import pending_labels
+    from app.providers.detect_ocr import OcrEvent
+    evs = [OcrEvent(t=5, label="kill", text="kill", confidence=0.8),
+           OcrEvent(t=9, label="kill", text="kill", confidence=0.8),       # dup label
+           OcrEvent(t=12, label="victory", text="victory", confidence=0.8)]
+    assert pending_labels(evs, set()) == ["kill", "victory"]      # one per label, time order
+    assert pending_labels(evs, {"kill"}) == ["victory"]           # skip already-saved
+
+
+# --------------------------------------------------------------------------- #
+# Power-ups: VAD caption snapping, replay scoring, emotion blend, subject pick
+# --------------------------------------------------------------------------- #
+def test_vad_refine_clamps_and_drops_silent_words():
+    from app.providers.vad import refine_words
+    ws = [Word(t=0.0, d=2.0, text="hello"),      # overruns into silence -> clamp
+          Word(t=5.0, d=0.3, text="ghost"),      # entirely in a silent gap -> drop
+          Word(t=10.2, d=0.3, text="world")]
+    speech = [(0.0, 1.0), (10.0, 11.0)]
+    out = refine_words(ws, speech)
+    assert [w.text for w in out] == ["hello", "world"]
+    assert out[0].end <= 1.1                      # clamped to the speech end (+pad)
+    # no speech info -> unchanged
+    assert refine_words(ws, []) == ws
+
+
+def test_replay_value_rewards_clean_button():
+    looped = _words("here is the one secret that changes everything")
+    looped[-1].text = "everything."                # complete, strong, concise
+    dangling = _words("and then i was going to say something but")
+    hi, _ = signals.replay_value(looped, 20.0, signals.get_lexicon("en"))
+    lo, _ = signals.replay_value(dangling, 20.0, signals.get_lexicon("en"))
+    assert hi > lo
+
+
+def test_apply_replay_bonus_only_lifts():
+    from app.models import ScoreFactor
+    from app.providers.score import apply_replay_bonus
+    words = _words("this is the biggest secret ever")
+    words[-1].text = "ever."
+    s, f = apply_replay_bonus(60, [ScoreFactor(label="x", weight=1.0)], words, 18.0, lang="en")
+    assert s >= 60 and 1 <= s <= 99
+    # a long clip trailing off on a connective gets no bonus (never a penalty)
+    d = _words("then i was about to say and")  # ends on dangling "and", not concise
+    s2, f2 = apply_replay_bonus(60, [], d, 50.0, lang="en")
+    assert s2 == 60
+
+
+def test_emotion_excitement_blend_is_bounded():
+    from app.providers.emotion import _arousal_from_result, apply_excitement_bonus
+    hi, fh = apply_excitement_bonus(50, [], 1.0)
+    lo, _ = apply_excitement_bonus(50, [], 0.0)
+    assert hi > 50 and lo < 50 and 1 <= hi <= 99 and 1 <= lo <= 99
+    assert fh and "energy" in fh[0].label.lower()
+    # result parsing sums high-arousal label probabilities
+    res = [{"labels": ["生气/angry", "中立/neutral"], "scores": [0.7, 0.3]}]
+    assert abs(_arousal_from_result(res) - 0.7) < 1e-6
+
+
+def test_subject_center_prefers_people_then_largest():
+    from app.providers.subject import _center_from_boxes
+    # a small person box vs a big non-person box -> follow the person
+    boxes = [(True, 100, 200, 5000), (False, 800, 1000, 50000)]
+    assert abs(_center_from_boxes(boxes, 1000) - 0.15) < 1e-6
+    # no people -> largest object
+    boxes2 = [(False, 0, 100, 1000), (False, 800, 1000, 9000)]
+    assert abs(_center_from_boxes(boxes2, 1000) - 0.9) < 1e-6
+    assert _center_from_boxes([], 1000) is None
+
+
+def test_optional_powerups_off_by_default_in_ci():
+    s = _settings()
+    r = s.capability_report()
+    assert r["vad"] is False and r["emotion"] is False
+    assert r["scene_detect"] is False and r["active_speaker"] is False
+    assert r["reframe_engine"] in ("haar", "yolo", "mediapipe")
+
+
+if __name__ == "__main__":
+    import sys
+    # Windows consoles default to a legacy code page that can't print "✓".
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
+    passed = 0
+    for fn in fns:
+        fn()
+        print(f"  ✓ {fn.__name__}")
+        passed += 1
+    print(f"\n{passed}/{len(fns)} unit tests passed")
