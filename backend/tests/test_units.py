@@ -777,6 +777,22 @@ def test_ocr_keyword_matching_finds_viral_markers():
     assert all(l != "eliminated" for l, _ in O.match_keywords("he took the lead", "generic"))
     # nothing viral -> no events
     assert O.match_keywords("loading please wait", "generic") == []
+    # exact matching must never fire on clean unrelated text (fuzzy off here)
+    assert O.match_keywords("the quick brown fox", "generic", fuzzy=False) == []
+
+
+def test_ocr_fuzzy_matches_garbled_text():
+    from app.providers import detect_ocr as O
+    try:
+        import rapidfuzz  # noqa: F401
+    except Exception:
+        return  # graceful: fuzzy path is a no-op without rapidfuzz
+    # OCR mangles stylized game fonts; fuzzy still resolves the marker.
+    assert any(l == "eliminated" for l, _ in O.match_keywords("YOU WERE ELiMlNATED", "generic"))
+    assert any(l == "kill" for l, _ in O.match_keywords("DOUBLE KlLL", "cs2"))
+    assert any(l == "kill" for l, _ in O.match_keywords("HEADSH0T", "cs2"))
+    # but a high threshold must not invent markers out of unrelated prose
+    assert O.match_keywords("the quick brown fox jumps", "generic", threshold=95) == []
 
 
 def test_ocr_frame_sampling_is_bounded_and_spaced():

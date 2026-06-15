@@ -94,23 +94,56 @@ def lexicon(profile: str | None) -> dict[str, tuple[str, ...]]:
     return merged
 
 
-def match_keywords(text: str, profile: str | None) -> list[tuple[str, str]]:
+def _fuzzy_contains(phrase: str, words: list[str], *, threshold: int) -> bool:
+    """True if any n-gram window of ``words`` ~matches ``phrase`` (OCR-typo safe).
+
+    No-op (returns False) when rapidfuzz isn't installed, so exact matching still
+    works. Only used as a fallback after exact matching misses, to avoid drifting
+    the match rate up on clean text.
+    """
+    try:
+        from rapidfuzz import fuzz
+    except Exception:
+        return False
+    ptoks = phrase.split()
+    n = len(ptoks)
+    if n == 0 or len(words) < n:
+        return False
+    # Single short tokens fuzz-match too loosely ("ace" ≈ "are"); require length.
+    if n == 1 and len(phrase) < 5:
+        return False
+    for i in range(len(words) - n + 1):
+        window = " ".join(words[i:i + n])
+        if fuzz.ratio(window, phrase) >= threshold:
+            return True
+    return False
+
+
+def match_keywords(text: str, profile: str | None, *,
+                   fuzzy: bool = True, threshold: int = 86) -> list[tuple[str, str]]:
     """Return [(label, matched_phrase)] for every viral marker in ``text``.
 
     Pure: no OCR dependency, so the lexicon is unit-testable. Longer phrases win
     over substrings of themselves (so "double kill" reports once, as a kill).
+    When ``fuzzy`` and rapidfuzz is installed, a phrase the exact pass missed is
+    retried with edit-distance matching, so stylized/garbled game text
+    ("VICT0RY", "ELiMiNATED", "HEADSHOTI") still resolves to its marker.
     """
     norm = _norm(text)
     if not norm:
         return []
     padded = f" {norm} "
+    toks = norm.split()
     out: list[tuple[str, str]] = []
     for label, phrases in lexicon(profile).items():
         best: str | None = None
         for ph in phrases:
             p = _norm(ph)
             # word-boundary-ish match (padded spaces) avoids "ko" inside "took".
-            if f" {p} " in padded and (best is None or len(p) > len(best)):
+            exact = f" {p} " in padded
+            if not exact and fuzzy:
+                exact = _fuzzy_contains(p, toks, threshold=threshold)
+            if exact and (best is None or len(p) > len(best)):
                 best = p
         if best is not None:
             out.append((label, best))
@@ -151,6 +184,34 @@ def dedupe_events(events: list[OcrEvent], *, min_gap: float = 4.0) -> list[OcrEv
 _reader = None  # cached backend instance
 
 
+def _make_paddle(gpu: bool):
+    """Construct a PaddleOCR reader across the 2.x and 3.x APIs.
+
+    PaddleOCR 3.0 (2025) is a non-backwards-compatible rewrite: it dropped the
+    ``show_log`` / ``use_angle_cls`` / ``use_gpu`` constructor kwargs (now
+    ``use_textline_orientation`` and ``device``) and passing the old ones raises.
+    We try the modern signature first and fall back to the legacy one, so a clip
+    farm on either major version reads on-screen text instead of silently
+    returning nothing.
+    """
+    from paddleocr import PaddleOCR
+
+    device = "gpu" if gpu else "cpu"
+    for kwargs in (
+        # 3.x: angle classifier off (we only read horizontal banners), pick device.
+        {"lang": "en", "use_textline_orientation": False, "device": device},
+        {"lang": "en", "use_textline_orientation": False},
+        # 2.x: legacy flags.
+        {"lang": "en", "use_angle_cls": False, "show_log": False, "use_gpu": gpu},
+        {"lang": "en"},
+    ):
+        try:
+            return PaddleOCR(**kwargs)
+        except (TypeError, ValueError):
+            continue
+    return PaddleOCR(lang="en")  # last resort — let a real error surface
+
+
 def _get_reader(engine: str):
     global _reader
     if _reader is not None:
@@ -158,10 +219,7 @@ def _get_reader(engine: str):
     s = get_settings()
     gpu = s.device == "cuda"
     if engine == "paddleocr":
-        from paddleocr import PaddleOCR
-
-        _reader = ("paddleocr", PaddleOCR(use_angle_cls=False, lang="en",
-                                          show_log=False, use_gpu=gpu))
+        _reader = ("paddleocr", _make_paddle(gpu))
     elif engine == "easyocr":
         import easyocr
 
@@ -175,19 +233,47 @@ def _get_reader(engine: str):
     return _reader
 
 
+def _paddle_text(reader, path: str) -> str:
+    """Read all text from one image, parsing both PaddleOCR 2.x and 3.x output.
+
+    2.x ``.ocr()`` returns ``[[ [box, (text, conf)], ... ]]``; 3.x returns a list
+    of dict-like ``OCRResult`` objects exposing a ``rec_texts`` list. We accept
+    either so an upgrade doesn't quietly blind on-screen detection.
+    """
+    # 3.x prefers .predict(); .ocr() still exists but warns. Use whichever runs.
+    res = None
+    try:
+        res = reader.predict(path)
+    except (AttributeError, TypeError):
+        try:
+            res = reader.ocr(path, cls=False)
+        except TypeError:
+            res = reader.ocr(path)  # 3.x .ocr() dropped the cls kwarg
+    if not res:
+        return ""
+    lines: list[str] = []
+    for page in res:
+        # 3.x: dict-like result with a list of recognized strings.
+        if isinstance(page, dict) and "rec_texts" in page:
+            lines.extend(t for t in page["rec_texts"] if t)
+            continue
+        # 2.x: list of [box, (text, conf)] entries.
+        for entry in (page or []):
+            try:
+                txt = entry[1][0]
+            except (TypeError, IndexError, KeyError):
+                txt = ""
+            if txt:
+                lines.append(txt)
+    return " ".join(lines)
+
+
 def _ocr_image(path: str, engine: str) -> str:
     """Read all text from one image with the active backend → one string."""
     kind, reader = _get_reader(engine)
     try:
         if kind == "paddleocr":
-            res = reader.ocr(path, cls=False) or []
-            lines = []
-            for page in res:
-                for entry in (page or []):
-                    txt = entry[1][0] if entry and len(entry) > 1 else ""
-                    if txt:
-                        lines.append(txt)
-            return " ".join(lines)
+            return _paddle_text(reader, path)
         if kind == "easyocr":
             return " ".join(reader.readtext(path, detail=0) or [])
         if kind == "tesseract":

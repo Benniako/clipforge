@@ -79,16 +79,19 @@ def build_tight_caption_set(transcript: Transcript,
     """Caption set retimed onto the tightened timeline. ``speakers`` (a set of
     diarized speaker ids) keeps only those speakers' words; None keeps all."""
     words: list[CaptionWord] = []
+    emitted: set[int] = set()  # word ids already placed (a word straddling two
+    #                            segment edges must not be rendered twice)
     for a, b in segments:
         base = map_to_tight(a, segments)
-        for w in transcript.words:
-            if w.end <= a or w.t >= b:
+        for i, w in enumerate(transcript.words):
+            if w.end <= a or w.t >= b or i in emitted:
                 continue
             if not _speaker_ok(w, speakers):
                 continue
             text = _clean(w.text)
             if not text or not _ALNUM.search(text):
                 continue
+            emitted.add(i)
             rel = base + max(w.t - a, 0.0)
             d = max(min(w.end, b) - max(w.t, a), 0.04)
             words.append(CaptionWord(t=round(rel, 3), d=round(d, 3), text=text,

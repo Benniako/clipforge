@@ -38,10 +38,11 @@ def _ts(t: float) -> str:
 
 # A word normally stays on screen until the next word starts (no flicker). But
 # across a real pause — silence, or a span where another (toggled-off) speaker
-# was talking — holding the last word that long leaves a caption frozen on a
-# silent shot. So once the gap past a word exceeds SILENCE_GAP, the caption
-# clears LINGER_PAD after the word instead of lingering.
-SILENCE_GAP = 1.0
+# was talking — holding the word that long leaves a caption frozen on a silent
+# shot. So once the gap past a word exceeds SILENCE_GAP, the caption clears
+# LINGER_PAD after the word instead of lingering. Must be < LINE_GAP, or lines
+# always break before the clamp can fire and captions over-hold into silence.
+SILENCE_GAP = 0.6
 LINGER_PAD = 0.4
 # Start a fresh caption line after a pause this long, even mid-count — keeps a
 # line from spanning silence so captions begin/end with the speech.

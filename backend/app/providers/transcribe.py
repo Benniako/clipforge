@@ -220,7 +220,11 @@ def _whisperx_transcribe(audio_path, language, progress) -> Transcript:
             if not text or start is None or end is None:
                 continue
             spk_label = w.get("speaker")
-            spk = speaker_ids.setdefault(spk_label, len(speaker_ids)) if spk_label else 0
+            # Reserve id 0 for unattributed words (no diarization label). Real
+            # speakers start at 1, so the first diarized speaker never collides
+            # with the "no speaker" fallback — otherwise two distinct talkers
+            # merge and the per-speaker caption toggles can't tell them apart.
+            spk = speaker_ids.setdefault(spk_label, len(speaker_ids) + 1) if spk_label else 0
             words.append(Word(t=float(start), d=max(float(end) - float(start), 0.01),
                               text=text, speaker=spk))
     if not words:

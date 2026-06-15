@@ -259,15 +259,21 @@ def detect_gameplay(src_path: str, info: MediaInfo, settings: ImportSettings,
         end = min(info.duration, pt + tail)
         if end - start < settings.min_len:
             start = max(0.0, end - settings.min_len)
-        # intensity 0..1 = how this peak ranks across the whole envelope
-        pct = float((rms < rms[idx]).mean())
+        # intensity 0..1 = how this peak ranks across the whole envelope.
+        # Inclusive (<=) so the single loudest frame reaches 1.0 instead of
+        # being capped below the top.
+        pct = float((rms <= rms[idx]).mean())
         # sustain: share of the window above the action threshold
         w0 = int(start / hop); w1 = int(end / hop)
         window = rms[w0:w1] if w1 > w0 else rms[idx:idx + 1]
         sustain = float((window > thr).mean()) if len(window) else 0.0
         spikes = _count_spikes(window, thr)
-        # transient: how much the peak jumps above the ~2s just before it
-        pre = rms[max(idx - pre_n, 0):max(idx - 2, 1)]
+        # transient: how much the peak jumps above the ~2s just before it.
+        # Guard the slice so an early peak (idx near 0) can't collapse it to an
+        # empty/degenerate range and silently fall back to the global floor.
+        lo = max(idx - pre_n, 0)
+        hi = max(idx - 1, lo + 1)
+        pre = rms[lo:hi]
         base = float(pre.mean()) if len(pre) else floor
         transient = float(max(0.0, (rms[idx] - base) / (rms[idx] + 1e-6)))
 

@@ -21,3 +21,8 @@ easyocr>=1.7
 
 # Lightweight fallback — Tesseract (needs the system `tesseract` binary too):
 # pytesseract>=0.3.10
+
+# Fuzzy keyword matching — lets garbled OCR ("VICT0RY", "ELiMiNATED") still
+# match the viral-marker lexicon. Tiny, pure-Python wheel, no native deps. When
+# absent, ClipForge falls back to exact substring matching automatically.
+rapidfuzz>=3.0
