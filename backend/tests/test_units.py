@@ -305,7 +305,7 @@ def test_diarization_capability_requires_token():
 # --------------------------------------------------------------------------- #
 def test_auto_whisper_model_picks_for_hardware():
     from app.config import _auto_whisper_model
-    assert _auto_whisper_model(True, 16000, 12) == "large-v3"   # big GPU
+    assert _auto_whisper_model(True, 16000, 12) == "large-v3-turbo"  # big GPU: turbo
     assert _auto_whisper_model(True, 4000, 8) == "medium"       # small GPU
     assert _auto_whisper_model(False, 0, 12) == "small"         # strong CPU
     assert _auto_whisper_model(False, 0, 6) == "base"
@@ -762,6 +762,300 @@ def test_llm_titles_safe_when_unavailable():
     from app.providers import llm
     # no Ollama in CI -> must return {} fast instead of raising/hanging
     assert llm.suggest_titles(["some transcript"], lang="en", budget=2.0) == {}
+
+
+# --------------------------------------------------------------------------- #
+# OCR on-screen detection (pure helpers — no OCR backend needed)
+# --------------------------------------------------------------------------- #
+def test_ocr_keyword_matching_finds_viral_markers():
+    from app.providers import detect_ocr as O
+    # noisy OCR text still matches the marker as a normalized substring
+    assert ("victory", "victory") in O.match_keywords("|| VICT0RY ||".replace("0", "o"), "valorant")
+    assert any(l == "kill" for l, _ in O.match_keywords("ENEMY DOUBLE KILL", "cs2"))
+    assert any(l == "goal" for l, _ in O.match_keywords("GOOOAL!! what a save", "rocketleague"))
+    # word-boundary: "ko" must not fire inside "took"
+    assert all(l != "eliminated" for l, _ in O.match_keywords("he took the lead", "generic"))
+    # nothing viral -> no events
+    assert O.match_keywords("loading please wait", "generic") == []
+    # exact matching must never fire on clean unrelated text (fuzzy off here)
+    assert O.match_keywords("the quick brown fox", "generic", fuzzy=False) == []
+
+
+def test_ocr_fuzzy_matches_garbled_text():
+    from app.providers import detect_ocr as O
+    try:
+        import rapidfuzz  # noqa: F401
+    except Exception:
+        return  # graceful: fuzzy path is a no-op without rapidfuzz
+    # OCR mangles stylized game fonts; fuzzy still resolves the marker.
+    assert any(l == "eliminated" for l, _ in O.match_keywords("YOU WERE ELiMlNATED", "generic"))
+    assert any(l == "kill" for l, _ in O.match_keywords("DOUBLE KlLL", "cs2"))
+    assert any(l == "kill" for l, _ in O.match_keywords("HEADSH0T", "cs2"))
+    # but a high threshold must not invent markers out of unrelated prose
+    assert O.match_keywords("the quick brown fox jumps", "generic", threshold=95) == []
+
+
+def test_ocr_frame_sampling_is_bounded_and_spaced():
+    from app.providers import detect_ocr as O
+    assert O.sample_frame_times(0) == []
+    ts = O.sample_frame_times(20, every=2.0)
+    assert ts and all(0 < t < 20 for t in ts)
+    assert all(b - a >= 1.9 for a, b in zip(ts, ts[1:]))
+    # a long VOD never exceeds the frame cap
+    assert len(O.sample_frame_times(100000, every=2.0, max_frames=400)) <= 400
+
+
+def test_ocr_dedupes_persisting_banner():
+    from app.providers.detect_ocr import OcrEvent, dedupe_events
+    evs = [OcrEvent(t=10.0, label="victory", text="victory", confidence=0.8),
+           OcrEvent(t=11.0, label="victory", text="victory", confidence=0.8),  # same banner
+           OcrEvent(t=12.0, label="victory", text="victory", confidence=0.8),
+           OcrEvent(t=40.0, label="victory", text="victory", confidence=0.8)]  # later round
+    out = dedupe_events(evs, min_gap=4.0)
+    assert [round(e.t) for e in out] == [10, 40]
+
+
+def test_ocr_clips_open_before_the_banner():
+    from app.media.ffmpeg import MediaInfo
+    from app.providers.detect_ocr import OcrEvent
+    from app.providers.detect_gameplay import _ocr_clips
+    info = MediaInfo(duration=600, width=1920, height=1080, fps=30,
+                     has_audio=True, has_video=True, codec=None)
+    st = ImportSettings(min_len=15, max_len=45)
+    clips = _ocr_clips([OcrEvent(t=120.0, label="victory", text="victory", confidence=0.9)],
+                       info, st)
+    assert len(clips) == 1
+    c = clips[0]
+    assert c.start < 120.0 <= c.end           # the banner moment is inside the clip
+    assert st.min_len <= c.duration <= st.max_len + 0.01
+    assert c.features["ocr"] == 0.9
+    assert any("on-screen" in f.detail.lower() for f in c.factors)
+
+
+# --------------------------------------------------------------------------- #
+# LLM virality re-rank (pure parse + boost — no Ollama needed)
+# --------------------------------------------------------------------------- #
+def test_llm_viral_parse():
+    from app.providers.llm import _parse_viral
+    assert _parse_viral("SCORE: 82 | REASON: strong hook")[0] == 0.82
+    assert _parse_viral("SCORE: 82 | REASON: strong hook")[1] == "strong hook"
+    assert _parse_viral("score: 5") == (0.05, "AI virality read")
+    assert _parse_viral("no number here") is None
+    assert _parse_viral("SCORE: 250")[0] == 1.0     # clamped
+
+
+def test_viral_boost_is_bounded_and_explainable():
+    from app.models import ScoreFactor
+    from app.providers.score import apply_viral_boost
+    base = [ScoreFactor(label="hook", weight=20.0)]
+    hi, fh = apply_viral_boost(50, base, 1.0, "great hook", max_swing=12)
+    lo, fl = apply_viral_boost(50, base, 0.0, "weak", max_swing=12)
+    mid, fm = apply_viral_boost(50, base, 0.5, "meh", max_swing=12)
+    assert hi == 62 and lo == 38 and mid == 50      # ±max_swing, centred at 0.5
+    assert fh[0].label.startswith("AI:") and fh[0].weight == 12.0
+    assert fm == base                                # no swing -> no added factor
+    # never escapes 1..99
+    assert apply_viral_boost(95, base, 1.0, "x", max_swing=12)[0] == 99
+
+
+def test_ocr_capability_detection_default_off():
+    # CI has no OCR backend installed -> capability is off, detection no-ops.
+    assert _settings().has_ocr is False
+    assert _settings().capability_report()["ocr"] is False
+
+
+# --------------------------------------------------------------------------- #
+# Per-speaker captions + the no-linger caption fix
+# --------------------------------------------------------------------------- #
+def _multi_speaker_transcript():
+    # speaker 0 then speaker 1, alternating
+    ws = [Word(t=0.0, d=0.3, text="hello", speaker=0),
+          Word(t=0.4, d=0.3, text="there", speaker=0),
+          Word(t=0.8, d=0.3, text="hi", speaker=1),
+          Word(t=1.2, d=0.3, text="back", speaker=1)]
+    return Transcript(words=ws, provider="whisper", speakers=2)
+
+
+def test_caption_speaker_filter_keeps_only_chosen():
+    tr = _multi_speaker_transcript()
+    both = captionize.build_caption_set(tr, 0.0, 2.0, "bold-pop")
+    assert [w.text for w in both.words] == ["hello", "there", "hi", "back"]
+    assert [w.speaker for w in both.words] == [0, 0, 1, 1]
+    only0 = captionize.build_caption_set(tr, 0.0, 2.0, "bold-pop", speakers={0})
+    assert [w.text for w in only0.words] == ["hello", "there"]
+    only1 = captionize.build_caption_set(tr, 0.0, 2.0, "bold-pop", speakers={1})
+    assert [w.text for w in only1.words] == ["hi", "back"]
+
+
+def test_speakers_in_lists_present_speakers():
+    tr = _multi_speaker_transcript()
+    assert captionize.speakers_in(tr, 0.0, 2.0) == [0, 1]
+    assert captionize.speakers_in(tr, 0.0, 0.6) == [0]   # only speaker 0 talks early
+
+
+def test_caption_does_not_linger_through_silence():
+    from app.models import CaptionSet, CaptionWord
+    # word at t=0, then a 3s gap, then a word — within one line the first word
+    # must NOT hold for 3s; it clears shortly after it's spoken.
+    cs = CaptionSet(words=[CaptionWord(t=0.0, d=0.3, text="alpha"),
+                           CaptionWord(t=3.3, d=0.3, text="beta")],
+                    max_words_per_line=3)
+    ass = C.build_ass(cs, get_style("bold-pop"), 1080, 1920)
+    first = next(l for l in ass.splitlines() if l.startswith("Dialogue:") and "ALPHA" in l)
+    # End timestamp (field 3) of the alpha event should be ~0.7s, not ~3.3s.
+    end_ts = first.split(",", 3)[2]
+    assert end_ts < "0:00:01.50", f"caption lingered through silence: {end_ts}"
+
+
+def test_common_cue_pack_is_available_for_all_games():
+    from app import game_packs
+    status = game_packs.pack_status()
+    assert "common" in status
+    assert status["common"]["label"].lower().startswith("common")
+    assert {e["name"] for e in status["common"]["events"]} >= {"airhorn", "hype", "laugh"}
+
+
+# --------------------------------------------------------------------------- #
+# Caption precision, hook front-loading, multimodal corroboration, cue learning
+# --------------------------------------------------------------------------- #
+def test_caption_line_breaks_on_speech_pause():
+    from app.models import CaptionWord
+    from app.pipeline.captions import _group_lines
+    # a big gap before the third word forces a new line even under the count cap
+    ws = [CaptionWord(t=0.0, d=0.3, text="a"), CaptionWord(t=0.4, d=0.3, text="b"),
+          CaptionWord(t=3.0, d=0.3, text="c")]
+    assert [len(l) for l in _group_lines(ws, 5)] == [2, 1]
+    # tight speech (no gaps) stays one line up to the count cap
+    ws2 = [CaptionWord(t=i * 0.4, d=0.3, text=str(i)) for i in range(3)]
+    assert len(_group_lines(ws2, 5)) == 1
+
+
+def test_hook_rewards_front_loaded_curiosity():
+    early = _words("Why does nobody do this one secret")        # hook word at t=0
+    late = [Word(t=0.0, d=0.3, text="um"), Word(t=0.6, d=0.3, text="okay"),
+            Word(t=1.2, d=0.3, text="anyway")]                  # no hook up front
+    he, _ = signals.hook_strength(early, signals.get_lexicon("en"))
+    hl, _ = signals.hook_strength(late, signals.get_lexicon("en"))
+    assert he > hl
+
+
+def test_corroboration_boosts_multi_signal_clips():
+    from app.providers.detect_cues import CueEvent
+    from app.providers.detect_gameplay import GameplayClip, apply_corroboration
+    from app.providers.detect_ocr import OcrEvent
+    c = GameplayClip(start=10, end=30, score=70)
+    apply_corroboration([c], [CueEvent(t=20, label="kill", similarity=0.9)],
+                        [OcrEvent(t=21, label="kill", text="kill", confidence=0.8)])
+    assert c.score > 70 and c.features.get("corroborated") == 1.0
+    assert any("confirm" in f.label.lower() for f in c.factors)
+    # a single source does not corroborate
+    c2 = GameplayClip(start=10, end=30, score=70)
+    apply_corroboration([c2], [CueEvent(t=20, label="kill", similarity=0.9)], [])
+    assert c2.score == 70
+
+
+def test_cue_learning_pending_labels():
+    from app.cue_learning import pending_labels
+    from app.providers.detect_ocr import OcrEvent
+    evs = [OcrEvent(t=5, label="kill", text="kill", confidence=0.8),
+           OcrEvent(t=9, label="kill", text="kill", confidence=0.8),       # dup label
+           OcrEvent(t=12, label="victory", text="victory", confidence=0.8)]
+    assert pending_labels(evs, set()) == ["kill", "victory"]      # one per label, time order
+    assert pending_labels(evs, {"kill"}) == ["victory"]           # skip already-saved
+
+
+# --------------------------------------------------------------------------- #
+# Power-ups: VAD caption snapping, replay scoring, emotion blend, subject pick
+# --------------------------------------------------------------------------- #
+def test_vad_refine_clamps_and_drops_silent_words():
+    from app.providers.vad import refine_words
+    ws = [Word(t=0.0, d=2.0, text="hello"),      # overruns into silence -> clamp
+          Word(t=5.0, d=0.3, text="ghost"),      # entirely in a silent gap -> drop
+          Word(t=10.2, d=0.3, text="world")]
+    speech = [(0.0, 1.0), (10.0, 11.0)]
+    out = refine_words(ws, speech)
+    assert [w.text for w in out] == ["hello", "world"]
+    assert out[0].end <= 1.1                      # clamped to the speech end (+pad)
+    # no speech info -> unchanged
+    assert refine_words(ws, []) == ws
+
+
+def test_replay_value_rewards_clean_button():
+    looped = _words("here is the one secret that changes everything")
+    looped[-1].text = "everything."                # complete, strong, concise
+    dangling = _words("and then i was going to say something but")
+    hi, _ = signals.replay_value(looped, 20.0, signals.get_lexicon("en"))
+    lo, _ = signals.replay_value(dangling, 20.0, signals.get_lexicon("en"))
+    assert hi > lo
+
+
+def test_apply_replay_bonus_only_lifts():
+    from app.models import ScoreFactor
+    from app.providers.score import apply_replay_bonus
+    words = _words("this is the biggest secret ever")
+    words[-1].text = "ever."
+    s, f = apply_replay_bonus(60, [ScoreFactor(label="x", weight=1.0)], words, 18.0, lang="en")
+    assert s >= 60 and 1 <= s <= 99
+    # a long clip trailing off on a connective gets no bonus (never a penalty)
+    d = _words("then i was about to say and")  # ends on dangling "and", not concise
+    s2, f2 = apply_replay_bonus(60, [], d, 50.0, lang="en")
+    assert s2 == 60
+
+
+def test_emotion_excitement_blend_is_bounded():
+    from app.providers.emotion import _arousal_from_result, apply_excitement_bonus
+    hi, fh = apply_excitement_bonus(50, [], 1.0)
+    lo, _ = apply_excitement_bonus(50, [], 0.0)
+    assert hi > 50 and lo < 50 and 1 <= hi <= 99 and 1 <= lo <= 99
+    assert fh and "energy" in fh[0].label.lower()
+    # result parsing sums high-arousal label probabilities
+    res = [{"labels": ["生气/angry", "中立/neutral"], "scores": [0.7, 0.3]}]
+    assert abs(_arousal_from_result(res) - 0.7) < 1e-6
+
+
+def test_subject_center_prefers_people_then_largest():
+    from app.providers.subject import _center_from_boxes
+    # a small person box vs a big non-person box -> follow the person
+    boxes = [(True, 100, 200, 5000), (False, 800, 1000, 50000)]
+    assert abs(_center_from_boxes(boxes, 1000) - 0.15) < 1e-6
+    # no people -> largest object
+    boxes2 = [(False, 0, 100, 1000), (False, 800, 1000, 9000)]
+    assert abs(_center_from_boxes(boxes2, 1000) - 0.9) < 1e-6
+    assert _center_from_boxes([], 1000) is None
+
+
+def test_optional_powerups_off_by_default_in_ci():
+    s = _settings()
+    r = s.capability_report()
+    assert r["vad"] is False and r["emotion"] is False
+    assert r["scene_detect"] is False and r["active_speaker"] is False
+    assert r["denoise"] is False and r["audio_events"] is False
+    assert r["reframe_engine"] in ("haar", "yolo", "mediapipe")
+
+
+def test_audio_event_reduce_and_bonus():
+    from app.models import ScoreFactor
+    from app.providers import audio_events as AE
+    # a strong cheer + a weak laugh -> combined > the cheer alone, top reason cheer
+    res = AE.reduce_scores({"Cheering": 0.8, "Laughter": 0.3, "Speech": 0.9})
+    assert res is not None
+    hype, reason = res
+    assert reason == "crowd cheering" and hype > 0.8
+    # nothing viral in the tags -> no signal
+    assert AE.reduce_scores({"Speech": 0.95, "Silence": 0.4}) is None
+    # bonus is positive-only, bounded, and explainable
+    base = [ScoreFactor(label="hook", weight=10.0)]
+    ns, nf = AE.apply_event_bonus(60, base, 1.0, "crowd cheering", max_bonus=10.0)
+    assert ns == 70 and nf[0].weight == 10.0 and "cheering" in nf[0].label.lower()
+    assert AE.apply_event_bonus(60, base, 0.0, "x") == (60, base)  # quiet -> no-op
+
+
+def test_vlm_keyframe_times_are_inside_span():
+    from app.providers.vlm import keyframe_times
+    ts = keyframe_times(10.0, 22.0, n=3)
+    assert len(ts) == 3 and all(10.0 < t < 22.0 for t in ts)
+    assert ts == sorted(ts)
+    assert keyframe_times(5.0, 5.0) == [5.0]  # zero-length span is safe
 
 
 if __name__ == "__main__":

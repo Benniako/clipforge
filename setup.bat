@@ -64,6 +64,15 @@ if !errorlevel! equ 0 (
     if errorlevel 1 echo [!] CUDA libraries failed to install - transcription will run on CPU.
 )
 
+REM --- 4d. Optional AI power-ups (VAD/OCR/scene/emotion/YOLO/whisperX) --
+REM Best-effort: each line installs on its own; a failed or conflicting wheel
+REM is skipped (the core pipeline runs without them). Large download.
+echo Installing optional AI power-ups ^(large download; failures are skipped^)...
+for /f "usebackq eol=# tokens=*" %%P in ("backend\requirements-extras.txt") do (
+    echo   -^> %%P
+    "%VPY%" -m pip install %%P || echo   [..] skipped %%P ^(install failed/conflict^)
+)
+
 REM --- 4c. YuNet face model (optional, better facecam detection) --------
 REM Skipped silently when offline; the Haar fallback still works.
 if not exist "backend\data\models\face_detection_yunet_2023mar.onnx" (
@@ -87,6 +96,7 @@ popd
 
 echo(
 echo ==========================================
-echo    Setup complete!  Now double-click run.bat
+echo    Setup complete!  Launching ClipForge...
 echo ==========================================
-pause
+REM You asked for run.bat at the end — launch it now.
+call "%~dp0run.bat"

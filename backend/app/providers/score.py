@@ -99,7 +99,42 @@ def score_clip(words: list[Word], duration: float, settings: ImportSettings,
     return score, factors, {k: round(v, 4) for k, (v, _) in feats.items()}
 
 
+def apply_replay_bonus(score: int, factors: list[ScoreFactor], words, duration: float,
+                       *, lang: str = "en", max_bonus: float = 8.0
+                       ) -> tuple[int, list[ScoreFactor]]:
+    """Lift clips that end on a clean, loopable button (rewatch signal).
+
+    Only positive — a weak ending shouldn't tank an otherwise strong clip; it
+    just won't get the loop boost. Shown as an explainable factor. Pure."""
+    val, reason = signals.replay_value(words, duration, signals.get_lexicon(lang))
+    bonus = round(val * max_bonus)
+    if bonus <= 0:
+        return score, factors
+    new_score = int(max(1, min(99, score + bonus)))
+    return new_score, [ScoreFactor(label="Loopable ending", weight=float(bonus),
+                                   detail=reason), *factors]
+
+
 def _calibrate(raw_points: float) -> float:
     """Spread raw weighted points across a usable 0-100 range."""
     centered = (raw_points - 45.0) * 1.35 + 52.0
     return max(1.0, min(99.0, centered))
+
+
+def apply_viral_boost(score: int, factors: list[ScoreFactor], viral: float,
+                      reason: str, *, max_swing: float = 12.0
+                      ) -> tuple[int, list[ScoreFactor]]:
+    """Blend an optional LLM virality read (0..1) into a heuristic score.
+
+    Centred at 0.5 so the model can push a clip up *or* down by at most
+    ``max_swing`` points — it refines the ranking without ever overriding the
+    transparent signal sum. The adjustment is shown verbatim as a factor, so the
+    score stays explainable. Returns the new (score, factors)."""
+    delta = round((max(0.0, min(1.0, viral)) - 0.5) * 2.0 * max_swing)
+    new_score = int(max(1, min(99, score + delta)))
+    if delta != 0:
+        label = (reason or "AI virality read")
+        factors = [ScoreFactor(label=f"AI: {label}", weight=float(delta),
+                               detail=f"Local model rated virality {int(viral*100)}/100"),
+                   *factors]
+    return new_score, factors

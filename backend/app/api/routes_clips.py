@@ -44,6 +44,9 @@ class ClipEdit(BaseModel):
     end: float | None = None
     style_id: str | None = None
     caption_words: list[CaptionWord] | None = None  # full manual replacement
+    # Speakers to keep in captions (diarized ids); null resets to all speakers.
+    # Distinguished from "not sent" via the request's model_fields_set.
+    caption_speakers: list[int] | None = None
     reframe_cx: float | None = None                 # static manual crop centre [0,1]
     layout: str | None = None                       # "center"|"split"|"framed"
     facecam: Rect | None = None                     # facecam region override
@@ -87,29 +90,52 @@ def edit_clip(project_id: str, clip_id: str, edit: ClipEdit) -> Clip:
     if edit.style_id is not None:
         clip.captions.style_id = get_style(edit.style_id).id
 
+    # Per-speaker caption toggle. "caption_speakers" not in the request leaves
+    # the clip's keep-set untouched; null resets it to "all speakers".
+    speakers_sent = "caption_speakers" in edit.model_fields_set
+    if speakers_sent:
+        clip.caption_speakers = edit.caption_speakers
+    spk = set(clip.caption_speakers) if clip.caption_speakers is not None else None
+
+    def _rebuild_captions() -> None:
+        """Re-derive the caption set for the current span honouring the kind,
+        any tightening, cue exclusions and the per-speaker keep-set."""
+        tr = project.transcript
+        sid = clip.captions.style_id
+        if clip.kind == "gameplay":
+            if tr.provider == "synthetic":
+                clip.captions.words = []
+                return
+            clip.captions = captionize.build_caption_set(
+                tr, clip.start, clip.end, sid,
+                exclude=[(a, b) for a, b in clip.caption_mute] or None, speakers=spk)
+            clip.captions.words = captionize.remove_phrases(
+                clip.captions.words, captionize.game_noise(project.settings.game_profile))
+        elif clip.segments:
+            clip.captions = captionize.build_tight_caption_set(
+                tr, [(a, b) for a, b in clip.segments], sid, speakers=spk)
+        else:
+            clip.captions = captionize.build_caption_set(
+                tr, clip.start, clip.end, sid, speakers=spk)
+
     # Re-derive captions/score/reframe for a new span, unless the user supplied
     # explicit overrides for those pieces. Gameplay clips keep their audio-based
     # score/features (the speech scorer would corrupt them) and never get filler
     # captions from a synthetic transcript.
     if span_changed and project.transcript and edit.caption_words is None:
-        if clip.kind == "gameplay":
-            if project.transcript.provider != "synthetic":
-                clip.captions = captionize.build_caption_set(
-                    project.transcript, clip.start, clip.end, clip.captions.style_id,
-                    exclude=[(a, b) for a, b in clip.caption_mute] or None)
-                clip.captions.words = captionize.remove_phrases(
-                    clip.captions.words,
-                    captionize.game_noise(project.settings.game_profile))
-            else:
-                clip.captions.words = []
-        else:
-            clip.captions = captionize.build_caption_set(
-                project.transcript, clip.start, clip.end, clip.captions.style_id)
+        _rebuild_captions()
+        if clip.kind != "gameplay" and project.transcript.provider != "synthetic":
+            clip.speakers = captionize.speakers_in(
+                project.transcript, clip.start, clip.end)
+        if clip.kind != "gameplay":
             words = [w for w in project.transcript.words
                      if w.end > clip.start and w.t < clip.end]
             clip.score, clip.factors, clip.features = score_mod.score_clip(
                 words, clip.duration, project.settings,
                 lang=project.transcript.language)
+    elif speakers_sent and project.transcript and edit.caption_words is None:
+        # Only the speaker keep-set changed — re-filter captions on the same span.
+        _rebuild_captions()
 
     if edit.caption_words is not None:
         clip.captions.words = edit.caption_words

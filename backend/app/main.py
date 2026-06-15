@@ -70,10 +70,12 @@ def create_app() -> FastAPI:
 
     @app.get("/api/health", tags=["meta"])
     def health() -> dict:
-        from .providers import llm
+        from .providers import llm, vlm
         caps = settings.capability_report()
         caps["llm"] = llm.available()
         caps["llm_model"] = llm.active_model()
+        caps["vlm"] = vlm.available()
+        caps["vlm_model"] = vlm.active_model()
         return {
             "ok": True,
             "version": __version__,
