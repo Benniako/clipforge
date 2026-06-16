@@ -1161,6 +1161,12 @@ def test_active_speaker_not_advertised_until_adapter_exists():
             os.environ["CLIPFORGE_ASD_DIR"] = old_env
 
 
+def test_optional_nested_module_lookup_is_safe_when_parent_missing():
+    from app import config
+
+    assert config._has_module("definitely_missing_parent.child") is False
+
+
 def test_active_speaker_adapter_detects_valid_checkout_fixture():
     from app import config
 

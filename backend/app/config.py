@@ -63,7 +63,10 @@ def _resolve_ffmpeg() -> tuple[str | None, str | None]:
 def _has_module(name: str) -> bool:
     import importlib.util
 
-    return importlib.util.find_spec(name) is not None
+    try:
+        return importlib.util.find_spec(name) is not None
+    except ModuleNotFoundError:
+        return False
 
 
 def _detect_ocr() -> str:
