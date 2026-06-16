@@ -33,7 +33,14 @@ function Caps({ health }: { health: Health | null }) {
   ];
   if (c.vad) items.push(["VAD captions", true, "Captions snapped to exact speech (Silero VAD)"]);
   if (c.emotion) items.push(["Emotion score", true, "Excitement/arousal virality signal (emotion2vec)"]);
-  if (c.audio_events) items.push(["Audio events", true, "Hears cheering/laughter/explosions for virality (PANNs)"]);
+  if (c.audio_events)
+    items.push([
+      c.panns_audio ? "PANNs audio" : c.clap_audio ? "CLAP audio" : "Audio events",
+      true,
+      c.panns_audio
+        ? "Hears cheering/laughter/explosions for virality (PANNs)"
+        : "Zero-shot audio cue detection for cheering/laughter/action (CLAP)",
+    ]);
   if (c.denoise) items.push(["Clean voice", true, "Isolates speech from music/game audio (Demucs)"]);
   if (c.reframe_engine && c.reframe_engine !== "haar")
     items.push([`${c.reframe_engine === "yolo" ? "YOLO" : "MediaPipe"} reframe`, true, "Content-aware subject tracking for 9:16"]);

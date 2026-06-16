@@ -97,14 +97,14 @@ def _load_whisper():
 _batched = None  # cached BatchedInferencePipeline wrapper (or False if N/A)
 
 
-def _batched_pipeline(model):
+def _batched_pipeline(model, batch_size: int | None = None):
     """A faster-whisper BatchedInferencePipeline on GPU (keeps the card
     saturated → ~1.8x faster), or None when unavailable / on CPU."""
     global _batched
     if _batched is not None:
         return _batched or None
     s = get_settings()
-    if s.device != "cuda" or s.whisper_batch_size <= 0:
+    if s.device != "cuda" or (batch_size or s.whisper_batch_size) <= 0:
         _batched = False
         return None
     try:
@@ -112,7 +112,7 @@ def _batched_pipeline(model):
 
         _batched = BatchedInferencePipeline(model=model)
         log.info("faster-whisper batched inference on (batch_size=%d)",
-                 s.whisper_batch_size)
+                 batch_size or s.whisper_batch_size)
     except Exception as e:
         log.info("batched inference unavailable (%s); sequential", e)
         _batched = False
@@ -120,16 +120,17 @@ def _batched_pipeline(model):
 
 
 def transcribe(audio_path: str, *, language: str | None = None,
-               progress=None) -> Transcript:
+               progress=None, power_mode: str | None = None) -> Transcript:
     """Transcribe ``audio_path`` to a word-timed :class:`Transcript`."""
     s = get_settings()
+    batch_size = s.whisper_batch_for(power_mode)
     lang = None if (language in (None, "auto", "")) else language
     engine = s.transcription_engine
 
     if engine == "whisperx":
         try:
             with _asr_lock:
-                return _whisperx_transcribe(audio_path, lang, progress)
+                return _whisperx_transcribe(audio_path, lang, progress, batch_size)
         except Exception as e:
             log.warning("whisperX failed (%s); falling back", e)
             engine = "whisper" if s.has_whisper else "synthetic"
@@ -137,7 +138,7 @@ def transcribe(audio_path: str, *, language: str | None = None,
     if engine == "whisper":
         try:
             with _asr_lock:
-                return _whisper_transcribe(audio_path, lang, progress)
+                return _whisper_transcribe(audio_path, lang, progress, batch_size)
         except Exception as e:  # model download blocked, etc. — degrade.
             log.warning("whisper failed (%s); using synthetic transcript", e)
 
@@ -173,11 +174,21 @@ def _diarization_pipeline():
         from whisperx.diarize import DiarizationPipeline
     except Exception:
         from whisperx import DiarizationPipeline  # type: ignore
-    _wx_diarize = DiarizationPipeline(use_auth_token=s.hf_token, device=s.device)
+    try:
+        _wx_diarize = DiarizationPipeline(
+            model_name=s.diarization_model,
+            token=s.hf_token,
+            device=s.device,
+        )
+    except TypeError:
+        _wx_diarize = DiarizationPipeline(
+            use_auth_token=s.hf_token,
+            device=s.device,
+        )
     return _wx_diarize
 
 
-def _whisperx_transcribe(audio_path, language, progress) -> Transcript:
+def _whisperx_transcribe(audio_path, language, progress, batch_size: int) -> Transcript:
     import whisperx
 
     _ensure_ffmpeg_on_path()
@@ -185,7 +196,7 @@ def _whisperx_transcribe(audio_path, language, progress) -> Transcript:
     audio = whisperx.load_audio(audio_path)
 
     model = _load_whisperx_model()
-    result = model.transcribe(audio, batch_size=8, language=language)
+    result = model.transcribe(audio, batch_size=max(batch_size, 1), language=language)
     lang = result.get("language", language or "en") or "en"
     if progress:
         progress(0.5)
@@ -235,15 +246,14 @@ def _whisperx_transcribe(audio_path, language, progress) -> Transcript:
                       speakers=max(len(speaker_ids), 1), provider="whisperx")
 
 
-def _whisper_transcribe(audio_path, language, progress) -> Transcript:
+def _whisper_transcribe(audio_path, language, progress, batch_size: int) -> Transcript:
     model = _load_whisper()
-    s = get_settings()
-    batched = _batched_pipeline(model)
+    batched = _batched_pipeline(model, batch_size)
     if batched is not None:
         try:
             segments, info = batched.transcribe(
                 audio_path, language=language, word_timestamps=True,
-                vad_filter=True, batch_size=s.whisper_batch_size)
+                vad_filter=True, batch_size=max(batch_size, 1))
         except Exception as e:  # any batched-path issue -> sequential, never fail
             log.warning("batched transcribe failed (%s); sequential", e)
             segments, info = model.transcribe(

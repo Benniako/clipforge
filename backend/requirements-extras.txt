@@ -19,6 +19,7 @@ scenedetect[opencv]>=0.6.4
 # Gameplay on-screen text (kill banners / scorelines / VICTORY). EasyOCR is the
 # gameplay-tuned default; swap for paddleocr if you prefer (see requirements-ocr.txt).
 easyocr>=1.7
+rapidfuzz>=3.0
 
 # Speech-emotion excitement signal (laughs/hype/rage) for virality.
 funasr>=1.1
@@ -36,6 +37,10 @@ whisperx>=3.1
 # cue needed). Pulls torch (installed above).
 panns-inference>=0.1.1
 
+# Zero-shot audio cue detection with text prompts ("cheering", "laughter",
+# "explosion") when PANNs is not available or misses a moment. Heavy, optional.
+laion-clap>=1.1.4
+
 # Vocal isolation (Demucs) — separate the voice from music/game audio so speech
 # and captions sound studio-clean. Heavy; a CUDA GPU is strongly recommended.
 demucs>=4.0
@@ -48,3 +53,5 @@ demucs>=4.0
 # Active-speaker detection (LR-ASD / Light-ASD) is a GitHub checkout, not a pip
 # package. To enable: clone https://github.com/Junhua-Liao/LR-ASD , then set
 # CLIPFORGE_ASD_DIR to the checkout path. It needs torch (installed above).
+python_speech_features>=0.6
+gdown>=5.2

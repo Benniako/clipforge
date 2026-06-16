@@ -23,23 +23,37 @@ _URL = os.environ.get("CLIPFORGE_OLLAMA_URL", "http://localhost:11434").rstrip("
 # Empty = auto-pick the strongest installed model (see _PREFERRED).
 _MODEL = os.environ.get("CLIPFORGE_LLM_MODEL", "")
 
-# Auto-pick order when CLIPFORGE_LLM_MODEL isn't set — strongest commonly-run
-# local models first; anything installed beats heuristic titles.
-_PREFERRED = ("qwen3:14b", "qwen3:8b", "qwen3", "llama3.1:8b", "llama3.1",
-              "gemma3", "qwen2.5", "mistral", "llama3.2")
+# Auto-pick order when CLIPFORGE_LLM_MODEL isn't set. Within each family the
+# largest installed size wins, so pulling qwen3:32b later automatically upgrades
+# the local title/virality model.
+_FAMILY_RANK = (
+    "qwen3", "llama3.3", "llama3.1", "gemma3", "qwen2.5",
+    "mistral", "llama3.2", "deepseek-r1",
+)
+_VISION_HINTS = ("vl", "vision", "llava", "moondream", "minicpm-v")
+_SIZE_RE = re.compile(r"(?::|-)(\d+(?:\.\d+)?)b\b", re.IGNORECASE)
 
 _avail: tuple[float, bool, str | None] | None = None  # (checked_at, ok, model)
+
+
+def _size_b(tag: str) -> float:
+    m = _SIZE_RE.search(tag.lower())
+    return float(m.group(1)) if m else 0.0
+
+
+def _rank_text_model(tag: str) -> tuple[int, int, float, str]:
+    low = tag.lower()
+    family = next((i for i, name in enumerate(_FAMILY_RANK)
+                   if low == name or low.startswith(name)), len(_FAMILY_RANK))
+    non_vision = 0 if any(h in low for h in _VISION_HINTS) else 1
+    return (non_vision, -family, _size_b(low), low)
 
 
 def _resolve_model(tags: list[str]) -> str | None:
     """The model to use, given what the Ollama server has installed."""
     if _MODEL:
         return _MODEL  # explicit choice always wins
-    for pref in _PREFERRED:
-        for t in tags:
-            if t == pref or t.startswith(pref + ":") or t.startswith(pref):
-                return t
-    return tags[0] if tags else None
+    return max(tags, key=_rank_text_model) if tags else None
 
 
 def _refresh() -> None:

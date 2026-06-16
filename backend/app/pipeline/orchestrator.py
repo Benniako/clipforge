@@ -49,6 +49,21 @@ def _speech_intervals(transcript, start: float, end: float
     return [(a - start, b - start) for a, b in segs]
 
 
+def _score_visual_reads(src_path: str, clips: list[Clip], *,
+                        power_mode: str | None = None) -> dict[int, tuple[float, str]]:
+    """Optional VLM reads for clip spans, isolated so this contract stays tested."""
+    from ..providers import vlm as vlm_mod
+
+    if not vlm_mod.available():
+        return {}
+    opts = get_settings().vlm_options_for(power_mode)
+    return vlm_mod.score_visuals(src_path, [(c.start, c.end) for c in clips],
+                                 budget=float(opts["budget"]),
+                                 max_workers=int(opts["max_workers"]),
+                                 n_frames=int(opts["n_frames"]),
+                                 timeout=float(opts["timeout"]))
+
+
 STAGES = ["transcribe", "detect", "score", "reframe", "caption", "render"]
 STAGE_LABELS = {
     "transcribe": "Transcribing audio",
@@ -163,6 +178,7 @@ class Engine:
                 wav_path, language=project.settings.language,
                 progress=lambda f: self._advance(project_id, 0,
                                                  f"Transcribing… {int(f*100)}%", f),
+                power_mode=project.settings.power_mode.value,
             )
         else:
             # No audio track — skip ASR entirely, go straight to synthetic.
@@ -238,7 +254,7 @@ class Engine:
             # Learn reusable AUDIO cues from the on-screen (OCR) events: snip the
             # game sound at each banner and save it, so the cheap audio matcher
             # catches that event on future videos even with OCR off.
-            if info.has_audio:
+            if info.has_audio and project.settings.cue_learning:
                 ocr_evs = [e for e in detected if getattr(e, "source", "") == "ocr"]
                 if ocr_evs:
                     try:
@@ -354,9 +370,9 @@ class Engine:
         # Optional audio-event detection (PANNs): hear the *sounds* that signal a
         # highlight — cheering, laughter, applause, an explosion — and fold them
         # in as an explainable factor. Zero-shot, so it needs no per-game cue.
-        if settings.has_audio_events and wav_path:
+        from ..providers import audio_events as ae_mod
+        if project.settings.use_audio_events and ae_mod.available() and wav_path:
             try:
-                from ..providers import audio_events as ae_mod
                 self._advance(project_id, 2, "Listening for crowd / hype…")
                 for clip in clips:
                     res = ae_mod.event_score(wav_path, clip.start, clip.end)
@@ -376,9 +392,10 @@ class Engine:
         # local vision model.
         try:
             from ..providers import vlm as vlm_mod
-            if vlm_mod.available():
+            if project.settings.use_vlm and vlm_mod.available():
                 self._advance(project_id, 2, "AI watching the clips…")
-                reads = vlm_mod.score_visuals([(c.start, c.end) for c in clips])
+                reads = _score_visual_reads(
+                    src_path, clips, power_mode=project.settings.power_mode.value)
                 for i, (viral, reason) in reads.items():
                     clips[i].score, clips[i].factors = score_mod.apply_viral_boost(
                         clips[i].score, clips[i].factors, viral,
@@ -500,7 +517,8 @@ class Engine:
         out_w, out_h = project.settings.dims()
         self._advance(project_id, 5, "Rendering clips…")
         self._render_all(project_id, clips, render_src, info, out_w, out_h,
-                         project.settings.burn_captions, project.settings.motion)
+                         project.settings.burn_captions, project.settings.motion,
+                         project.settings.power_mode.value)
 
         with store.mutate(project_id) as p:
             ready = sum(1 for c in p.clips if c.status == ClipStatus.ready)
@@ -542,11 +560,12 @@ class Engine:
 
     def _render_all(self, project_id: str, clips: list[Clip], src_path: str,
                     info: MediaInfo, out_w: int, out_h: int,
-                    burn_captions: bool = True, motion: str = "none") -> None:
+                    burn_captions: bool = True, motion: str = "none",
+                    power_mode: str | None = None) -> None:
         settings = get_settings()
         done = 0
         total = len(clips)
-        n = max(1, min(settings.render_workers, total))
+        n = max(1, min(settings.render_workers_for(power_mode), total))
         with ThreadPoolExecutor(max_workers=n) as ex:
             futs = {ex.submit(self._render_one, project_id, c, src_path, info,
                               out_w, out_h, burn_captions, motion): c for c in clips}
@@ -638,7 +657,8 @@ class Engine:
             out_w, out_h = project.settings.dims()
             self._render_all(project_id, project.clips, src_path, info,
                              out_w, out_h, project.settings.burn_captions,
-                             project.settings.motion)
+                             project.settings.motion,
+                             project.settings.power_mode.value)
             with store.mutate(project_id) as p:
                 ready = sum(1 for c in p.clips if c.status == ClipStatus.ready)
                 p.status = ProjectStatus.ready
@@ -652,6 +672,46 @@ class Engine:
                 with store.mutate(project_id) as p:
                     p.status = ProjectStatus.ready  # clips keep their old files
                     p.progress.message = f"Format change failed: {e}"
+            except Exception:
+                pass  # project deleted underneath us
+
+    def rerender_clips(self, project_id: str, clip_ids: list[str]) -> None:
+        """Re-render selected clips with current project render settings."""
+        try:
+            project = store.get(project_id)
+            if not project or not project.source:
+                raise RuntimeError("project or source media missing")
+            wanted = set(clip_ids)
+            clips = [c for c in project.clips if c.id in wanted]
+            if not clips:
+                raise RuntimeError("no selected clips found")
+            src_path = self._render_source(project_id, project)
+            info = ffmpeg.probe(src_path)
+            out_w, out_h = project.settings.dims()
+            with store.mutate(project_id) as p:
+                for c in p.clips:
+                    if c.id in wanted:
+                        c.status = ClipStatus.rendering
+                        c.error = None
+            self._render_all(project_id, clips, src_path, info,
+                             out_w, out_h, project.settings.burn_captions,
+                             project.settings.motion,
+                             project.settings.power_mode.value)
+            with store.mutate(project_id) as p:
+                ready = sum(1 for c in p.clips if c.status == ClipStatus.ready)
+                p.status = ProjectStatus.ready
+                p.progress = JobProgress(
+                    stage="done", stage_index=len(STAGES), total_stages=len(STAGES),
+                    message=f"Done - {ready} clips ready", pct=100.0,
+                    stages=self._stage_view(len(STAGES), 1.0))
+        except Exception as e:
+            log.error("selected re-render failed for %s: %s", project_id, e)
+            for cid in clip_ids:
+                self._mark_clip_failed(project_id, cid, e)
+            try:
+                with store.mutate(project_id) as p:
+                    p.status = ProjectStatus.ready
+                    p.progress.message = f"Selected re-render failed: {e}"
             except Exception:
                 pass  # project deleted underneath us
 

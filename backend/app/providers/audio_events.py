@@ -17,6 +17,7 @@ unit-tested without the model.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 
 from ..config import get_settings
 from ..models import ScoreFactor
@@ -24,6 +25,7 @@ from ..models import ScoreFactor
 log = logging.getLogger("clipforge.audio_events")
 
 _tagger = None  # cached (AudioTagging, labels) or False
+_clap = None    # cached LAION-CLAP model or False
 
 # AudioSet class-name substrings that read as a short-form highlight, grouped by
 # the human reason we'll show. Matched case-insensitively against the 527 labels.
@@ -36,9 +38,36 @@ HYPE_CLASSES: dict[str, tuple[str, ...]] = {
     "impact": ("smash", "crash", "shatter", "glass", "slam"),
 }
 
+CLAP_PROMPTS: dict[str, str] = {
+    "crowd cheering": "people cheering and applauding loudly",
+    "laughter": "people laughing hard",
+    "excited shouting": "excited shouting and screaming",
+    "explosive action": "explosions gunshots and intense action",
+    "impact": "a loud crash smash or impact",
+    "victory fanfare": "a triumphant game victory fanfare or win sound",
+    "surprise reaction": "a streamer gasping in surprise or shock",
+}
+
+NEGATIVE_CLAP_PROMPTS: dict[str, str] = {
+    "menu click": "video game menu click user interface sound",
+    "lobby music": "calm video game lobby menu background music",
+    "loading sound": "loading screen ambient loop or transition sound",
+    "keyboard/mouse": "keyboard typing and mouse clicking at a desktop",
+    "low energy ambience": "quiet low energy silence room tone or ambience",
+}
+
+
+@dataclass
+class AudioEvent:
+    t: float
+    label: str
+    confidence: float
+    detail: str = ""
+
 
 def available() -> bool:
-    return get_settings().has_audio_events
+    s = get_settings()
+    return s.has_audio_events or s.has_clap
 
 
 def _load():
@@ -56,6 +85,29 @@ def _load():
         log.info("PANNs unavailable (%s)", e)
         _tagger = False
     return _tagger or None
+
+
+def _load_clap():
+    """Best-effort LAION-CLAP loader.
+
+    The exact package is optional and heavy. Keep all imports inside the loader
+    so normal ClipForge runs never pay for it unless the user installed it.
+    """
+    global _clap
+    if _clap is not None:
+        return _clap or None
+    try:
+        import laion_clap
+
+        device = "cuda" if get_settings().device == "cuda" else "cpu"
+        model = laion_clap.CLAP_Module(enable_fusion=False, device=device)
+        model.load_ckpt()
+        _clap = model
+        log.info("LAION-CLAP audio tagging loaded")
+    except Exception as e:
+        log.info("CLAP audio tagging unavailable (%s)", e)
+        _clap = False
+    return _clap or None
 
 
 def reduce_scores(probs: dict[str, float]) -> tuple[float, str] | None:
@@ -82,16 +134,174 @@ def reduce_scores(probs: dict[str, float]) -> tuple[float, str] | None:
     return max(0.0, min(1.0, combined)), top_reason
 
 
-def event_score(wav_path: str, start: float, end: float) -> tuple[float, str] | None:
-    """(hype 0..1, reason) for a clip's audio span via PANNs, or None.
+def reduce_clap_similarities(sims: dict[str, float]) -> tuple[float, str] | None:
+    """Collapse CLAP prompt similarities into a hype score.
 
-    Reads only the clip's span so it stays cheap per clip."""
+    CLAP cosine values are not probabilities; this maps a useful similarity
+    band into 0..1 and ignores weak matches so ambient noise is not rewarded.
+    """
+    if not sims:
+        return None
+    reason, sim = max(sims.items(), key=lambda kv: kv[1])
+    if sim < 0.20:
+        return None
+    hype = (sim - 0.20) / 0.28
+    return max(0.0, min(1.0, hype)), reason
+
+
+def reduce_negative_similarities(sims: dict[str, float]) -> tuple[float, str] | None:
+    """Collapse CLAP negative prompt similarities into a non-highlight risk."""
+    if not sims:
+        return None
+    reason, sim = max(sims.items(), key=lambda kv: kv[1])
+    if sim < 0.22:
+        return None
+    risk = (sim - 0.22) / 0.28
+    return max(0.0, min(1.0, risk)), reason
+
+
+def reduce_clap_window(pos_sims: dict[str, float],
+                       neg_sims: dict[str, float]) -> tuple[float, str] | None:
+    """Positive CLAP cue gated by non-highlight prompts."""
+    pos = reduce_clap_similarities(pos_sims)
+    if pos is None:
+        return None
+    hype, reason = pos
+    neg = reduce_negative_similarities(neg_sims)
+    if neg is not None:
+        risk, neg_reason = neg
+        if risk >= max(0.45, hype * 0.85):
+            log.debug("CLAP rejected %s because %s risk %.2f", reason, neg_reason, risk)
+            return None
+        hype = max(0.0, hype - risk * 0.45)
+        if hype < 0.25:
+            return None
+    return hype, reason
+
+
+def _clap_similarity_rows(paths: list[str]) -> list[tuple[dict[str, float], dict[str, float]]]:
+    if not paths:
+        return []
+    model = _load_clap()
+    if model is None:
+        return []
+    try:
+        import numpy as np
+
+        all_prompts = [*CLAP_PROMPTS.values(), *NEGATIVE_CLAP_PROMPTS.values()]
+        audio = model.get_audio_embedding_from_filelist(paths, use_tensor=False)
+        text = model.get_text_embedding(all_prompts, use_tensor=False)
+        audio = np.asarray(audio, dtype=np.float32)
+        text = np.asarray(text, dtype=np.float32)
+        if audio.ndim == 1:
+            audio = audio[None, :]
+        if text.ndim == 1:
+            text = text[None, :]
+        audio = audio / np.maximum(np.linalg.norm(audio, axis=1, keepdims=True), 1e-6)
+        text = text / np.maximum(np.linalg.norm(text, axis=1, keepdims=True), 1e-6)
+        vals = audio @ text.T
+        pos_labels = list(CLAP_PROMPTS)
+        neg_labels = list(NEGATIVE_CLAP_PROMPTS)
+        rows: list[tuple[dict[str, float], dict[str, float]]] = []
+        for row in vals:
+            pos = {reason: float(row[i]) for i, reason in enumerate(pos_labels)}
+            neg_off = len(pos_labels)
+            neg = {reason: float(row[neg_off + i]) for i, reason in enumerate(neg_labels)}
+            rows.append((pos, neg))
+        return rows
+    except Exception as e:
+        log.warning("CLAP audio scoring failed (%s)", e)
+        return []
+
+
+def _clap_score(seg_path: str) -> tuple[float, str] | None:
+    rows = _clap_similarity_rows([seg_path])
+    if not rows:
+        return None
+    return reduce_clap_window(*rows[0])
+
+
+def find_events(wav_path: str, duration: float, *, window: float = 6.0,
+                hop: float = 3.0, threshold: float = 0.35,
+                limit: int = 20) -> list[AudioEvent]:
+    """Zero-shot CLAP search over audio windows.
+
+    Returns highlight-like audio events (cheer/laugh/action/etc.) while filtering
+    common non-highlights such as menu clicks, lobby music, and loading loops.
+    """
+    if not get_settings().has_clap or _load_clap() is None:
+        return []
+    if duration <= 0:
+        return []
+    try:
+        import tempfile
+        from pathlib import Path
+
+        from ..media import ffmpeg
+
+        window = max(1.0, float(window))
+        hop = max(0.5, float(hop))
+        max_windows = 180
+        estimated = max(int(duration / hop), 1)
+        if estimated > max_windows:
+            hop = max(hop, duration / max_windows)
+        starts: list[float] = []
+        t = 0.0
+        while t < duration:
+            starts.append(round(t, 3))
+            t += hop
+
+        pairs: list[tuple[float, str]] = []
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            for i, start in enumerate(starts):
+                seg = tmpdir / f"w{i:04d}.wav"
+                dur = min(window, max(duration - start, 0.2))
+                if dur < 0.4:
+                    continue
+                try:
+                    ffmpeg.run(["-ss", f"{start:.3f}", "-i", wav_path,
+                                "-t", f"{dur:.3f}", "-ac", "1", "-ar", "48000",
+                                "-c:a", "pcm_s16le", str(seg)], timeout=45)
+                    pairs.append((start + dur / 2.0, str(seg)))
+                except Exception as e:
+                    log.debug("CLAP window extract failed at %.1fs: %s", start, e)
+            rows = _clap_similarity_rows([p for _, p in pairs])
+
+        events: list[AudioEvent] = []
+        for (t_mid, _path), row in zip(pairs, rows):
+            res = reduce_clap_window(*row)
+            if res is None:
+                continue
+            hype, reason = res
+            if hype < threshold:
+                continue
+            events.append(AudioEvent(
+                t=round(t_mid, 3), label=reason.replace(" ", "_"),
+                confidence=round(hype, 4), detail=f"CLAP heard {reason}"))
+
+        kept: list[AudioEvent] = []
+        min_gap = max(window * 0.75, 3.0)
+        for ev in sorted(events, key=lambda e: e.confidence, reverse=True):
+            if all(abs(ev.t - k.t) >= min_gap for k in kept):
+                kept.append(ev)
+            if len(kept) >= limit:
+                break
+        kept.sort(key=lambda e: e.t)
+        return kept
+    except Exception as e:
+        log.warning("CLAP event search failed (%s)", e)
+        return []
+
+
+def event_score(wav_path: str, start: float, end: float) -> tuple[float, str] | None:
+    """(hype 0..1, reason) for a clip's audio span, or None.
+
+    Uses PANNs when available, then CLAP as a zero-shot fallback. Reads only the
+    clip's span so it stays cheap per clip.
+    """
     if not available():
         return None
-    loaded = _load()
-    if loaded is None:
-        return None
-    tagger, labels = loaded
     try:
         import tempfile
         from pathlib import Path
@@ -102,20 +312,27 @@ def event_score(wav_path: str, start: float, end: float) -> tuple[float, str] | 
 
         with tempfile.TemporaryDirectory() as tmp:
             seg = Path(tmp) / "seg.wav"
-            # PANNs expects 32 kHz mono.
+            # PANNs likes 32 kHz mono; CLAP accepts normal wav files too.
             ffmpeg.run(["-ss", f"{max(start, 0):.3f}", "-i", wav_path,
                         "-t", f"{max(end - start, 0.2):.3f}", "-ac", "1",
                         "-ar", "32000", "-c:a", "pcm_s16le", str(seg)], timeout=60)
-            import wave
+            loaded = _load() if get_settings().has_audio_events else None
+            if loaded is not None:
+                import wave
 
-            with wave.open(str(seg), "rb") as wf:
-                raw = wf.readframes(wf.getnframes())
-            audio = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
-        if audio.size == 0:
+                tagger, labels = loaded
+                with wave.open(str(seg), "rb") as wf:
+                    raw = wf.readframes(wf.getnframes())
+                audio = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+                if audio.size:
+                    clipwise, _ = tagger.inference(audio[None, :])
+                    probs = {labels[i]: float(clipwise[0][i]) for i in range(len(labels))}
+                    pann = reduce_scores(probs)
+                    if pann is not None:
+                        return pann
+            if get_settings().has_clap:
+                return _clap_score(str(seg))
             return None
-        clipwise, _ = tagger.inference(audio[None, :])
-        probs = {labels[i]: float(clipwise[0][i]) for i in range(len(labels))}
-        return reduce_scores(probs)
     except Exception as e:
         log.warning("audio-event scoring failed (%s)", e)
         return None

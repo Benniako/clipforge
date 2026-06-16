@@ -15,6 +15,7 @@ export default function ClipEditor() {
   const [msg, setMsg] = useState<string | null>(null);
   const [loadErr, setLoadErr] = useState<string | null>(null);
   const [ver, setVer] = useState(0); // cache-buster for the rendered <video>
+  const [previewMode, setPreviewMode] = useState<"rendered" | "original">("rendered");
   const alive = useRef(true); // stops the re-render poll after unmount
 
   // local editable state
@@ -198,7 +199,11 @@ export default function ClipEditor() {
       </div>
     );
 
-  const videoSrc = clip.export_url ? `${clip.export_url}?v=${ver}` : undefined;
+  const renderedSrc = clip.export_url ? `${clip.export_url}?v=${ver}` : undefined;
+  const originalSrc = project.source
+    ? `/media/${project.source.path}#t=${start.toFixed(3)},${end.toFixed(3)}`
+    : undefined;
+  const videoSrc = previewMode === "original" ? originalSrc : renderedSrc;
 
   return (
     <div className="container">
@@ -236,9 +241,29 @@ export default function ClipEditor() {
 
       <div className="editor">
         <div className="preview-pane">
+          <div className="seg preview-tabs" style={{ marginBottom: 10 }}>
+            <button
+              className={previewMode === "rendered" ? "on" : ""}
+              onClick={() => setPreviewMode("rendered")}
+            >
+              Rendered
+            </button>
+            <button
+              className={previewMode === "original" ? "on" : ""}
+              onClick={() => setPreviewMode("original")}
+            >
+              Original
+            </button>
+          </div>
           <div className="video-wrap">
             {videoSrc ? (
-              <video key={videoSrc} src={videoSrc} controls playsInline poster={clip.thumb_url ?? undefined} />
+              <video
+                key={videoSrc}
+                src={videoSrc}
+                controls
+                playsInline
+                poster={previewMode === "rendered" ? clip.thumb_url ?? undefined : undefined}
+              />
             ) : (
               <div className="empty">Not rendered yet</div>
             )}

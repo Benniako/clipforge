@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import time
 import uuid
+import os
 from enum import Enum
 
 from pydantic import BaseModel, Field
@@ -44,6 +45,19 @@ class Platform(str, Enum):
     reels = "reels"
     shorts = "shorts"
     generic = "generic"
+
+
+class PowerMode(str, Enum):
+    balanced = "balanced"      # good default: fast without monopolising the PC
+    max_gpu = "max_gpu"        # saturate local GPU/CPU for batch creation
+    quality = "quality"        # slower reads with more visual context
+
+
+def _default_power_mode() -> PowerMode:
+    try:
+        return PowerMode(os.environ.get("CLIPFORGE_DEFAULT_POWER_MODE", "balanced"))
+    except ValueError:
+        return PowerMode.balanced
 
 
 class LayoutType(str, Enum):
@@ -107,7 +121,7 @@ class DetectedEvent(BaseModel):
     of viral on-screen text (OCR). Persisted on the project so the user can see
     exactly what ClipForge keyed off, and so OCR hits can be promoted to cues."""
     t: float                    # source timeline (s)
-    source: str                 # "cue" | "ocr"
+    source: str                 # "cue" | "ocr" | "audio"
     label: str                  # canonical event name, e.g. "kill", "victory"
     detail: str = ""            # raw text / cue file matched
     confidence: float = 0.0     # 0..1
@@ -258,6 +272,7 @@ ASPECTS: dict[str, tuple[int, int]] = {
 
 class ImportSettings(BaseModel):
     platform: Platform = Platform.generic
+    power_mode: PowerMode = Field(default_factory=_default_power_mode)
     min_len: float = 15.0
     max_len: float = 60.0
     target_clips: int = 10
@@ -285,6 +300,19 @@ class ImportSettings(BaseModel):
     # Gameplay facecam handling: "auto" (stacked layout when a facecam is
     # found), "split" / "framed" to force a layout, "off" for plain crop.
     facecam_layout: str = "auto"
+    # Visible detector switches. They default on so existing projects keep the
+    # previous best-effort behaviour, while the UI can now make them explicit.
+    use_ocr: bool = True
+    use_vlm: bool = True
+    use_audio_events: bool = True
+    cue_learning: bool = True
+    # Let ClipForge pick a platform/content tuned range instead of the manual
+    # length preset.
+    auto_length: bool = False
+    # Gameplay event padding: seconds kept before/after a detected cue, OCR hit,
+    # or audio-event window. None keeps the profile default.
+    lead_seconds: float | None = None
+    tail_seconds: float | None = None
 
     def dims(self) -> tuple[int, int]:
         return ASPECTS.get(self.aspect, ASPECTS["9:16"])

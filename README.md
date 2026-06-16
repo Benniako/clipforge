@@ -59,6 +59,9 @@ YuNet when available, Haar fallback); clips then use the TikTok-standard
 cam's **reaction energy** feeds the virality score ("streamer reacts hard"), and
 the gameplay crop follows the **motion centroid** instead of blindly centering —
 all overridable per clip in the editor.
+If NVIDIA background removal makes the rectangular webcam hard to see, the
+optional YOLO fallback looks for a stable small person cutout and uses that as
+the facecam region.
 Outputs in **9:16, 4:5, 1:1, or 16:9** (horizontal for YouTube / NLE editing),
 captions optionally burned in, plus **montages** that stitch chosen clips into one
 video with its own virality score. All **local, no APIs**.
@@ -116,9 +119,16 @@ fully transparent (`/api/learning` shows what it learned), and resettable.
 
 ### Easiest — Windows (double-click)
 1. **Double-click `setup.bat`** — creates an isolated Python 3.12 env, installs
-   everything, builds the UI. (Run once.)
+   everything, pulls the strongest local Qwen/Ollama text + vision models that
+   fit your GPU/RAM when possible, guides you through the private Hugging Face
+   token needed for speaker diarization, sets up LR-ASD active-speaker tracking
+   when possible, and builds the UI. (Run once.)
 2. **Double-click `run.bat`** — starts the server and opens
    **http://localhost:8000**. That's it — one window, one URL.
+
+   Setup also makes later runs simple: `run.bat` starts Ollama if it exists,
+   leaves model choice on auto, and ClipForge picks the strongest installed
+   local text/vision model by default.
 
 ### macOS / Linux (or Git Bash)
 ```bash
@@ -143,6 +153,7 @@ runs from a **single process on http://localhost:8000** — no second terminal.
 | `CLIPFORGE_TRANSCRIBER` | `auto` | `auto` (whisperX if installed, else faster-whisper), or force `whisperx`/`faster`/`synthetic`. |
 | `CLIPFORGE_DEVICE` | *auto* | `cuda` when a usable GPU is detected, else `cpu`. Set to force. |
 | `HF_TOKEN` | – | Hugging Face token; enables whisperX **speaker diarization** (gated pyannote model). |
+| `CLIPFORGE_DIARIZATION_MODEL` | `pyannote/speaker-diarization-community-1` | WhisperX/pyannote diarization model to load once `HF_TOKEN` is valid. |
 | `CLIPFORGE_OLLAMA_URL` | `http://localhost:11434` | Local LLM (Ollama) for AI titles/hooks; used only if reachable. |
 | `CLIPFORGE_LLM_MODEL` | *auto* | Ollama model for titles — auto-picks the strongest installed (qwen3 → llama3.1 → …). Set to force. |
 | `CLIPFORGE_RENDER_WORKERS` | *auto* | Parallel clip renders (scaled to CPU cores). |
@@ -152,6 +163,14 @@ runs from a **single process on http://localhost:8000** — no second terminal.
 | `CLIPFORGE_DATA_DIR` | `backend/data` | Where the DB + media live. |
 | `CLIPFORGE_MAX_UPLOAD_MB` | `0` (unlimited) | Upload / URL-import size cap in MB; set only to guard a small disk. |
 | `FFMPEG_BIN` / `FFPROBE_BIN` | auto | Override binary resolution. |
+
+By default, `setup.bat` pulls the strongest hardware-fit local models it can:
+on a 16 GB NVIDIA GPU / 32 GB RAM machine this is `qwen2.5vl:7b` for visual
+scoring and `qwen3:14b` for titles/virality. `run.bat` starts Ollama when
+available, sets `CLIPFORGE_DEFAULT_POWER_MODE=max_gpu`, and leaves
+`CLIPFORGE_LLM_MODEL` / `CLIPFORGE_VLM_MODEL` unset so ClipForge automatically
+chooses the strongest installed compatible model. Set either variable only when
+you want to force a specific model.
 
 Default spoken language is **German** (English/auto selectable per project).
 Game events can be pinpointed by matching reference **audio cues** — see

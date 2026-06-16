@@ -17,13 +17,15 @@ from . import signals
 # Per-platform default feature weights (sum ~1.0). TikTok/Reels reward a hard
 # hook and energy; Shorts reward clarity/payoff; "generic" is balanced.
 BASE_WEIGHTS: dict[Platform, dict[str, float]] = {
-    Platform.tiktok:  {"hook": 0.34, "emotion": 0.18, "clarity": 0.12, "quote": 0.12, "pace": 0.14, "length": 0.06, "list": 0.04},
-    Platform.reels:   {"hook": 0.30, "emotion": 0.20, "clarity": 0.14, "quote": 0.12, "pace": 0.12, "length": 0.07, "list": 0.05},
-    Platform.shorts:  {"hook": 0.24, "emotion": 0.16, "clarity": 0.22, "quote": 0.10, "pace": 0.10, "length": 0.08, "list": 0.10},
-    Platform.generic: {"hook": 0.28, "emotion": 0.18, "clarity": 0.18, "quote": 0.12, "pace": 0.12, "length": 0.07, "list": 0.05},
+    Platform.tiktok:  {"instant_hook": 0.18, "swipe": 0.12, "hook": 0.22, "emotion": 0.16, "clarity": 0.10, "quote": 0.09, "pace": 0.08, "length": 0.03, "list": 0.02},
+    Platform.reels:   {"instant_hook": 0.16, "swipe": 0.12, "hook": 0.20, "emotion": 0.18, "clarity": 0.12, "quote": 0.09, "pace": 0.08, "length": 0.03, "list": 0.02},
+    Platform.shorts:  {"instant_hook": 0.14, "swipe": 0.15, "hook": 0.18, "emotion": 0.14, "clarity": 0.18, "quote": 0.08, "pace": 0.07, "length": 0.04, "list": 0.02},
+    Platform.generic: {"instant_hook": 0.15, "swipe": 0.12, "hook": 0.20, "emotion": 0.16, "clarity": 0.16, "quote": 0.09, "pace": 0.07, "length": 0.03, "list": 0.02},
 }
 
 FEATURE_LABELS = {
+    "instant_hook": "first 2s hook",
+    "swipe": "swipe resistance",
     "hook": "hook",
     "emotion": "emotional payoff",
     "clarity": "standalone clarity",
@@ -43,6 +45,8 @@ def extract_features(words: list[Word], duration: float, settings: ImportSetting
     """Return {feature: (value 0..1, human reason)} for a candidate span."""
     lex = signals.get_lexicon(lang)
     return {
+        "instant_hook": signals.instant_hook(words, lex),
+        "swipe": signals.swipe_resistance(words, duration, lex),
         "hook": signals.hook_strength(words, lex),
         "emotion": signals.emotional_payoff(words, lex),
         "clarity": signals.standalone_clarity(words, lex),

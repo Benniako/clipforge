@@ -73,6 +73,15 @@ for /f "usebackq eol=# tokens=*" %%P in ("backend\requirements-extras.txt") do (
     "%VPY%" -m pip install %%P || echo   [..] skipped %%P ^(install failed/conflict^)
 )
 
+REM --- 4e. Hugging Face token for WhisperX diarization ------------------
+REM Token is private, so setup guides you through creating one, validates
+REM pyannote access, then stores HF_TOKEN in your Windows user environment.
+powershell -ExecutionPolicy Bypass -NoProfile -File "%~dp0scripts\setup_hf_token.ps1" -PythonExe "%VPY%"
+
+REM --- 4f. LR-ASD active-speaker checkout -------------------------------
+REM Optional: clones the local active-speaker model adapter and records its path.
+powershell -ExecutionPolicy Bypass -NoProfile -File "%~dp0scripts\setup_active_speaker.ps1" -PythonExe "%VPY%"
+
 REM --- 4c. YuNet face model (optional, better facecam detection) --------
 REM Skipped silently when offline; the Haar fallback still works.
 if not exist "backend\data\models\face_detection_yunet_2023mar.onnx" (
@@ -84,6 +93,20 @@ if not exist "backend\data\models\face_detection_yunet_2023mar.onnx" (
         echo [..] YuNet model skipped - using Haar fallback
     )
 )
+
+REM --- 4g. Local Ollama models (optional, best hardware-fit defaults) ----
+REM Installs Ollama with winget when possible, starts it, and pulls the most
+REM powerful text + vision models that fit the detected GPU/RAM. Failures are
+REM skipped; ClipForge still runs with heuristic titles/scores.
+echo Setting up local AI models ^(Ollama / Qwen; optional but recommended^)...
+powershell -ExecutionPolicy Bypass -NoProfile -File "%~dp0scripts\setup_ollama_models.ps1"
+
+REM --- 4h. User-supplied Valorant cue pack ------------------------------
+REM Installs the local reference sounds from scripts\install_valorant_cues.py
+REM into backend\data\game_cues\valorant. Failures are skipped so setup still
+REM finishes if the soundboard site is unavailable.
+echo Installing Valorant reference cues ^(optional^)...
+"%VPY%" "%~dp0scripts\install_valorant_cues.py" || echo [..] Valorant cues skipped - you can rerun scripts\install_valorant_cues.py later.
 
 REM --- 5. Build the web UI --------------------------------------------
 echo Building the web interface...

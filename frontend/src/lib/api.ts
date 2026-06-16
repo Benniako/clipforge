@@ -2,6 +2,7 @@
 import type {
   Clip,
   Health,
+  ImportSettings,
   Project,
   ProjectSummary,
   StatusPayload,
@@ -38,6 +39,7 @@ export interface CreateProjectInput {
   file?: File;
   url?: string;
   platform: string;
+  power_mode: string;
   min_len: number;
   max_len: number;
   target_clips: number;
@@ -51,6 +53,13 @@ export interface CreateProjectInput {
   denoise: boolean;
   motion: string;
   facecam_layout: string;
+  use_ocr: boolean;
+  use_vlm: boolean;
+  use_audio_events: boolean;
+  cue_learning: boolean;
+  auto_length: boolean;
+  lead_seconds: number | null;
+  tail_seconds: number | null;
   onProgress?: (pct: number) => void;
 }
 
@@ -84,11 +93,11 @@ export const api = {
   deleteProject: (id: string) =>
     fetch(`/api/projects/${id}`, { method: "DELETE" }).then((r) => json(r)),
 
-  reprocess: (id: string) =>
+  reprocess: (id: string, overrides: Partial<ImportSettings> = {}) =>
     fetch(`/api/projects/${id}/reprocess`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: "{}",
+      body: JSON.stringify(overrides),
     }).then((r) => json<Project>(r)),
 
   // Re-render all clips in a new output format (no re-detection).
@@ -108,6 +117,7 @@ export const api = {
       const fd = new FormData();
       fd.set("name", input.name ?? "");
       fd.set("platform", input.platform);
+      fd.set("power_mode", input.power_mode);
       fd.set("min_len", String(input.min_len));
       fd.set("max_len", String(input.max_len));
       fd.set("target_clips", String(input.target_clips));
@@ -121,6 +131,13 @@ export const api = {
       fd.set("denoise", String(input.denoise));
       fd.set("motion", input.motion);
       fd.set("facecam_layout", input.facecam_layout);
+      fd.set("use_ocr", String(input.use_ocr));
+      fd.set("use_vlm", String(input.use_vlm));
+      fd.set("use_audio_events", String(input.use_audio_events));
+      fd.set("cue_learning", String(input.cue_learning));
+      fd.set("auto_length", String(input.auto_length));
+      if (input.lead_seconds !== null) fd.set("lead_seconds", String(input.lead_seconds));
+      if (input.tail_seconds !== null) fd.set("tail_seconds", String(input.tail_seconds));
       if (input.url) fd.set("url", input.url);
       if (input.file) fd.set("file", input.file);
 
@@ -173,6 +190,13 @@ export const api = {
     fetch(`/api/projects/${projectId}/clips/${clipId}/rerender`, {
       method: "POST",
     }).then((r) => json<Clip>(r)),
+
+  rerenderClips: (projectId: string, clipIds: string[]) =>
+    fetch(`/api/projects/${projectId}/clips/rerender`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ clip_ids: clipIds }),
+    }).then((r) => json<Project>(r)),
 
   createMontage: (projectId: string, clipIds: string[], title?: string) =>
     fetch(`/api/projects/${projectId}/montage`, {

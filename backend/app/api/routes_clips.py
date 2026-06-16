@@ -16,7 +16,7 @@ from pydantic import BaseModel
 from .. import feedback, store
 from ..config import get_settings
 from ..models import (ASPECTS, CaptionWord, Clip, ClipStatus, LayoutType,
-                      Montage, Rect, Reframe, ReframeKeyframe)
+                      Montage, Project, Rect, Reframe, ReframeKeyframe)
 from ..pipeline import captionize
 from ..pipeline.captions import build_srt
 from ..pipeline import montage as montage_mod
@@ -225,6 +225,29 @@ def rerender(project_id: str, clip_id: str) -> Clip:
     threading.Thread(target=engine.rerender_clip, args=(project_id, clip_id),
                      daemon=True).start()
     return store.get(project_id).clip(clip_id)
+
+
+class BatchRerenderBody(BaseModel):
+    clip_ids: list[str]
+
+
+@router.post("/projects/{project_id}/clips/rerender", response_model=Project)
+def rerender_selected(project_id: str, body: BatchRerenderBody) -> Project:
+    project = store.get(project_id)
+    if not project:
+        raise HTTPException(404, "project not found")
+    ids = [cid for cid in body.clip_ids if project.clip(cid)]
+    if not ids:
+        raise HTTPException(400, "choose at least one clip to re-render")
+    with store.mutate(project_id) as p:
+        for cid in ids:
+            c = p.clip(cid)
+            if c:
+                c.status = ClipStatus.rendering
+                c.error = None
+    threading.Thread(target=engine.rerender_clips, args=(project_id, ids),
+                     daemon=True).start()
+    return store.get(project_id)
 
 
 class RatingBody(BaseModel):

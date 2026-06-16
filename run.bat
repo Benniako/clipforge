@@ -13,10 +13,20 @@ REM 4 parallel renders: encoding runs on NVENC, so ffmpeg barely loads the CPU.
 set CLIPFORGE_RENDER_WORKERS=4
 REM ~6x faster transcription at near-large-v3 quality on this GPU.
 set CLIPFORGE_WHISPER_MODEL=large-v3-turbo
-REM AI titles auto-pick the strongest installed Ollama model (qwen3:8b is
-REM pulled on this machine); set CLIPFORGE_LLM_MODEL to force one.
+set CLIPFORGE_WHISPER_BATCH=16
+REM New projects default to the strongest local path on this workstation.
+set CLIPFORGE_DEFAULT_POWER_MODE=max_gpu
+REM Pull private/local account settings written by setup.bat into this process.
+for /f "usebackq delims=" %%T in (`powershell -NoProfile -Command "[Environment]::GetEnvironmentVariable('HF_TOKEN','User')"`) do if not "%%T"=="" set "HF_TOKEN=%%T"
+for /f "usebackq delims=" %%T in (`powershell -NoProfile -Command "[Environment]::GetEnvironmentVariable('CLIPFORGE_ASD_DIR','User')"`) do if not "%%T"=="" set "CLIPFORGE_ASD_DIR=%%T"
+REM AI titles/vision auto-pick the strongest installed Ollama models. setup.bat
+REM pulls hardware-fit defaults; set CLIPFORGE_LLM_MODEL / CLIPFORGE_VLM_MODEL
+REM only if you want to force a specific model.
 REM Uncomment for AV1 output (better quality/bitrate; H.264 plays everywhere):
 REM set CLIPFORGE_CODEC=av1
+
+echo Starting Ollama if available...
+powershell -ExecutionPolicy Bypass -NoProfile -File "%~dp0scripts\setup_ollama_models.ps1" -StartOnly >nul 2>&1
 
 echo Starting ClipForge backend in a new window...
 start "ClipForge backend - close this window to stop" .venv\Scripts\python.exe -m uvicorn app.main:app --app-dir backend --port 8000

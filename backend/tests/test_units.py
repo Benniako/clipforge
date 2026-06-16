@@ -10,7 +10,9 @@ lexicons, detection ranking, scoring range, crop geometry).
 from __future__ import annotations
 
 import os
+import sys
 import tempfile
+import types
 
 # Isolate the learning DB before anything imports settings.
 os.environ.setdefault("CLIPFORGE_DATA_DIR", tempfile.mkdtemp(prefix="clipforge-test-"))
@@ -157,6 +159,19 @@ def test_score_in_range_and_has_factors():
     assert len(factors) >= 2
     assert all(f.label for f in factors)
     assert "hook" in feats and 0.0 <= feats["hook"] <= 1.0  # features returned for learning
+    assert "instant_hook" in feats and "swipe" in feats
+
+
+def test_first_two_seconds_reduce_swipe_risk():
+    strong = _words("Why does nobody show you this trick? It changed everything")
+    soft = _words("Um okay so this is just a normal update")
+    lex = signals.get_lexicon("en")
+    ih_strong, _ = signals.instant_hook(strong, lex)
+    ih_soft, _ = signals.instant_hook(soft, lex)
+    sw_strong, _ = signals.swipe_resistance(strong, 12.0, lex)
+    sw_soft, _ = signals.swipe_resistance(soft, 12.0, lex)
+    assert ih_strong > ih_soft
+    assert sw_strong > sw_soft
 
 
 def test_platform_weights_shift_score():
@@ -220,6 +235,20 @@ def test_facecam_cluster_rejects_moving_and_big_faces():
     assert FC.stable_face_cluster(big) is None
     # Too few samples to trust.
     assert FC.stable_face_cluster([[(0.05, 0.7, 0.08, 0.14)]] * 3) is None
+
+
+def test_facecam_person_cutout_fallback_for_background_removed_cam():
+    from app.pipeline import facecam as FC
+    cutout = (0.04, 0.48, 0.16, 0.42)
+    samples = [[cutout] for _ in range(12)]
+    rect = FC.stable_person_cluster(samples)
+    assert rect is not None
+    overlay = FC.expand_person_to_overlay(rect)
+    assert overlay.w > rect.w and overlay.h > rect.h
+    moving = [[(0.05 + i * 0.04, 0.48, 0.16, 0.42)] for i in range(12)]
+    assert FC.stable_person_cluster(moving) is None
+    huge = [[(0.2, 0.05, 0.55, 0.88)] for _ in range(12)]
+    assert FC.stable_person_cluster(huge) is None
 
 
 def test_rect_crop_grows_to_aspect_and_clamps():
@@ -298,6 +327,61 @@ def test_diarization_capability_requires_token():
     assert _settings(has_whisperx=True, hf_token="tok").capability_report()["diarization"] is True
     assert _settings(has_whisperx=True, hf_token=None).capability_report()["diarization"] is False
     assert _settings(has_whisperx=False, hf_token="tok").capability_report()["diarization"] is False
+    assert _settings(has_whisperx=True, hf_token="tok").capability_report()["diarization_model"] == "pyannote/speaker-diarization-community-1"
+    assert _settings(has_whisperx=True, hf_token=None).capability_report()["diarization_model"] is None
+
+
+def test_whisperx_diarization_constructor_supports_new_and_old_token_api():
+    from app.providers import transcribe as T
+
+    old_get_settings, old_pipe = T.get_settings, T._wx_diarize
+    old_parent = sys.modules.get("whisperx")
+    old_child = sys.modules.get("whisperx.diarize")
+    calls = []
+
+    parent = types.ModuleType("whisperx")
+    parent.__path__ = []
+    child = types.ModuleType("whisperx.diarize")
+
+    class NewPipeline:
+        def __init__(self, **kw):
+            calls.append(kw)
+
+    child.DiarizationPipeline = NewPipeline
+    sys.modules["whisperx"] = parent
+    sys.modules["whisperx.diarize"] = child
+    T.get_settings = lambda: _settings(
+        has_whisperx=True, hf_token="tok", device="cuda",
+        diarization_model="pyannote/test-model")
+    T._wx_diarize = None
+    try:
+        assert isinstance(T._diarization_pipeline(), NewPipeline)
+        assert calls[-1] == {
+            "model_name": "pyannote/test-model",
+            "token": "tok",
+            "device": "cuda",
+        }
+
+        class OldPipeline:
+            def __init__(self, **kw):
+                if "token" in kw:
+                    raise TypeError("old whisperX")
+                calls.append(kw)
+
+        child.DiarizationPipeline = OldPipeline
+        T._wx_diarize = None
+        assert isinstance(T._diarization_pipeline(), OldPipeline)
+        assert calls[-1] == {"use_auth_token": "tok", "device": "cuda"}
+    finally:
+        T.get_settings, T._wx_diarize = old_get_settings, old_pipe
+        if old_parent is None:
+            sys.modules.pop("whisperx", None)
+        else:
+            sys.modules["whisperx"] = old_parent
+        if old_child is None:
+            sys.modules.pop("whisperx.diarize", None)
+        else:
+            sys.modules["whisperx.diarize"] = old_child
 
 
 # --------------------------------------------------------------------------- #
@@ -328,6 +412,15 @@ def test_encoder_args_switch():
     gpu = _settings(has_nvenc=True, has_nvidia=True).video_encoder_args()
     assert "libx264" in cpu
     assert "h264_nvenc" in gpu
+
+
+def test_power_mode_scales_local_engine():
+    s = _settings(has_cuda=True, vram_mb=16000, device="cuda",
+                  whisper_batch_size=8, render_workers=2)
+    assert s.whisper_batch_for("max_gpu") >= 16
+    assert s.render_workers_for("max_gpu") >= s.render_workers
+    assert s.vlm_options_for("quality")["n_frames"] > s.vlm_options_for("balanced")["n_frames"]
+    assert s.capability_report()["recommended_power_mode"] == "max_gpu"
 
 
 def test_av1_codec_opt_in_with_safe_fallbacks():
@@ -709,6 +802,8 @@ def test_gameplay_hashtags_lead_with_the_game():
 def test_ollama_model_autopick_prefers_strongest():
     from app.providers import llm
     assert llm._resolve_model(["llama3.2:latest", "qwen3:8b"]) == "qwen3:8b"
+    assert llm._resolve_model(["qwen3:8b", "qwen3:14b"]) == "qwen3:14b"
+    assert llm._resolve_model(["qwen2.5vl:7b", "qwen3:8b"]) == "qwen3:8b"
     assert llm._resolve_model(["llama3.2:latest"]) == "llama3.2:latest"
     assert llm._resolve_model(["some-custom:7b"]) == "some-custom:7b"  # anything > nothing
     assert llm._resolve_model([]) is None
@@ -760,8 +855,12 @@ def test_clip_aspect_override_falls_back_to_project_dims():
 
 def test_llm_titles_safe_when_unavailable():
     from app.providers import llm
-    # no Ollama in CI -> must return {} fast instead of raising/hanging
-    assert llm.suggest_titles(["some transcript"], lang="en", budget=2.0) == {}
+    old_available = llm.available
+    try:
+        llm.available = lambda: False
+        assert llm.suggest_titles(["some transcript"], lang="en", budget=2.0) == {}
+    finally:
+        llm.available = old_available
 
 
 # --------------------------------------------------------------------------- #
@@ -954,6 +1053,24 @@ def test_corroboration_boosts_multi_signal_clips():
     assert c2.score == 70
 
 
+def test_custom_event_padding_and_clap_clips():
+    from app.media.ffmpeg import MediaInfo
+    from app.providers.audio_events import AudioEvent
+    from app.providers.detect_gameplay import (_audio_event_clips, _timing_window,
+                                               get_profile)
+    info = MediaInfo(duration=200, width=1920, height=1080, fps=30,
+                     has_audio=True, has_video=True, codec=None)
+    st = ImportSettings(min_len=10, max_len=40, lead_seconds=7, tail_seconds=9)
+    lead, tail = _timing_window(st, get_profile("generic"))
+    assert (lead, tail) == (7.0, 9.0)
+    clips = _audio_event_clips(
+        [AudioEvent(t=80, label="crowd_cheering", confidence=0.8,
+                    detail="CLAP heard crowd cheering")],
+        info, st, lead=lead, tail=tail)
+    assert clips and clips[0].start == 73 and clips[0].end == 89
+    assert clips[0].features["audio_event"] == 0.8
+
+
 def test_cue_learning_pending_labels():
     from app.cue_learning import pending_labels
     from app.providers.detect_ocr import OcrEvent
@@ -1033,6 +1150,99 @@ def test_optional_powerups_off_by_default_in_ci():
     assert r["reframe_engine"] in ("haar", "yolo", "mediapipe")
 
 
+def test_active_speaker_not_advertised_until_adapter_exists():
+    from app import config
+
+    old_env = os.environ.pop("CLIPFORGE_ASD_DIR", None)
+    try:
+        assert config._detect_asd_adapter() is False
+    finally:
+        if old_env is not None:
+            os.environ["CLIPFORGE_ASD_DIR"] = old_env
+
+
+def test_active_speaker_adapter_detects_valid_checkout_fixture():
+    from app import config
+
+    old_env = os.environ.get("CLIPFORGE_ASD_DIR")
+    old_has_module = config._has_module
+    old_cuda = config._torch_cuda_available
+    with tempfile.TemporaryDirectory() as td:
+        root = os.path.join(td, "LR-ASD")
+        os.makedirs(os.path.join(root, "model"), exist_ok=True)
+        os.makedirs(os.path.join(root, "weight"), exist_ok=True)
+        os.makedirs(os.path.join(root, "model", "faceDetector", "s3fd"), exist_ok=True)
+        for rel in ("ASD.py", "Columbia_test.py", os.path.join("model", "Model.py")):
+            with open(os.path.join(root, rel), "w", encoding="utf-8") as f:
+                f.write("# fixture\n")
+        with open(os.path.join(root, "weight", "pretrain_AVA.model"), "wb") as f:
+            f.write(b"x" * 100_001)
+        with open(os.path.join(root, "model", "faceDetector", "s3fd", "sfd_face.pth"), "wb") as f:
+            f.write(b"x" * 100_001)
+        os.environ["CLIPFORGE_ASD_DIR"] = root
+        config._has_module = lambda _name: True
+        config._torch_cuda_available = lambda: True
+        try:
+            assert config._detect_asd_adapter() is True
+        finally:
+            config._has_module = old_has_module
+            config._torch_cuda_available = old_cuda
+            if old_env is None:
+                os.environ.pop("CLIPFORGE_ASD_DIR", None)
+            else:
+                os.environ["CLIPFORGE_ASD_DIR"] = old_env
+
+
+def test_lr_asd_script_compatibility_accepts_patched_scenedetect_fallback():
+    from pathlib import Path
+    from app import config
+
+    with tempfile.TemporaryDirectory() as td:
+        root = os.path.join(td, "LR-ASD")
+        os.makedirs(root, exist_ok=True)
+        script = os.path.join(root, "Columbia_test.py")
+        with open(script, "w", encoding="utf-8") as f:
+            f.write("from scenedetect.video_manager import VideoManager\n")
+        assert config._lr_asd_script_compatible(Path(root)) is False
+        with open(script, "w", encoding="utf-8") as f:
+            f.write("from scenedetect.video_manager import VideoManager\n"
+                    "from scenedetect import open_video\n"
+                    "VideoManager = None\n")
+        assert config._lr_asd_script_compatible(Path(root)) is True
+
+
+def test_lr_asd_parser_selects_highest_speaking_track():
+    from app.providers import active_speaker as AS
+
+    tracks = [
+        {"track": {"frame": [0, 1, 2], "bbox": [[100, 0, 200, 100],
+                                                [110, 0, 210, 100],
+                                                [120, 0, 220, 100]]}},
+        {"track": {"frame": [0, 1, 2], "bbox": [[700, 0, 800, 100],
+                                                [710, 0, 810, 100],
+                                                [720, 0, 820, 100]]}},
+    ]
+    centers = AS._centers_from_tracks(
+        tracks, [[-0.2, 0.8, 0.7], [1.0, -0.1, -0.2]], frame_width=1000, fps=25.0)
+    assert centers == [(0.0, 0.75), (0.04, 0.16), (0.08, 0.17)]
+    assert AS._centers_from_tracks(tracks, [[-1, -1, -1], [-0.5, -0.2, -0.1]], 1000) is None
+
+
+def test_reframe_uses_lr_asd_centers_before_face_fallback():
+    from app.pipeline import reframe as RF
+    from app.providers import active_speaker as AS
+
+    old_settings, old_track = RF.get_settings, AS.track_centers
+    RF.get_settings = lambda: _settings(has_asd=True, has_opencv=False)
+    AS.track_centers = lambda *_args: [(0.0, 0.8), (0.4, 0.82), (0.8, 0.84)]
+    try:
+        rf = RF.compute_reframe("unused.mp4", 10.0, 11.0, 16 / 9)
+    finally:
+        RF.get_settings, AS.track_centers = old_settings, old_track
+    assert rf.tracked is True
+    assert rf.keyframes[0].cx > 0.7
+
+
 def test_audio_event_reduce_and_bonus():
     from app.models import ScoreFactor
     from app.providers import audio_events as AE
@@ -1048,6 +1258,13 @@ def test_audio_event_reduce_and_bonus():
     ns, nf = AE.apply_event_bonus(60, base, 1.0, "crowd cheering", max_bonus=10.0)
     assert ns == 70 and nf[0].weight == 10.0 and "cheering" in nf[0].label.lower()
     assert AE.apply_event_bonus(60, base, 0.0, "x") == (60, base)  # quiet -> no-op
+    clap = AE.reduce_clap_similarities({"crowd cheering": 0.42, "impact": 0.12})
+    assert clap is not None and clap[1] == "crowd cheering" and clap[0] > 0.5
+    assert AE.reduce_clap_similarities({"crowd cheering": 0.1}) is None
+    assert AE.reduce_clap_window(
+        {"crowd cheering": 0.42}, {"lobby music": 0.48}) is None
+    gated = AE.reduce_clap_window({"crowd cheering": 0.42}, {"lobby music": 0.24})
+    assert gated is not None and gated[1] == "crowd cheering"
 
 
 def test_vlm_keyframe_times_are_inside_span():
@@ -1056,6 +1273,41 @@ def test_vlm_keyframe_times_are_inside_span():
     assert len(ts) == 3 and all(10.0 < t < 22.0 for t in ts)
     assert ts == sorted(ts)
     assert keyframe_times(5.0, 5.0) == [5.0]  # zero-length span is safe
+
+
+def test_vlm_model_autopick_accepts_hyphenated_qwen_name():
+    from app.providers import vlm
+    assert vlm._resolve_model(["qwen2.5-vl:7b", "llava:latest"]) == "qwen2.5-vl:7b"
+    assert vlm._resolve_model(["qwen2.5vl:7b", "qwen2.5vl:32b"]) == "qwen2.5vl:32b"
+
+
+def test_vlm_negative_reason_caps_score():
+    from app.providers import vlm
+    assert vlm._parse("SCORE: 88 | REASON: loading screen")[0] <= 0.35
+
+
+def test_orchestrator_passes_source_path_to_vlm_scorer():
+    from app.pipeline import orchestrator as O
+    from app.providers import vlm
+
+    old_available, old_score_visuals = vlm.available, vlm.score_visuals
+    calls = []
+
+    def fake_score_visuals(src_path, spans, *, budget=45.0, max_workers=2,
+                           n_frames=3, timeout=30.0):
+        calls.append((src_path, spans, budget, max_workers, n_frames, timeout))
+        return {0: (0.8, "strong frames")}
+
+    try:
+        vlm.available = lambda: True
+        vlm.score_visuals = fake_score_visuals
+        out = O._score_visual_reads("source.mp4", [Clip(start=1.0, end=2.5)])
+    finally:
+        vlm.available = old_available
+        vlm.score_visuals = old_score_visuals
+
+    assert out == {0: (0.8, "strong frames")}
+    assert calls == [("source.mp4", [(1.0, 2.5)], 45.0, 2, 3, 30.0)]
 
 
 if __name__ == "__main__":

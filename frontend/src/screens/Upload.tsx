@@ -13,6 +13,12 @@ const PLATFORMS = [
   { id: "generic", label: "Any" },
 ];
 
+const POWER_MODES = [
+  { id: "balanced", label: "Balanced", hint: "Fast default; keeps the PC responsive" },
+  { id: "max_gpu", label: "Max GPU", hint: "Uses larger batches, more render workers, and bigger AI vision budget" },
+  { id: "quality", label: "Quality", hint: "Slower, more visual context for AI scoring" },
+];
+
 const LENGTHS = [
   { label: "15–30s", min: 15, max: 30 },
   { label: "20–45s", min: 20, max: 45 },
@@ -27,6 +33,7 @@ export default function Upload({ health }: { health: Health | null }) {
   const [file, setFile] = useState<File | null>(null);
   const [url, setUrl] = useState("");
   const [platform, setPlatform] = useState("tiktok");
+  const [powerMode, setPowerMode] = useState("balanced");
   const [lenIdx, setLenIdx] = useState(3);
   const [target, setTarget] = useState(10);
   const [styleId, setStyleId] = useState("bold-pop");
@@ -39,6 +46,13 @@ export default function Upload({ health }: { health: Health | null }) {
   const [denoise, setDenoise] = useState(false);
   const [motion, setMotion] = useState("none");
   const [facecamLayout, setFacecamLayout] = useState("auto");
+  const [useOcr, setUseOcr] = useState(true);
+  const [useVlm, setUseVlm] = useState(true);
+  const [useAudioEvents, setUseAudioEvents] = useState(true);
+  const [cueLearning, setCueLearning] = useState(true);
+  const [autoLength, setAutoLength] = useState(false);
+  const [leadSeconds, setLeadSeconds] = useState(16);
+  const [tailSeconds, setTailSeconds] = useState(20);
   const [styles, setStyles] = useState<StyleTemplate[]>([]);
   const [cues, setCues] = useState<CuesStatus | null>(null);
   const [busy, setBusy] = useState(false);
@@ -58,6 +72,11 @@ export default function Upload({ health }: { health: Health | null }) {
     api.cues().then(setCues).catch(() => {});
     refreshProjects();
   }, []);
+
+  useEffect(() => {
+    const recommended = health?.capabilities.recommended_power_mode;
+    if (recommended) setPowerMode(recommended);
+  }, [health?.capabilities.recommended_power_mode]);
 
   const refreshProjects = () =>
     api.listProjects().then(setProjects).catch(() => {});
@@ -86,6 +105,7 @@ export default function Upload({ health }: { health: Health | null }) {
         file: file ?? undefined,
         url: url.trim() || undefined,
         platform,
+        power_mode: powerMode,
         min_len: len.min,
         max_len: len.max,
         target_clips: target,
@@ -99,6 +119,13 @@ export default function Upload({ health }: { health: Health | null }) {
         denoise,
         motion,
         facecam_layout: facecamLayout,
+        use_ocr: useOcr,
+        use_vlm: useVlm,
+        use_audio_events: useAudioEvents,
+        cue_learning: cueLearning,
+        auto_length: autoLength,
+        lead_seconds: leadSeconds,
+        tail_seconds: tailSeconds,
         onProgress: setPct,
       });
       nav(`/p/${project.id}`);
@@ -115,6 +142,21 @@ export default function Upload({ health }: { health: Health | null }) {
   };
 
   const urlDisabled = health ? !health.capabilities.url_import : false;
+  const caps = health?.capabilities;
+  const status = {
+    captions: caps?.transcription && caps.transcription !== "synthetic" ? caps.transcription : "synthetic",
+    cleanVoice: caps?.denoise ? "Ready" : "Unavailable",
+    ocr: caps?.ocr ? String(caps.ocr) : "Unavailable",
+    vlm: caps?.vlm ? caps.vlm_model ?? "Ready" : "Unavailable",
+    audio: caps?.audio_events
+      ? caps.clap_audio
+        ? "CLAP"
+        : caps.panns_audio
+          ? "PANNs"
+          : "Ready"
+      : "Unavailable",
+    cues: "Ready",
+  };
 
   return (
     <div className="container">
@@ -188,6 +230,24 @@ export default function Upload({ health }: { health: Health | null }) {
       </div>
 
       <div className="settings-grid">
+        <div className="field wide">
+          <label>Power mode</label>
+          <div className="seg power-seg">
+            {POWER_MODES.map((m) => (
+              <button
+                key={m.id}
+                className={powerMode === m.id ? "on" : ""}
+                onClick={() => setPowerMode(m.id)}
+                title={m.hint}
+              >
+                <span>{m.label}</span>
+                {health?.capabilities.recommended_power_mode === m.id && (
+                  <small>Recommended</small>
+                )}
+              </button>
+            ))}
+          </div>
+        </div>
         <div className="field">
           <label>Content type</label>
           <div className="seg">
@@ -253,35 +313,89 @@ export default function Upload({ health }: { health: Health | null }) {
             </select>
           </div>
         )}
+        <div className="field wide">
+          <label>Detection switches</label>
+          <div className="toggle-stack compact capability-toggles">
+            <button
+              className={"toggle" + (useOcr ? " on" : "")}
+              onClick={() => setUseOcr((v) => !v)}
+              title="Read scoreboards, killfeed, victory text, and other on-screen cues"
+            >
+              <span>OCR</span>
+              <small>{status.ocr}</small>
+              <i>{useOcr ? "On" : "Off"}</i>
+            </button>
+            <button
+              className={"toggle" + (useVlm ? " on" : "")}
+              onClick={() => setUseVlm((v) => !v)}
+              title="Use the local vision model to score action, expression, clarity, and boring frames"
+            >
+              <span>AI vision</span>
+              <small>{status.vlm}</small>
+              <i>{useVlm ? "On" : "Off"}</i>
+            </button>
+            <button
+              className={"toggle" + (useAudioEvents ? " on" : "")}
+              onClick={() => setUseAudioEvents((v) => !v)}
+              title="Detect cheers, laughs, impact sounds, and CLAP zero-shot audio cues"
+            >
+              <span>Audio events</span>
+              <small>{status.audio}</small>
+              <i>{useAudioEvents ? "On" : "Off"}</i>
+            </button>
+            <button
+              className={"toggle" + (cueLearning ? " on" : "")}
+              onClick={() => setCueLearning((v) => !v)}
+              title="Learn new reusable audio cues from OCR hits while keeping your cue packs"
+            >
+              <span>Cue learning</span>
+              <small>{status.cues}</small>
+              <i>{cueLearning ? "On" : "Off"}</i>
+            </button>
+          </div>
+        </div>
         <div className="field">
           <label>Captions</label>
-          <label className="row tiny" style={{ gap: 8, cursor: "pointer", paddingTop: 6 }}>
-            <input type="checkbox" checked={burnCaptions}
-              onChange={(e) => setBurnCaptions(e.target.checked)} />
-            Burn captions into video
-          </label>
+          <button
+            className={"toggle" + (burnCaptions ? " on" : "")}
+            onClick={() => setBurnCaptions((v) => !v)}
+            title="Burn captions into the exported clips"
+          >
+            <span>Burn captions</span>
+            <small>{status.captions}</small>
+            <i>{burnCaptions ? "On" : "Off"}</i>
+          </button>
           <span className="muted tiny">Off = clean clips for Premiere/Resolve</span>
         </div>
         <div className="field">
           <label>Pacing & style</label>
-          <label className="row tiny" style={{ gap: 8, cursor: "pointer", paddingTop: 6 }}
-            title="Cuts out pauses/dead air inside talking clips (social-style jump cuts)">
-            <input type="checkbox" checked={tighten}
-              onChange={(e) => setTighten(e.target.checked)} />
-            Remove silences (jump cuts)
-          </label>
-          <label className="row tiny" style={{ gap: 8, cursor: "pointer", paddingTop: 4 }}
-            title="Slow push-in across each clip for a more dynamic, edited feel">
-            <input type="checkbox" checked={motion === "push"}
-              onChange={(e) => setMotion(e.target.checked ? "push" : "none")} />
-            Slow push-in (zoom)
-          </label>
-          <label className="row tiny" style={{ gap: 8, cursor: "pointer", paddingTop: 4 }}
-            title="Isolate the voice from background music/game audio (Demucs) so speech and captions sound studio-clean. Needs the Demucs power-up installed.">
-            <input type="checkbox" checked={denoise}
-              onChange={(e) => setDenoise(e.target.checked)} />
-            Clean voice (remove background audio)
-          </label>
+          <div className="toggle-stack">
+            <button
+              className={"toggle" + (tighten ? " on" : "")}
+              onClick={() => setTighten((v) => !v)}
+              title="Cuts out pauses/dead air inside talking clips"
+            >
+              <span>Jump cuts</span>
+              <i>{tighten ? "On" : "Off"}</i>
+            </button>
+            <button
+              className={"toggle" + (motion === "push" ? " on" : "")}
+              onClick={() => setMotion((v) => (v === "push" ? "none" : "push"))}
+              title="Slow push-in across each clip"
+            >
+              <span>Slow push-in</span>
+              <i>{motion === "push" ? "On" : "Off"}</i>
+            </button>
+            <button
+              className={"toggle" + (denoise ? " on" : "")}
+              onClick={() => setDenoise((v) => !v)}
+              title="Isolate the voice from background music/game audio. Needs Demucs installed."
+            >
+              <span>Clean voice</span>
+              <small>{status.cleanVoice}</small>
+              <i>{denoise ? "On" : "Off"}</i>
+            </button>
+          </div>
         </div>
         <div className="field">
           <label>Optimize for</label>
@@ -312,9 +426,19 @@ export default function Upload({ health }: { health: Health | null }) {
         </div>
         <div className="field">
           <label>Clip length</label>
+          <button
+            className={"toggle" + (autoLength ? " on" : "")}
+            onClick={() => setAutoLength((v) => !v)}
+            title="Let ClipForge choose the clip length range for this platform and content"
+            style={{ marginBottom: 8 }}
+          >
+            <span>Auto length</span>
+            <i>{autoLength ? "On" : "Off"}</i>
+          </button>
           <select
             className="input"
             value={lenIdx}
+            disabled={autoLength}
             onChange={(e) => setLenIdx(Number(e.target.value))}
           >
             {LENGTHS.map((l, i) => (
@@ -324,6 +448,35 @@ export default function Upload({ health }: { health: Health | null }) {
             ))}
           </select>
         </div>
+        {contentType !== "talking" && (
+          <div className="field wide timing-controls">
+            <label>Event padding</label>
+            <div className="range-label">
+              <span>Seconds before event</span>
+              <b>{leadSeconds}s</b>
+            </div>
+            <input
+              type="range"
+              min={0}
+              max={30}
+              step={1}
+              value={leadSeconds}
+              onChange={(e) => setLeadSeconds(Number(e.target.value))}
+            />
+            <div className="range-label">
+              <span>Seconds after event</span>
+              <b>{tailSeconds}s</b>
+            </div>
+            <input
+              type="range"
+              min={2}
+              max={30}
+              step={1}
+              value={tailSeconds}
+              onChange={(e) => setTailSeconds(Number(e.target.value))}
+            />
+          </div>
+        )}
         <div className="field">
           <label>Max clips: {target}</label>
           <input

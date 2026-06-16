@@ -4,7 +4,9 @@ from __future__ import annotations
 import logging
 import os
 import shutil
+import subprocess
 import tempfile
+import time
 import zipfile
 from pathlib import Path
 
@@ -21,8 +23,8 @@ from starlette.background import BackgroundTask
 
 from .. import store
 from ..config import get_settings
-from ..models import (ASPECTS, ContentType, ImportSettings, Platform, Project,
-                      ProjectStatus, ProjectSummary)
+from ..models import (ASPECTS, ContentType, ImportSettings, Platform, PowerMode,
+                      Project, ProjectStatus, ProjectSummary)
 from ..pipeline import ingest
 from ..pipeline.captions import build_srt
 from ..pipeline.orchestrator import engine
@@ -30,6 +32,7 @@ from ..providers.detect_gameplay import KNOWN_PROFILES
 
 log = logging.getLogger("clipforge.api")
 router = APIRouter(prefix="/api/projects", tags=["projects"])
+_SYSTEM_SAMPLE: tuple[float, dict] | None = None
 
 
 def _safe_name(s: str) -> str:
@@ -37,11 +40,80 @@ def _safe_name(s: str) -> str:
     return (keep or "clip")[:60]
 
 
+def _auto_length_range(platform: Platform, content_type: ContentType) -> tuple[float, float]:
+    """Short-form defaults when Auto length is enabled."""
+    if content_type == ContentType.gameplay:
+        return 12.0, 35.0
+    if platform in (Platform.tiktok, Platform.reels):
+        return 12.0, 42.0
+    if platform == Platform.shorts:
+        return 18.0, 55.0
+    return 15.0, 60.0
+
+
+def _clamp_lengths(min_len: float, max_len: float) -> tuple[float, float]:
+    return max(3.0, min(min_len, max_len)), max(min_len, max_len)
+
+
+def _clamp_pad(v: float | None) -> float | None:
+    if v is None:
+        return None
+    return round(max(0.0, min(float(v), 60.0)), 3)
+
+
+def _system_usage() -> dict:
+    """Best-effort CPU/GPU use for the live processing UI.
+
+    All fields are nullable so a missing psutil/nvidia-smi never breaks polling.
+    Cached briefly because the status endpoint is called often while rendering.
+    """
+    global _SYSTEM_SAMPLE
+    now = time.time()
+    if _SYSTEM_SAMPLE and now - _SYSTEM_SAMPLE[0] < 2.0:
+        return _SYSTEM_SAMPLE[1]
+
+    sample = {
+        "cpu_pct": None,
+        "gpu_pct": None,
+        "gpu_mem_mb": None,
+        "gpu_mem_total_mb": None,
+    }
+    try:
+        import psutil  # type: ignore
+
+        sample["cpu_pct"] = float(psutil.cpu_percent(interval=None))
+    except Exception:
+        pass
+    try:
+        proc = subprocess.run(
+            [
+                "nvidia-smi",
+                "--query-gpu=utilization.gpu,memory.used,memory.total",
+                "--format=csv,noheader,nounits",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=0.8,
+        )
+        if proc.returncode == 0 and proc.stdout.strip():
+            parts = [p.strip() for p in proc.stdout.splitlines()[0].split(",")]
+            if len(parts) >= 3:
+                sample["gpu_pct"] = float(parts[0])
+                sample["gpu_mem_mb"] = float(parts[1])
+                sample["gpu_mem_total_mb"] = float(parts[2])
+    except Exception:
+        pass
+
+    _SYSTEM_SAMPLE = (now, sample)
+    return sample
+
+
 @router.post("")
 async def create_project(
     name: str = Form("Untitled"),
     url: str | None = Form(None),
     platform: str = Form("generic"),
+    power_mode: str = Form("balanced"),
     min_len: float = Form(15.0),
     max_len: float = Form(60.0),
     target_clips: int = Form(10),
@@ -55,6 +127,13 @@ async def create_project(
     denoise: bool = Form(False),
     motion: str = Form("none"),
     facecam_layout: str = Form("auto"),
+    use_ocr: bool = Form(True),
+    use_vlm: bool = Form(True),
+    use_audio_events: bool = Form(True),
+    cue_learning: bool = Form(True),
+    auto_length: bool = Form(False),
+    lead_seconds: float | None = Form(None),
+    tail_seconds: float | None = Form(None),
     file: UploadFile | None = File(None),
 ) -> Project:
     if not file and not url:
@@ -63,15 +142,22 @@ async def create_project(
         plat = Platform(platform)
     except ValueError:
         plat = Platform.generic
+    try:
+        pmode = PowerMode(power_mode)
+    except ValueError:
+        pmode = PowerMode.balanced
 
     try:
         ctype = ContentType(content_type)
     except ValueError:
         ctype = ContentType.auto
+    clean_min, clean_max = (_auto_length_range(plat, ctype) if auto_length
+                            else _clamp_lengths(min_len, max_len))
     settings = ImportSettings(
         platform=plat,
-        min_len=max(3.0, min(min_len, max_len)),
-        max_len=max(min_len, max_len),
+        power_mode=pmode,
+        min_len=clean_min,
+        max_len=clean_max,
         target_clips=max(1, min(target_clips, 30)),
         default_style_id=style_id,
         language=language if language in ("auto", "en", "de") else "de",
@@ -85,6 +171,13 @@ async def create_project(
         facecam_layout=(facecam_layout
                         if facecam_layout in ("auto", "off", "split", "framed")
                         else "auto"),
+        use_ocr=use_ocr,
+        use_vlm=use_vlm,
+        use_audio_events=use_audio_events,
+        cue_learning=cue_learning,
+        auto_length=auto_length,
+        lead_seconds=_clamp_pad(lead_seconds),
+        tail_seconds=_clamp_pad(tail_seconds),
     )
     project = Project(name=name or "Untitled", settings=settings,
                       status=ProjectStatus.created)
@@ -163,6 +256,11 @@ def _status_payload(project_id: str) -> dict | None:
         "error": p.error,
         "warnings": p.warnings,
         "content_type": p.content_type,
+        "settings": {
+            "power_mode": p.settings.power_mode,
+            "aspect": p.settings.aspect,
+        },
+        "system": _system_usage(),
         "progress": p.progress.model_dump(),
         "clips": [
             {
@@ -226,6 +324,7 @@ def delete_project(project_id: str) -> dict:
 class Reprocess(BaseModel):
     """Optional setting overrides applied before re-running the pipeline."""
     platform: str | None = None
+    power_mode: str | None = None
     content_type: str | None = None
     aspect: str | None = None
     min_len: float | None = None
@@ -236,8 +335,16 @@ class Reprocess(BaseModel):
     burn_captions: bool | None = None
     game_profile: str | None = None
     tighten: bool | None = None
+    denoise: bool | None = None
     motion: str | None = None
     facecam_layout: str | None = None
+    use_ocr: bool | None = None
+    use_vlm: bool | None = None
+    use_audio_events: bool | None = None
+    cue_learning: bool | None = None
+    auto_length: bool | None = None
+    lead_seconds: float | None = None
+    tail_seconds: float | None = None
 
 
 @router.post("/{project_id}/reprocess", response_model=Project)
@@ -258,6 +365,11 @@ def reprocess(project_id: str, body: Reprocess | None = None) -> Project:
                 s.platform = Platform(body.platform)
             except ValueError:
                 pass
+        if body.power_mode:
+            try:
+                s.power_mode = PowerMode(body.power_mode)
+            except ValueError:
+                pass
         if body.content_type:
             try:
                 s.content_type = ContentType(body.content_type)
@@ -275,14 +387,32 @@ def reprocess(project_id: str, body: Reprocess | None = None) -> Project:
             s.burn_captions = body.burn_captions
         if body.tighten is not None:
             s.tighten = body.tighten
+        if body.denoise is not None:
+            s.denoise = body.denoise
         if body.motion in ("none", "push"):
             s.motion = body.motion
         if body.facecam_layout in ("auto", "off", "split", "framed"):
             s.facecam_layout = body.facecam_layout
+        if body.use_ocr is not None:
+            s.use_ocr = body.use_ocr
+        if body.use_vlm is not None:
+            s.use_vlm = body.use_vlm
+        if body.use_audio_events is not None:
+            s.use_audio_events = body.use_audio_events
+        if body.cue_learning is not None:
+            s.cue_learning = body.cue_learning
+        if body.auto_length is not None:
+            s.auto_length = body.auto_length
+        if "lead_seconds" in body.model_fields_set:
+            s.lead_seconds = _clamp_pad(body.lead_seconds)
+        if "tail_seconds" in body.model_fields_set:
+            s.tail_seconds = _clamp_pad(body.tail_seconds)
         if body.min_len is not None and body.max_len is not None:
-            s.min_len, s.max_len = max(3.0, min(body.min_len, body.max_len)), max(body.min_len, body.max_len)
+            s.min_len, s.max_len = _clamp_lengths(body.min_len, body.max_len)
         if body.target_clips is not None:
             s.target_clips = max(1, min(body.target_clips, 30))
+        if s.auto_length:
+            s.min_len, s.max_len = _auto_length_range(s.platform, s.content_type)
 
     # Drop previous outputs (files + records); the source media is kept.
     pdir = get_settings().media_dir / project_id

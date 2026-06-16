@@ -19,6 +19,7 @@ from ..config import get_settings
 from ..media import ffmpeg
 from ..media.ffmpeg import MediaInfo
 from ..models import DetectedEvent, ImportSettings, ScoreFactor
+from . import audio_events as audio_events_mod
 from . import detect_cues, detect_ocr
 
 log = logging.getLogger("clipforge.gameplay")
@@ -186,6 +187,25 @@ def _pick_peaks(times, rms, *, settings: ImportSettings, profile: dict):
     return chosen, thr, floor
 
 
+def _timing_window(settings: ImportSettings, profile: dict) -> tuple[float, float]:
+    """Seconds before/after the event peak for gameplay clips."""
+    target = (settings.min_len + settings.max_len) / 2.0
+    default_lead = target * profile["lead_frac"]
+    default_tail = target - default_lead
+    lead = default_lead if settings.lead_seconds is None else float(settings.lead_seconds)
+    tail = default_tail if settings.tail_seconds is None else float(settings.tail_seconds)
+    lead = max(0.0, lead)
+    tail = max(0.0, tail)
+    if lead + tail <= 0.2:
+        lead, tail = default_lead, default_tail
+    if lead + tail > settings.max_len:
+        scale = settings.max_len / max(lead + tail, 1e-6)
+        lead, tail = lead * scale, tail * scale
+    if lead + tail < settings.min_len:
+        tail = max(tail, settings.min_len - lead)
+    return lead, tail
+
+
 def detect_gameplay(src_path: str, info: MediaInfo, settings: ImportSettings,
                     *, weights: dict[str, float] | None = None,
                     wav_path: str | None = None,
@@ -207,21 +227,24 @@ def detect_gameplay(src_path: str, info: MediaInfo, settings: ImportSettings,
     # On-screen text markers (VICTORY / ELIMINATED / GOAL / kill-feed). Cheap
     # no-op when no OCR backend is installed; never blocks the audio path.
     ocr_events: list = []
-    try:
-        ocr_events = detect_ocr.find_text_events(src_path, info, settings)
-    except Exception as e:
-        log.warning("ocr detection failed: %s", e)
+    if settings.use_ocr:
+        try:
+            ocr_events = detect_ocr.find_text_events(src_path, info, settings)
+        except Exception as e:
+            log.warning("ocr detection failed: %s", e)
 
     if not info.has_audio:
         clips = _uniform_fallback(info, settings)
         ocr_clips = _ocr_clips(ocr_events, info, settings)
-        _record_events(events_out, [], ocr_events)
+        _record_events(events_out, [], ocr_events, [])
         return _merge(ocr_clips, clips, settings.target_clips) if ocr_clips else clips
 
     cue_events: list = []
+    audio_window_events: list = []
     if wav_path is not None:
         times, rms = _load_rms(wav_path)
         cue_events = _cue_events(wav_path, settings)
+        audio_window_events = _audio_events(wav_path, info.duration, settings)
     else:
         with tempfile.TemporaryDirectory() as tmp:
             wav = Path(tmp) / "a.wav"
@@ -232,23 +255,30 @@ def detect_gameplay(src_path: str, info: MediaInfo, settings: ImportSettings,
                 return _uniform_fallback(info, settings)
             times, rms = _load_rms(str(wav))
             cue_events = _cue_events(str(wav), settings)
+            audio_window_events = _audio_events(str(wav), info.duration, settings)
 
-    _record_events(events_out, cue_events, ocr_events)
+    _record_events(events_out, cue_events, ocr_events, audio_window_events)
 
     if times is None:
         clips = _uniform_fallback(info, settings)
         ocr_clips = _ocr_clips(ocr_events, info, settings)
-        return _merge(ocr_clips, clips, settings.target_clips) if ocr_clips else clips
+        audio_clips = _audio_event_clips(audio_window_events, info, settings)
+        priority = ocr_clips + audio_clips
+        return _merge(priority, clips, settings.target_clips) if priority else clips
 
 
     profile = get_profile(settings.game_profile)
     peaks, thr, floor = _pick_peaks(times, rms, settings=settings, profile=profile)
     if not peaks:
-        return _uniform_fallback(info, settings)
+        lead, tail = _timing_window(settings, profile)
+        priority = (_cue_clips(cue_events, info, lead, tail, settings)
+                    + _ocr_clips(ocr_events, info, settings, lead=lead, tail=tail)
+                    + _audio_event_clips(audio_window_events, info, settings,
+                                         lead=lead, tail=tail))
+        fallback = _uniform_fallback(info, settings)
+        return _merge(priority, fallback, settings.target_clips) if priority else fallback
 
-    target = (settings.min_len + settings.max_len) / 2.0
-    lead = target * profile["lead_frac"]   # show the build-up, then the payoff
-    tail = target - lead
+    lead, tail = _timing_window(settings, profile)
     hop = float(times[1] - times[0]) if len(times) > 1 else 0.1
     pre_n = max(int(2.0 / hop), 1)         # ~2s window before the peak
 
@@ -293,16 +323,18 @@ def detect_gameplay(src_path: str, info: MediaInfo, settings: ImportSettings,
     # plain loudness peaks: a "VICTORY" banner or a kill ding is a sure thing.
     cue_clips = _cue_clips(cue_events, info, lead, tail, settings)
     ocr_clips = _ocr_clips(ocr_events, info, settings, lead=lead, tail=tail)
-    merged = _merge(cue_clips + ocr_clips, clips, settings.target_clips)
+    audio_clips = _audio_event_clips(audio_window_events, info, settings,
+                                     lead=lead, tail=tail)
+    merged = _merge(cue_clips + ocr_clips + audio_clips, clips, settings.target_clips)
     # Multimodal corroboration: a moment confirmed by BOTH the audio cue and the
     # on-screen text is the surest highlight there is — reward the overlap.
-    apply_corroboration(merged, cue_events, ocr_events)
+    apply_corroboration(merged, cue_events, ocr_events, audio_window_events)
     merged.sort(key=lambda c: c.start)
     return merged
 
 
 def apply_corroboration(clips: list["GameplayClip"], cue_events: list,
-                        ocr_events: list) -> None:
+                        ocr_events: list, audio_events: list | None = None) -> None:
     """Bump clips whose window is backed by more than one signal source.
 
     A kill *ding* + a kill-feed line, a goal *roar* + a rising score — when the
@@ -311,17 +343,21 @@ def apply_corroboration(clips: list["GameplayClip"], cue_events: list,
     for c in clips:
         cues = [e for e in cue_events if c.start <= e.t <= c.end]
         ocrs = [e for e in ocr_events if c.start <= e.t <= c.end]
-        if cues and ocrs:
-            bonus = min(12, 6 + 2 * (len(cues) + len(ocrs) - 2))
+        audios = [e for e in (audio_events or []) if c.start <= e.t <= c.end]
+        active = [name for name, evs in (("audio", cues), ("on-screen", ocrs),
+                                         ("CLAP", audios)) if evs]
+        if len(active) >= 2:
+            count = len(cues) + len(ocrs) + len(audios)
+            bonus = min(14, 6 + 2 * max(count - 2, 0) + 2 * (len(active) - 2))
             c.score = int(max(1, min(99, c.score + bonus)))
             c.features["corroborated"] = 1.0
             c.factors.insert(0, ScoreFactor(
-                label="Audio + on-screen confirm", weight=float(bonus),
+                label="Multimodal confirm", weight=float(bonus),
                 detail="Both the game sound and the on-screen text fire here — a sure highlight"))
 
 
 def _record_events(events_out: list | None, cue_events: list,
-                   ocr_events: list) -> None:
+                   ocr_events: list, audio_events: list | None = None) -> None:
     """Append matched cues + OCR hits to ``events_out`` as DetectedEvents."""
     if events_out is None:
         return
@@ -333,6 +369,10 @@ def _record_events(events_out: list | None, cue_events: list,
         events_out.append(DetectedEvent(
             t=round(float(e.t), 3), source="ocr", label=e.label,
             detail=e.text, confidence=round(float(e.confidence), 3)))
+    for e in audio_events or []:
+        events_out.append(DetectedEvent(
+            t=round(float(e.t), 3), source="audio", label=e.label,
+            detail=e.detail, confidence=round(float(e.confidence), 3)))
     events_out.sort(key=lambda e: e.t)
 
 
@@ -369,6 +409,39 @@ def _ocr_clips(events: list, info: MediaInfo, settings: ImportSettings, *,
     return out
 
 
+def _audio_event_clips(events: list, info: MediaInfo, settings: ImportSettings, *,
+                       lead: float | None = None,
+                       tail: float | None = None) -> list["GameplayClip"]:
+    if not events:
+        return []
+    target = (settings.min_len + settings.max_len) / 2.0
+    if lead is None:
+        lead = target * 0.55
+    if tail is None:
+        tail = max(target - lead, 2.0)
+    out: list[GameplayClip] = []
+    for e in events:
+        start = max(0.0, e.t - lead)
+        end = min(info.duration, e.t + tail)
+        if end - start < settings.min_len:
+            start = max(0.0, end - settings.min_len)
+        if end - start > settings.max_len:
+            start = max(0.0, end - settings.max_len)
+        score = int(round(max(1, min(99, 62 + e.confidence * 24))))
+        m, s = divmod(int(e.t), 60)
+        label = e.label.replace("_", " ").title()
+        out.append(GameplayClip(
+            start=round(start, 3), end=round(end, 3), score=score, peak_t=e.t,
+            title=f"{label} - {m}:{s:02d}",
+            features={"audio_event": round(e.confidence, 4), "intensity": 0.0,
+                      "sustain": 0.0, "transient": 0.0, "spikes": 0.0,
+                      "cue": 0.0},
+            factors=[ScoreFactor(
+                label="Zero-shot audio cue", weight=round(e.confidence * 24, 1),
+                detail=e.detail or "CLAP matched a high-energy audio cue")]))
+    return out
+
+
 def _cue_dir(profile_name: str) -> str:
     name = (profile_name or "generic").lower().replace(" ", "")
     return _CUE_DIR.get(name, name)
@@ -384,6 +457,22 @@ def _cue_events(wav_path: str, settings: ImportSettings) -> list:
         except Exception as e:
             log.warning("cue matching failed for %s: %s", sub, e)
     return events
+
+
+def _audio_events(wav_path: str, duration: float, settings: ImportSettings) -> list:
+    if not settings.use_audio_events:
+        return []
+    try:
+        mode = getattr(settings.power_mode, "value", str(settings.power_mode))
+        hop = 2.0 if mode in ("max_gpu", "quality") else 3.0
+        window = 5.0 if mode == "max_gpu" else 6.0
+        threshold = 0.32 if mode == "quality" else 0.35
+        return audio_events_mod.find_events(
+            wav_path, duration, window=window, hop=hop, threshold=threshold,
+            limit=max(settings.target_clips * 2, 8))
+    except Exception as e:
+        log.warning("CLAP audio event search failed: %s", e)
+        return []
 
 
 # Cue hits within this many seconds of each other chain into one streak —

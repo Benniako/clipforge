@@ -12,6 +12,13 @@ export default function ProcessingView({
   const p = status.progress;
   const stages = p.stages ?? [];
   const renderedClips = status.clips.filter((c) => c.thumb_url);
+  const sys = status.system;
+  const powerLabel =
+    status.settings?.power_mode === "max_gpu"
+      ? "Max GPU"
+      : status.settings?.power_mode === "quality"
+        ? "Quality"
+        : "Balanced";
 
   return (
     <div className="container">
@@ -24,6 +31,22 @@ export default function ProcessingView({
       <p className="muted">
         This runs in the background — it’s safe to close this tab. {p.message}
       </p>
+      <div className="row" style={{ marginTop: 10, flexWrap: "wrap" }}>
+        <span className="pill">{powerLabel}</span>
+        <span className="pill">{status.settings?.aspect ?? "9:16"}</span>
+        {sys?.cpu_pct !== null && sys?.cpu_pct !== undefined && (
+          <span className="pill">CPU {Math.round(sys.cpu_pct)}%</span>
+        )}
+        {sys?.gpu_pct !== null && sys?.gpu_pct !== undefined && (
+          <span className="pill">GPU {Math.round(sys.gpu_pct)}%</span>
+        )}
+        {sys?.gpu_mem_mb !== null && sys?.gpu_mem_mb !== undefined && sys?.gpu_mem_total_mb ? (
+          <span className="pill">
+            VRAM {(sys.gpu_mem_mb / 1024).toFixed(1)}/{(sys.gpu_mem_total_mb / 1024).toFixed(1)} GB
+          </span>
+        ) : null}
+        <span className="muted tiny">Live previews appear below as clips finish rendering.</span>
+      </div>
 
       <div className="panel" style={{ padding: 22, marginTop: 16 }}>
         <div className="bar" style={{ marginBottom: 6 }}>

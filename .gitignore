@@ -8,6 +8,8 @@ venv/
 
 # ClipForge runtime data (db, uploaded sources, generated clips)
 backend/data/
+work/
+yolo*.pt
 *.db
 *.db-wal
 *.db-shm
