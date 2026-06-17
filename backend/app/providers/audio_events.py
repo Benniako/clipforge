@@ -17,6 +17,7 @@ unit-tested without the model.
 from __future__ import annotations
 
 import logging
+import sys
 from dataclasses import dataclass
 
 from ..config import get_settings
@@ -67,7 +68,25 @@ class AudioEvent:
 
 def available() -> bool:
     s = get_settings()
-    return s.has_audio_events or s.has_clap
+    return ((s.has_audio_events and _tagger is not False)
+            or (s.has_clap and _clap is not False))
+
+
+def capability_flags() -> dict[str, bool]:
+    """Runtime-aware health flags for optional audio detectors.
+
+    ``get_settings`` can only know that a package is installed. Model downloads
+    and checkpoint compatibility are discovered lazily when the detector loads,
+    so a failed load should turn the UI dot off instead of staying green.
+    """
+    s = get_settings()
+    panns = bool(s.has_audio_events and _tagger is not False)
+    clap = bool(s.has_clap and _clap is not False)
+    return {
+        "audio_events": panns or clap,
+        "panns_audio": panns,
+        "clap_audio": clap,
+    }
 
 
 def _load():
@@ -97,17 +116,80 @@ def _load_clap():
     if _clap is not None:
         return _clap or None
     try:
-        import laion_clap
+        old_argv = sys.argv[:]
+        try:
+            # laion_clap imports training argparse helpers; hide uvicorn args.
+            sys.argv = [old_argv[0] if old_argv else "clipforge"]
+            import laion_clap
 
-        device = "cuda" if get_settings().device == "cuda" else "cpu"
-        model = laion_clap.CLAP_Module(enable_fusion=False, device=device)
-        model.load_ckpt()
-        _clap = model
-        log.info("LAION-CLAP audio tagging loaded")
-    except Exception as e:
+            device = "cuda" if get_settings().device == "cuda" else "cpu"
+            model = laion_clap.CLAP_Module(enable_fusion=False, device=device)
+            _load_clap_checkpoint(model)
+            _clap = model
+            log.info("LAION-CLAP audio tagging loaded")
+        finally:
+            sys.argv = old_argv
+    except BaseException as e:
         log.info("CLAP audio tagging unavailable (%s)", e)
         _clap = False
     return _clap or None
+
+
+def _load_clap_checkpoint(model) -> None:
+    """Load LAION-CLAP weights across package / PyTorch version mismatches."""
+    try:
+        model.load_ckpt()
+        return
+    except Exception as first:
+        err = first
+
+    if "weights_only" in str(err):
+        try:
+            _call_with_torch_load_compat(model.load_ckpt)
+            return
+        except Exception as second:
+            err = second
+
+    # Some current CLAP checkpoints contain a harmless RoBERTa position-id
+    # buffer that older package builds did not expect. Loading non-strictly keeps
+    # the actual weights while avoiding a hard failure on that metadata tensor.
+    if "Unexpected key(s) in state_dict" in str(err):
+        core = getattr(model, "model", None)
+        original = getattr(core, "load_state_dict", None)
+        if original is not None:
+            def _load_state_dict_compat(state_dict, *args, **kwargs):
+                kwargs["strict"] = False
+                return original(state_dict, *args, **kwargs)
+
+            core.load_state_dict = _load_state_dict_compat
+            try:
+                try:
+                    model.load_ckpt()
+                except Exception as second:
+                    if "weights_only" not in str(second):
+                        raise
+                    _call_with_torch_load_compat(model.load_ckpt)
+                return
+            finally:
+                core.load_state_dict = original
+
+    raise err
+
+
+def _call_with_torch_load_compat(fn) -> None:
+    import torch
+
+    old_load = torch.load
+
+    def _load_compat(*args, **kwargs):
+        kwargs.setdefault("weights_only", False)
+        return old_load(*args, **kwargs)
+
+    torch.load = _load_compat
+    try:
+        fn()
+    finally:
+        torch.load = old_load
 
 
 def reduce_scores(probs: dict[str, float]) -> tuple[float, str] | None:
@@ -189,10 +271,8 @@ def _clap_similarity_rows(paths: list[str]) -> list[tuple[dict[str, float], dict
         import numpy as np
 
         all_prompts = [*CLAP_PROMPTS.values(), *NEGATIVE_CLAP_PROMPTS.values()]
-        audio = model.get_audio_embedding_from_filelist(paths, use_tensor=False)
-        text = model.get_text_embedding(all_prompts, use_tensor=False)
-        audio = np.asarray(audio, dtype=np.float32)
-        text = np.asarray(text, dtype=np.float32)
+        audio = _embedding_array(model.get_audio_embedding_from_filelist, paths)
+        text = _embedding_array(model.get_text_embedding, all_prompts)
         if audio.ndim == 1:
             audio = audio[None, :]
         if text.ndim == 1:
@@ -212,6 +292,20 @@ def _clap_similarity_rows(paths: list[str]) -> list[tuple[dict[str, float], dict
     except Exception as e:
         log.warning("CLAP audio scoring failed (%s)", e)
         return []
+
+
+def _embedding_array(fn, values):
+    import numpy as np
+
+    try:
+        out = fn(values, use_tensor=False)
+    except TypeError as e:
+        if "use_tensor" not in str(e):
+            raise
+        out = fn(values)
+    if hasattr(out, "detach"):
+        out = out.detach().cpu().numpy()
+    return np.asarray(out, dtype=np.float32)
 
 
 def _clap_score(seg_path: str) -> tuple[float, str] | None:

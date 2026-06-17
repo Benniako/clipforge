@@ -94,6 +94,16 @@ def test_spa_fallback_serves_index_for_client_routes(tmp_path=None):
     assert "app" in c.get("/p/proj_abc/clip/c1").text       # nested route too
 
 
+def test_generated_media_urls_are_browser_paths():
+    from app.config import get_settings
+    from app.pipeline.orchestrator import _media_url
+
+    p = get_settings().media_dir / "proj_x" / "clips" / "clip_1.mp4"
+    url = _media_url(p)
+    assert url == "/media/proj_x/clips/clip_1.mp4"
+    assert "\\" not in url
+
+
 def test_caption_uppercase_and_highlight_present():
     cs = captionize.build_caption_set(Transcript(words=_words("one two three")),
                                       0.0, 2.0, "bold-pop")
@@ -770,6 +780,35 @@ def test_multikill_streaks_chain_and_outscore_single_kills():
     assert any("streak" in f.label for f in triple.factors)
 
 
+def test_cue_streaks_do_not_chain_unrelated_valorant_events():
+    from app.media.ffmpeg import MediaInfo
+    from app.providers.detect_cues import CueEvent
+    from app.providers.detect_gameplay import (_cue_clips, apply_evidence_caps,
+                                               group_streaks, GameplayClip)
+
+    evs = [CueEvent(t=10.0, label="spike_plant", similarity=0.95),
+           CueEvent(t=13.0, label="spike_defuse", similarity=0.96),
+           CueEvent(t=16.0, label="kill", similarity=0.94)]
+    groups = group_streaks(evs)
+    assert [[e.label for e in g] for g in groups] == [
+        ["spike_plant"], ["spike_defuse"], ["kill"]]
+
+    info = MediaInfo(duration=120, width=1920, height=1080, fps=30,
+                     has_audio=True, has_video=True, codec=None)
+    clips = _cue_clips(evs, info, lead=5.0, tail=5.0,
+                       settings=ImportSettings(min_len=8, max_len=20))
+    assert all(c.score <= 88 for c in clips)
+    assert not any("Streak:" in c.title for c in clips)
+
+    c = GameplayClip(start=0, end=10, score=99, features={"cue": 0.99})
+    apply_evidence_caps([c])
+    assert c.score == 88
+    confirmed = GameplayClip(start=0, end=10, score=99,
+                             features={"cue": 0.99, "ocr": 0.9})
+    apply_evidence_caps([confirmed])
+    assert confirmed.score == 99
+
+
 def test_caption_exclude_mutes_cue_windows():
     tr = Transcript(words=_words("streamer talking double kill more talk"),
                     provider="whisper")
@@ -880,6 +919,24 @@ def test_ocr_keyword_matching_finds_viral_markers():
     assert O.match_keywords("the quick brown fox", "generic", fuzzy=False) == []
 
 
+def test_ocr_valorant_german_markers_and_easyocr_shapes():
+    from app.providers import detect_ocr as O
+
+    assert any(l == "kill" for l, _ in O.match_keywords("GEGNER ÜBRIG", "valorant"))
+    assert any(l == "spike" for l, _ in O.match_keywords("SPIKE ENTSCHÄRFT", "valorant"))
+
+    class Reader:
+        def readtext(self, _path, detail=1, paragraph=False):
+            assert paragraph is False
+            if detail == 1:
+                return [([[0, 0]], "Spike platziert", 0.98),
+                        ([[0, 1]], ("Headshot", 0.92))]
+            return ["fallback"]
+
+    text = O._easyocr_text(Reader(), "frame.png")
+    assert "Spike platziert" in text and "Headshot" in text
+
+
 def test_ocr_fuzzy_matches_garbled_text():
     from app.providers import detect_ocr as O
     try:
@@ -902,6 +959,9 @@ def test_ocr_frame_sampling_is_bounded_and_spaced():
     assert all(b - a >= 1.9 for a, b in zip(ts, ts[1:]))
     # a long VOD never exceeds the frame cap
     assert len(O.sample_frame_times(100000, every=2.0, max_frames=400)) <= 400
+    focused = O.focused_frame_times(3600, [100.0, 103.0], max_frames=12)
+    assert any(99.0 <= t <= 104.5 for t in focused)
+    assert len(focused) <= 12
 
 
 def test_ocr_dedupes_persisting_banner():
@@ -1051,6 +1111,16 @@ def test_corroboration_boosts_multi_signal_clips():
     c2 = GameplayClip(start=10, end=30, score=70)
     apply_corroboration([c2], [CueEvent(t=20, label="kill", similarity=0.9)], [])
     assert c2.score == 70
+
+
+def test_gameplay_title_fallback_names_reaction_peaks():
+    from app.providers.detect_gameplay import GameplayClip, apply_title_fallbacks
+
+    c = GameplayClip(start=2300, end=2335, score=95, peak_t=2325,
+                     title="Highlight — 38:45",
+                     features={"reaction": 1.0, "intensity": 0.99})
+    apply_title_fallbacks([c])
+    assert c.title == "Big Reaction — 38:45"
 
 
 def test_custom_event_padding_and_clap_clips():
@@ -1273,6 +1343,99 @@ def test_audio_event_reduce_and_bonus():
     assert gated is not None and gated[1] == "crowd cheering"
 
 
+def test_clap_loader_hides_server_args_and_restores_argv():
+    from app.providers import audio_events as AE
+
+    old_clap = AE._clap
+    old_mod = sys.modules.get("laion_clap")
+    old_argv = sys.argv[:]
+    calls = []
+    mod = types.ModuleType("laion_clap")
+    import importlib.machinery
+    mod.__spec__ = importlib.machinery.ModuleSpec("laion_clap", loader=None)
+
+    class FakeClap:
+        def __init__(self, **_kwargs):
+            calls.append(sys.argv[:])
+
+        def load_ckpt(self):
+            pass
+
+    mod.CLAP_Module = FakeClap
+    sys.modules["laion_clap"] = mod
+    AE._clap = None
+    sys.argv = ["uvicorn", "app.main:app", "--port", "8000"]
+    try:
+        assert AE._load_clap() is not None
+        assert calls and all(call == ["uvicorn"] for call in calls)
+        assert sys.argv == ["uvicorn", "app.main:app", "--port", "8000"]
+    finally:
+        AE._clap = old_clap
+        sys.argv = old_argv
+        if old_mod is None:
+            sys.modules.pop("laion_clap", None)
+        else:
+            sys.modules["laion_clap"] = old_mod
+
+
+def test_clap_loader_uses_nonstrict_checkpoint_fallback():
+    from app.providers import audio_events as AE
+
+    class Core:
+        def __init__(self):
+            self.strict_values = []
+
+        def load_state_dict(self, _state, *args, **kwargs):
+            strict = kwargs.get("strict", args[0] if args else True)
+            self.strict_values.append(strict)
+            if strict:
+                raise RuntimeError(
+                    'Unexpected key(s) in state_dict: "text_branch.embeddings.position_ids".'
+                )
+
+    class FakeClap:
+        def __init__(self):
+            self.model = Core()
+
+        def load_ckpt(self):
+            self.model.load_state_dict({"ok": 1})
+
+    model = FakeClap()
+    AE._load_clap_checkpoint(model)
+    assert model.model.strict_values == [True, False]
+
+
+def test_audio_capability_flags_drop_failed_runtime_detectors():
+    from app.providers import audio_events as AE
+
+    old_get, old_tagger, old_clap = AE.get_settings, AE._tagger, AE._clap
+    AE.get_settings = lambda: _settings(has_audio_events=True, has_clap=True)
+    try:
+        AE._tagger = None
+        AE._clap = False
+        assert AE.capability_flags() == {
+            "audio_events": True, "panns_audio": True, "clap_audio": False}
+        AE._tagger = False
+        assert AE.available() is False
+    finally:
+        AE.get_settings = old_get
+        AE._tagger = old_tagger
+        AE._clap = old_clap
+
+
+def test_clap_embedding_array_supports_old_signature():
+    from app.providers import audio_events as AE
+
+    calls = []
+
+    def old_signature(values):
+        calls.append(values)
+        return [[1.0, 0.0]]
+
+    assert AE._embedding_array(old_signature, ["a"]).shape == (1, 2)
+    assert calls == [["a"]]
+
+
 def test_vlm_keyframe_times_are_inside_span():
     from app.providers.vlm import keyframe_times
     ts = keyframe_times(10.0, 22.0, n=3)
@@ -1313,7 +1476,7 @@ def test_orchestrator_passes_source_path_to_vlm_scorer():
         vlm.score_visuals = old_score_visuals
 
     assert out == {0: (0.8, "strong frames")}
-    assert calls == [("source.mp4", [(1.0, 2.5)], 45.0, 2, 3, 30.0)]
+    assert calls == [("source.mp4", [(1.0, 2.5)], 45.0, 1, 2, 30.0)]
 
 
 if __name__ == "__main__":

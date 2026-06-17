@@ -78,6 +78,11 @@ REM Token is private, so setup guides you through creating one, validates
 REM pyannote access, then stores HF_TOKEN in your Windows user environment.
 powershell -ExecutionPolicy Bypass -NoProfile -File "%~dp0scripts\setup_hf_token.ps1" -PythonExe "%VPY%"
 
+REM --- 4e2. PANNs audio-event checkpoint --------------------------------
+REM panns-inference assumes wget exists; on Windows we download its checkpoint
+REM with PowerShell so audio-event detection is actually usable.
+powershell -ExecutionPolicy Bypass -NoProfile -File "%~dp0scripts\setup_panns.ps1" -PythonExe "%VPY%" || echo [..] PANNs checkpoint skipped - CLAP/other detectors still run.
+
 REM --- 4f. LR-ASD active-speaker checkout -------------------------------
 REM Optional: clones the local active-speaker model adapter and records its path.
 powershell -ExecutionPolicy Bypass -NoProfile -File "%~dp0scripts\setup_active_speaker.ps1" -PythonExe "%VPY%"

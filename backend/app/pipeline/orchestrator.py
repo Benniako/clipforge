@@ -36,6 +36,11 @@ from . import render as render_mod
 
 log = logging.getLogger("clipforge.engine")
 
+
+def _media_url(path) -> str:
+    return f"/media/{path.relative_to(get_settings().media_dir).as_posix()}"
+
+
 def _speech_intervals(transcript, start: float, end: float
                       ) -> list[tuple[float, float]] | None:
     """Clip-relative speech spans for speech-aware reframing.
@@ -111,13 +116,32 @@ class Engine:
                                      stages=self._stage_view(-1, 0.0))
         self._q.put(project_id)
 
+    def resume_incomplete(self) -> int:
+        """Requeue projects stranded mid-run by a restart or dead worker."""
+        resumed = 0
+        for summary in store.list_summaries(limit=1000):
+            if summary.status not in (ProjectStatus.queued, ProjectStatus.processing):
+                continue
+            try:
+                with store.mutate(summary.id) as p:
+                    p.clips = []
+                    p.events = []
+                    p.montages = []
+                self.enqueue(summary.id)
+                resumed += 1
+            except Exception:
+                log.warning("could not resume project %s", summary.id, exc_info=True)
+        if resumed:
+            log.info("requeued %d incomplete project(s)", resumed)
+        return resumed
+
     # -- worker loop ------------------------------------------------------
     def _loop(self) -> None:
         while True:
             project_id = self._q.get()
             try:
                 self._process(project_id)
-            except Exception as e:  # never let the worker die
+            except BaseException as e:  # never let the worker die
                 log.error("pipeline failed for %s: %s\n%s", project_id, e,
                           traceback.format_exc())
                 try:
@@ -424,6 +448,10 @@ class Engine:
             if not clips:
                 raise RuntimeError("no clip-worthy moments found in this video")
 
+        if kind == "gameplay":
+            gameplay_mod.apply_evidence_caps(clips)
+            gameplay_mod.apply_title_fallbacks(clips)
+
         clips.sort(key=lambda c: c.score, reverse=True)
         with store.mutate(project_id) as p:
             p.clips = clips
@@ -506,8 +534,9 @@ class Engine:
             self._advance(project_id, 5, "Isolating voice (Demucs)…")
             try:
                 from ..providers import separate as sep_mod
-                dst = str(ingest.project_dir(project_id) / "source.denoised.mp4")
-                cleaned = sep_mod.denoise_source(src_path, dst)
+                dst_path = ingest.project_dir(project_id) / "source.denoised.mp4"
+                dst = str(dst_path)
+                cleaned = dst if dst_path.exists() else sep_mod.denoise_source(src_path, dst)
                 if cleaned:
                     render_src = cleaned
             except Exception as e:
@@ -606,14 +635,12 @@ class Engine:
         render_mod.render_clip(clip, src_path, info, style, out, thumb,
                                out_w=out_w, out_h=out_h,
                                burn_captions=burn_captions, motion=motion)
-        rel = out.relative_to(settings.media_dir)
-        trel = thumb.relative_to(settings.media_dir)
         with store.mutate(project_id) as p:
             c = p.clip(clip.id)
             if c:
                 c.status = ClipStatus.ready
-                c.export_url = f"/media/{rel}"
-                c.thumb_url = f"/media/{trel}"
+                c.export_url = _media_url(out)
+                c.thumb_url = _media_url(thumb)
                 c.error = None
 
     # -- single-clip re-render (editor edits) -----------------------------
@@ -755,14 +782,12 @@ class Engine:
             out = mdir / f"{montage_id}.mp4"
             thumb = mdir / f"{montage_id}.jpg"
             dur = montage_mod.build_montage_video(paths, out, thumb)
-            rel = out.relative_to(settings.media_dir)
-            trel = thumb.relative_to(settings.media_dir)
             with store.mutate(project_id) as p:
                 m = p.montage(montage_id)
                 if m:
                     m.status = ClipStatus.ready
-                    m.export_url = f"/media/{rel}"
-                    m.thumb_url = f"/media/{trel}"
+                    m.export_url = _media_url(out)
+                    m.thumb_url = _media_url(thumb)
                     m.duration = round(dur, 2)
                     m.error = None
         except Exception as e:

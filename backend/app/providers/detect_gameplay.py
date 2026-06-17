@@ -206,6 +206,18 @@ def _timing_window(settings: ImportSettings, profile: dict) -> tuple[float, floa
     return lead, tail
 
 
+def _find_ocr_events(src_path: str, info: MediaInfo, settings: ImportSettings,
+                     *, focus_times: list[float] | None = None) -> list:
+    if not settings.use_ocr:
+        return []
+    try:
+        return detect_ocr.find_text_events(
+            src_path, info, settings, focus_times=focus_times)
+    except Exception as e:
+        log.warning("ocr detection failed: %s", e)
+        return []
+
+
 def detect_gameplay(src_path: str, info: MediaInfo, settings: ImportSettings,
                     *, weights: dict[str, float] | None = None,
                     wav_path: str | None = None,
@@ -224,14 +236,13 @@ def detect_gameplay(src_path: str, info: MediaInfo, settings: ImportSettings,
 
     aw = weights or audio_weights(settings.game_profile)
 
-    # On-screen text markers (VICTORY / ELIMINATED / GOAL / kill-feed). Cheap
-    # no-op when no OCR backend is installed; never blocks the audio path.
+    # On-screen text markers (VICTORY / ELIMINATED / GOAL / kill-feed).
+    # For footage with audio we run OCR after finding likely moments, so it reads
+    # the frames that matter instead of doing a slow blind sweep over the VOD.
     ocr_events: list = []
-    if settings.use_ocr:
-        try:
-            ocr_events = detect_ocr.find_text_events(src_path, info, settings)
-        except Exception as e:
-            log.warning("ocr detection failed: %s", e)
+    defer_ocr = bool(settings.use_ocr and info.has_audio)
+    if settings.use_ocr and not defer_ocr:
+        ocr_events = _find_ocr_events(src_path, info, settings)
 
     if not info.has_audio:
         clips = _uniform_fallback(info, settings)
@@ -257,6 +268,20 @@ def detect_gameplay(src_path: str, info: MediaInfo, settings: ImportSettings,
             cue_events = _cue_events(str(wav), settings)
             audio_window_events = _audio_events(str(wav), info.duration, settings)
 
+    profile = get_profile(settings.game_profile)
+    if defer_ocr:
+        focus_times = [float(e.t) for e in cue_events]
+        focus_times += [float(e.t) for e in audio_window_events]
+        if times is not None and rms is not None:
+            try:
+                peak_idxs, _thr, _floor = _pick_peaks(
+                    times, rms, settings=settings, profile=profile)
+                focus_times += [float(times[i]) for i in peak_idxs]
+            except Exception as e:
+                log.warning("ocr focus peaks failed: %s", e)
+        ocr_events = _find_ocr_events(src_path, info, settings,
+                                      focus_times=focus_times)
+
     _record_events(events_out, cue_events, ocr_events, audio_window_events)
 
     if times is None:
@@ -267,7 +292,6 @@ def detect_gameplay(src_path: str, info: MediaInfo, settings: ImportSettings,
         return _merge(priority, clips, settings.target_clips) if priority else clips
 
 
-    profile = get_profile(settings.game_profile)
     peaks, thr, floor = _pick_peaks(times, rms, settings=settings, profile=profile)
     if not peaks:
         lead, tail = _timing_window(settings, profile)
@@ -464,12 +488,12 @@ def _audio_events(wav_path: str, duration: float, settings: ImportSettings) -> l
         return []
     try:
         mode = getattr(settings.power_mode, "value", str(settings.power_mode))
-        hop = 2.0 if mode in ("max_gpu", "quality") else 3.0
+        hop = 4.0 if mode in ("max_gpu", "quality") else 5.0
         window = 5.0 if mode == "max_gpu" else 6.0
-        threshold = 0.32 if mode == "quality" else 0.35
+        threshold = 0.55 if mode == "quality" else 0.58
         return audio_events_mod.find_events(
             wav_path, duration, window=window, hop=hop, threshold=threshold,
-            limit=max(settings.target_clips * 2, 8))
+            limit=max(settings.target_clips, 6))
     except Exception as e:
         log.warning("CLAP audio event search failed: %s", e)
         return []
@@ -478,15 +502,28 @@ def _audio_events(wav_path: str, duration: float, settings: ImportSettings) -> l
 # Cue hits within this many seconds of each other chain into one streak —
 # a multi-kill, a brace, a plant-into-retake. Streaks complete better than
 # single events, and completion is what the feed algorithms reward.
-STREAK_WINDOW = 12.0
+STREAK_WINDOW = 6.0
+MAX_STREAK_EVENTS = 5
 _STREAK_WORDS = {2: "Double", 3: "Triple", 4: "Quad", 5: "Penta"}
+_KILL_CHAIN_LABELS = {
+    "kill", "double_kill", "triple_kill", "quad_kill", "ace", "headshot",
+    "one_kill", "two_kills", "three_kills", "four_kills", "five_kills",
+}
+
+
+def _streak_compatible(prev, curr) -> bool:
+    if prev.label == curr.label:
+        return True
+    return prev.label in _KILL_CHAIN_LABELS and curr.label in _KILL_CHAIN_LABELS
 
 
 def group_streaks(events: list, *, window: float = STREAK_WINDOW) -> list[list]:
     """Chain time-sorted cue events into groups of quick succession."""
     groups: list[list] = []
     for ev in sorted(events, key=lambda e: e.t):
-        if groups and ev.t - groups[-1][-1].t <= window:
+        if (groups and len(groups[-1]) < MAX_STREAK_EVENTS
+                and ev.t - groups[-1][-1].t <= window
+                and _streak_compatible(groups[-1][-1], ev)):
             groups[-1].append(ev)
         else:
             groups.append([ev])
@@ -508,8 +545,10 @@ def _cue_clips(events: list, info: MediaInfo, lead: float, tail: float,
             # Keep the kills, sacrifice build-up: action > context for hooks.
             start = max(first.t - 2.0, end - settings.max_len)
 
-        # More chained events = more viral: each extra kill adds points.
-        score = int(round(max(1, min(99, 70 + sim * 15 + (n - 1) * 7))))
+        # Cue-only evidence is useful, but it is not proof by itself. Top scores
+        # require corroboration from OCR/visual/audio/reaction later in the pipe.
+        cue_strength = max(0.0, sim - 0.84)
+        score = int(round(max(1, min(88, 58 + cue_strength * 120 + (n - 1) * 4))))
         m, s = divmod(int(first.t), 60)
         label = first.label.replace("_", " ").title()
         labels = {e.label for e in grp}
@@ -519,16 +558,16 @@ def _cue_clips(events: list, info: MediaInfo, lead: float, tail: float,
             word = _STREAK_WORDS.get(n, f"{n}x")
             title = f"{word} {label} — {m}:{s:02d}"
         else:
-            title = f"Streak: {n} events — {m}:{s:02d}"
+            title = f"{label} + {n - 1} cues — {m}:{s:02d}"
 
         factors = [ScoreFactor(label=f"Matched '{first.label}' sound",
-                               weight=round(sim * 15, 1),
+                               weight=round(max(0.0, sim - 0.80) * 50, 1),
                                detail=f"{int(sim*100)}% audio match to your reference cue")]
         if n >= 2:
             span = max(last.t - first.t, 1.0)
             factors.insert(0, ScoreFactor(
                 label=f"{n} events in {span:.0f}s — streak",
-                weight=round((n - 1) * 7, 1),
+                weight=round((n - 1) * 4, 1),
                 detail="Chained action holds viewers to the end (multi-kill effect)"))
 
         out.append(GameplayClip(
@@ -539,6 +578,59 @@ def _cue_clips(events: list, info: MediaInfo, lead: float, tail: float,
                       "spikes": 0.0},
             factors=factors))
     return out
+
+
+def apply_evidence_caps(clips: list["GameplayClip"] | list) -> None:
+    """Prevent one weak signal from maxing virality by itself."""
+    hard_signals = (
+        "ocr", "corroborated", "vlm_viral", "audio_event", "reaction",
+        "excitement",
+    )
+    for c in clips:
+        feats = getattr(c, "features", {}) or {}
+        has_hard_signal = any(float(feats.get(k, 0.0)) > 0.15 for k in hard_signals)
+        if feats.get("cue", 0.0) > 0.0 and not has_hard_signal:
+            c.score = min(int(c.score), 88)
+
+
+def apply_title_fallbacks(clips: list["GameplayClip"] | list) -> None:
+    """Replace generic peak titles with the strongest visible/audio reason."""
+    for c in clips:
+        title = getattr(c, "title", "") or ""
+        if not title.lower().startswith("highlight"):
+            continue
+        feats = getattr(c, "features", {}) or {}
+        label = "Highlight"
+        if float(feats.get("reaction", 0.0)) > 0.55:
+            label = "Big Reaction"
+        elif float(feats.get("transient", 0.0)) > 0.65 or float(feats.get("spikes", 0.0)) > 0.7:
+            label = "Sudden Fight"
+        elif float(feats.get("intensity", 0.0)) > 0.85:
+            label = "Loud Fight"
+        elif float(feats.get("audio_event", 0.0)) > 0.25:
+            label = _audio_title_from_factors(getattr(c, "factors", []) or [])
+        elif float(feats.get("vlm_viral", 0.0)) > 0.55:
+            label = "Visual Moment"
+        parts = title.rsplit("—", 1)
+        if len(parts) == 2 and parts[1].strip():
+            c.title = f"{label} — {parts[1].strip()}"
+        else:
+            m, s = divmod(int(getattr(c, "peak_t", 0.0) or getattr(c, "start", 0.0)), 60)
+            c.title = f"{label} — {m}:{s:02d}"
+
+
+def _audio_title_from_factors(factors: list[ScoreFactor] | list) -> str:
+    for f in factors:
+        label = (getattr(f, "label", "") or "").lower()
+        if "explosive" in label:
+            return "Explosive Fight"
+        if "cheer" in label or "crowd" in label:
+            return "Crowd Pop"
+        if "laugh" in label:
+            return "Funny Moment"
+        if "impact" in label:
+            return "Impact Moment"
+    return "Audio Moment"
 
 
 def _overlap(a: "GameplayClip", b: "GameplayClip") -> float:

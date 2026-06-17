@@ -422,6 +422,7 @@ def reprocess(project_id: str, body: Reprocess | None = None) -> Project:
         proj.settings = s
         proj.clips = []
         proj.montages = []
+        proj.events = []
         proj.content_type = None
         proj.facecam = None      # re-detected on the next run
         proj.warnings = []

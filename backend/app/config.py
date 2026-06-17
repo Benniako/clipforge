@@ -396,12 +396,12 @@ class Settings:
         """Budget/parallelism for local vision-model scoring."""
         mode = (power_mode or "balanced").lower()
         if mode == "max_gpu":
-            return {"budget": 90.0, "max_workers": 3, "n_frames": 4,
+            return {"budget": 90.0, "max_workers": 2, "n_frames": 2,
                     "timeout": 35.0}
         if mode == "quality":
-            return {"budget": 120.0, "max_workers": 2, "n_frames": 5,
+            return {"budget": 120.0, "max_workers": 2, "n_frames": 3,
                     "timeout": 45.0}
-        return {"budget": 45.0, "max_workers": 2, "n_frames": 3,
+        return {"budget": 45.0, "max_workers": 1, "n_frames": 2,
                 "timeout": 30.0}
 
     def capability_report(self) -> dict:

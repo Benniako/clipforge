@@ -52,6 +52,7 @@ async def lifespan(app: FastAPI):
     store.init_db()
     feedback.init_db()
     engine.start()
+    engine.resume_incomplete()
     s = get_settings()
     logging.getLogger("clipforge").info("capabilities: %s", s.capability_report())
     yield
@@ -70,8 +71,9 @@ def create_app() -> FastAPI:
 
     @app.get("/api/health", tags=["meta"])
     def health() -> dict:
-        from .providers import llm, vlm
+        from .providers import audio_events, llm, vlm
         caps = settings.capability_report()
+        caps.update(audio_events.capability_flags())
         caps["llm"] = llm.available()
         caps["llm_model"] = llm.active_model()
         caps["vlm"] = vlm.available()

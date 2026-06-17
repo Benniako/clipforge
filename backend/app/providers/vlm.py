@@ -110,7 +110,7 @@ def _grab_frames_b64(src_path: str, start: float, end: float, n: int) -> list[st
             f = Path(tmp) / f"k{i}.jpg"
             try:
                 ffmpeg.run(["-ss", f"{t:.3f}", "-i", src_path, "-frames:v", "1",
-                            "-vf", "scale=512:-2", str(f)], timeout=30)
+                            "-vf", "scale=384:-2", str(f)], timeout=30)
                 out.append(base64.b64encode(f.read_bytes()).decode("ascii"))
             except Exception as e:
                 log.warning("vlm frame grab at %.1fs failed: %s", t, e)
@@ -152,13 +152,9 @@ def score_visual(src_path: str, start: float, end: float, *,
     if not model or not images:
         return None
     prompt = (
-        "You judge short-form video virality from these frames. Consider facial "
-        "expression, on-screen action/energy, visual clarity, and whether the "
-        "first frames stop a swipe. Penalize boring/negative frames: menus, "
-        "lobbies, loading screens, black screens, static desktops, mid-transition "
-        "frames, scoreboard-only frames, motion blur, or no visible action/face. "
-        "Give below 35 to boring or negative frames even if the audio might be "
-        "interesting. Reply with EXACTLY one line:\n"
+        "Rate how viral these clip frames look. Reward visible action, reaction, "
+        "clarity, and a strong first-frame hook. Penalize menu/lobby/loading/"
+        "black/desktop/blur/scoreboard-only/no-action frames below 35. Reply:\n"
         "SCORE: <0-100> | REASON: <max 8 words>"
     )
     body = {"model": model, "prompt": prompt, "images": images, "stream": False,

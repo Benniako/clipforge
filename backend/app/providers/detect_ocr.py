@@ -20,6 +20,7 @@ from __future__ import annotations
 import logging
 import re
 import tempfile
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -55,9 +56,16 @@ _GENERIC: dict[str, tuple[str, ...]] = {
 # Per-profile extra markers, merged over the generic set.
 _PROFILE_EXTRA: dict[str, dict[str, tuple[str, ...]]] = {
     "valorant": {
-        "ace": ("ace", "team ace", "flawless", "thrifty", "flawless victory"),
-        "clutch": ("clutch", "1v5", "1v4", "1v3", "1v2"),
-        "spike": ("spike planted", "spike defused", "defusing"),
+        "ace": ("ace", "team ace", "flawless", "thrifty", "flawless victory",
+                "team ass"),
+        "clutch": ("clutch", "1v5", "1v4", "1v3", "1v2", "letzter spieler",
+                   "letzte spielerin", "last player standing"),
+        "kill": ("headshot", "kopfschuss", "abgeschossen", "eliminiert",
+                 "enemy killed", "gegner ausgeschaltet", "gegner ubrig",
+                 "gegner übrig"),
+        "spike": ("spike planted", "spike defused", "defusing",
+                  "spike platziert", "spike entscharft", "spike entschärft"),
+        "round_win": ("round won", "runde gewonnen", "victory"),
     },
     "cs2": {
         "bomb": ("bomb has been planted", "bomb planted", "bomb defused"),
@@ -81,7 +89,9 @@ _WS_RE = re.compile(r"\s+")
 
 def _norm(text: str) -> str:
     """Lowercase and collapse to alphanumerics + single spaces for matching."""
-    return _WS_RE.sub(" ", _NORM_RE.sub(" ", (text or "").lower())).strip()
+    folded = unicodedata.normalize("NFKD", text or "")
+    folded = folded.encode("ascii", "ignore").decode("ascii")
+    return _WS_RE.sub(" ", _NORM_RE.sub(" ", folded.lower())).strip()
 
 
 def lexicon(profile: str | None) -> dict[str, tuple[str, ...]]:
@@ -162,6 +172,33 @@ def sample_frame_times(duration: float, *, every: float = 2.0,
         times.append(round(t, 3))
         t += step
     return times
+
+
+def focused_frame_times(duration: float, focus_times: list[float] | None, *,
+                        every: float = 2.0, max_frames: int = 260) -> list[float]:
+    """OCR around likely moments, with a light safety sweep across the VOD."""
+    if not focus_times:
+        return sample_frame_times(duration, every=every, max_frames=max_frames)
+    out: list[float] = []
+    seen: set[int] = set()
+    for t in sorted(float(x) for x in focus_times if 0.0 <= float(x) <= duration):
+        for off in (-1.0, 0.0, 1.5, 3.0):
+            tt = min(max(t + off, 0.25), max(duration - 0.25, 0.25))
+            bucket = int(round(tt / 0.75))
+            if bucket not in seen:
+                seen.add(bucket)
+                out.append(round(tt, 3))
+    for t in sample_frame_times(duration, every=max(every * 5.0, 12.0),
+                                max_frames=max_frames // 4):
+        bucket = int(round(t / 0.75))
+        if bucket not in seen:
+            seen.add(bucket)
+            out.append(t)
+    out.sort()
+    if len(out) > max_frames:
+        step = len(out) / max_frames
+        out = [out[int(i * step)] for i in range(max_frames)]
+    return out
 
 
 def dedupe_events(events: list[OcrEvent], *, min_gap: float = 4.0) -> list[OcrEvent]:
@@ -275,7 +312,7 @@ def _ocr_image(path: str, engine: str) -> str:
         if kind == "paddleocr":
             return _paddle_text(reader, path)
         if kind == "easyocr":
-            return " ".join(reader.readtext(path, detail=0) or [])
+            return _easyocr_text(reader, path)
         if kind == "tesseract":
             import pytesseract
             from PIL import Image
@@ -286,14 +323,86 @@ def _ocr_image(path: str, engine: str) -> str:
     return ""
 
 
+def _easyocr_text(reader, path: str) -> str:
+    """Read EasyOCR output without assuming a single return shape."""
+    try:
+        rows = reader.readtext(path, detail=1, paragraph=False) or []
+        lines: list[str] = []
+        for row in rows:
+            txt = ""
+            if isinstance(row, str):
+                txt = row
+            elif isinstance(row, (list, tuple)) and len(row) >= 2:
+                txt = row[1][0] if isinstance(row[1], (list, tuple)) else row[1]
+            if txt:
+                lines.append(str(txt))
+        if lines:
+            return " ".join(lines)
+    except Exception as e:
+        log.debug("easyocr detail read failed for %s: %s", path, e)
+    try:
+        rows = reader.readtext(path, detail=0, paragraph=False) or []
+    except TypeError:
+        rows = reader.readtext(path, detail=0) or []
+    return " ".join(str(x) for x in rows if x)
+
+
+def _ocr_frame_images(frame: Path, tmpd: Path, idx: int,
+                      profile: str | None) -> list[tuple[str, Path]]:
+    """Return full frame plus game-specific ROIs that carry useful text."""
+    name = _ALIAS.get((profile or "generic").lower().replace(" ", ""),
+                      (profile or "generic").lower().replace(" ", ""))
+    if name not in {"valorant", "cs2"}:
+        return [("full", frame)]
+    try:
+        from PIL import Image, ImageOps
+
+        im = Image.open(frame).convert("RGB")
+        w, h = im.size
+        specs = [
+            ("killfeed", (int(w * 0.55), 0, w, int(h * 0.36))),
+            ("top_banner", (int(w * 0.20), 0, int(w * 0.80), int(h * 0.28))),
+            ("center_banner", (int(w * 0.16), int(h * 0.22),
+                               int(w * 0.84), int(h * 0.72))),
+        ]
+        out: list[tuple[str, Path]] = []
+        if idx % 5 == 0:
+            out.append(("full", frame))
+        for roi, box in specs:
+            crop = im.crop(box)
+            if crop.width < 32 or crop.height < 24:
+                continue
+            scale = 2 if crop.width < 900 else 1
+            if scale > 1:
+                crop = crop.resize((crop.width * scale, crop.height * scale))
+            crop = ImageOps.autocontrast(crop)
+            p = tmpd / f"f{idx}_{roi}.png"
+            crop.save(p)
+            out.append((roi, p))
+        return out
+    except Exception as e:
+        log.debug("ocr ROI crop failed for %s: %s", frame, e)
+        return [("full", frame)]
+
+
+def _ocr_evidence(matched: str, raw_text: str) -> str:
+    text = " ".join((raw_text or "").split())
+    if not text:
+        return matched
+    if len(text) > 140:
+        text = text[:137] + "..."
+    return f"{matched} | {text}"
+
+
 def find_text_events(src_path: str, info: MediaInfo,
-                     settings, *, every: float = 2.0) -> list[OcrEvent]:
+                     settings, *, every: float = 2.0,
+                     focus_times: list[float] | None = None) -> list[OcrEvent]:
     """Sample frames and return viral on-screen-text events. [] if OCR is off
     or the source has no video."""
     s = get_settings()
     if not s.has_ocr or not info.has_video or info.duration <= 0:
         return []
-    times = sample_frame_times(info.duration, every=every)
+    times = focused_frame_times(info.duration, focus_times, every=every)
     if not times:
         return []
     engine = s.ocr_engine
@@ -311,10 +420,17 @@ def find_text_events(src_path: str, info: MediaInfo,
                 except Exception as e:
                     log.warning("ocr frame grab failed at %.1fs: %s", t, e)
                     continue
-                text = _ocr_image(str(frame), engine)
-                for label, matched in match_keywords(text, profile):
-                    events.append(OcrEvent(t=round(t, 3), label=label,
-                                           text=matched, confidence=0.8))
+                roi_texts = []
+                for roi, img in _ocr_frame_images(frame, tmpd, i, profile):
+                    text = _ocr_image(str(img), engine)
+                    if text:
+                        roi_texts.append((roi, text))
+                for roi, text in roi_texts:
+                    conf = 0.9 if roi != "full" else 0.8
+                    for label, matched in match_keywords(text, profile):
+                        events.append(OcrEvent(t=round(t, 3), label=label,
+                                               text=_ocr_evidence(matched, text),
+                                               confidence=conf))
     except Exception as e:
         log.warning("ocr detection aborted: %s", e)
         return []
