@@ -102,6 +102,13 @@ class CaptionWord(BaseModel):
     # didn't run (single speaker). Lets the editor toggle a speaker's lines
     # in/out of the burned captions.
     speaker: int | None = None
+    # A "power word" (hook/emotion/payoff/number) — rendered in the highlight
+    # colour + slightly larger for the whole line, not only while spoken. This
+    # is the keyword-emphasis look that reads as professionally edited.
+    emphasis: bool = False
+    # An optional emoji appended after the word (auto-picked from its meaning),
+    # capped to a couple per line so captions stay tasteful, not spammy.
+    emoji: str | None = None
 
 
 class CaptionSet(BaseModel):
@@ -111,6 +118,9 @@ class CaptionSet(BaseModel):
     # Words per on-screen line — keeps lines phone-readable. libass wraps any
     # line that is still too wide for the safe area (WrapStyle 0).
     max_words_per_line: int = 3
+    # Spoken language of these words ("en"/"de"), used to pick the right power-word
+    # lexicon for keyword emphasis + emoji at render time.
+    lang: str = "en"
 
 
 # --------------------------------------------------------------------------- #
@@ -249,6 +259,11 @@ class StyleTemplate(BaseModel):
     # in the safe zone above platform UI.
     y_frac: float = 0.78
     uppercase: bool = True
+    # Keyword emphasis: colour + enlarge "power words" across the whole line
+    # (Submagic/Hormozi look). Off keeps only the spoken word highlighted.
+    emphasis: bool = True
+    # Auto-emoji: append a tasteful emoji to matched power words (max ~2/line).
+    emoji: bool = False
 
 
 # --------------------------------------------------------------------------- #

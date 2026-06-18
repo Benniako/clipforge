@@ -96,7 +96,8 @@ def build_tight_caption_set(transcript: Transcript,
             d = max(min(w.end, b) - max(w.t, a), 0.04)
             words.append(CaptionWord(t=round(rel, 3), d=round(d, 3), text=text,
                                      speaker=w.speaker))
-    return CaptionSet(words=words, style_id=style_id)
+    return CaptionSet(words=words, style_id=style_id,
+                      lang=(transcript.language or "en")[:2])
 
 
 def build_caption_set(transcript: Transcript, start: float, end: float,
@@ -126,7 +127,8 @@ def build_caption_set(transcript: Transcript, start: float, end: float,
         d = max(wend - rel, 0.04)
         words.append(CaptionWord(t=round(rel, 3), d=round(d, 3), text=text,
                                  speaker=w.speaker))
-    return CaptionSet(words=words, style_id=style_id)
+    return CaptionSet(words=words, style_id=style_id,
+                      lang=(transcript.language or "en")[:2])
 
 
 def speakers_in(transcript: Transcript, start: float, end: float) -> list[int]:

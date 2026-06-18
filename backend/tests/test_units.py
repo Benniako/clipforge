@@ -1436,6 +1436,47 @@ def test_clap_embedding_array_supports_old_signature():
     assert calls == [["a"]]
 
 
+def test_caption_emphasis_and_emoji():
+    from app.models import CaptionWord
+    from app.pipeline.caption_fx import annotate
+    # "secret" (hook/payoff) and "100" (number) are power words; "the"/"is" aren't.
+    ws = [CaptionWord(t=0, d=0.3, text="the"),
+          CaptionWord(t=0.3, d=0.3, text="secret"),
+          CaptionWord(t=0.6, d=0.3, text="is"),
+          CaptionWord(t=0.9, d=0.3, text="100")]
+    out = annotate(ws, lang="en", emphasis=True, emoji=False, max_words_per_line=4)
+    flags = {w.text: w.emphasis for w in out}
+    assert flags["secret"] and flags["100"]
+    assert not flags["the"] and not flags["is"]
+    # input is not mutated (pure)
+    assert all(w.emphasis is False for w in ws)
+    # emphasis is capped per on-screen line so a whole line never lights up
+    many = [CaptionWord(t=i, d=0.3, text="secret") for i in range(3)]
+    capped = annotate(many, lang="en", emphasis=True, max_words_per_line=3,
+                      max_emphasis_per_line=2)
+    assert sum(w.emphasis for w in capped) == 2
+    # emoji appended only when enabled, and only to mapped power words
+    emo = annotate([CaptionWord(t=0, d=0.3, text="fire")], lang="en", emoji=True)
+    assert emo[0].emoji == "🔥"
+    assert annotate([CaptionWord(t=0, d=0.3, text="fire")], lang="en", emoji=False)[0].emoji is None
+    # both off → returns the list unchanged
+    assert annotate(ws, emphasis=False, emoji=False) is ws
+
+
+def test_caption_emphasis_renders_in_ass():
+    from app.models import CaptionSet, CaptionWord, StyleTemplate
+    style = StyleTemplate(id="t", name="t", highlight="00FF00", emphasis=True)
+    cs = CaptionSet(words=[CaptionWord(t=0, d=0.4, text="the"),
+                           CaptionWord(t=1.0, d=0.4, text="secret")],
+                    lang="en")
+    ass = C.build_ass(cs, style, 1080, 1920)
+    # the emphasised power word carries the highlight colour scale tag
+    assert "fscx106" in ass
+    # opting the style out removes the standalone emphasis
+    plain = C.build_ass(cs, style.model_copy(update={"emphasis": False}), 1080, 1920)
+    assert "fscx106" not in plain
+
+
 def test_vlm_keyframe_times_are_inside_span():
     from app.providers.vlm import keyframe_times
     ts = keyframe_times(10.0, 22.0, n=3)
