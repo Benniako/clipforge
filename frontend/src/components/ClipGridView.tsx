@@ -165,6 +165,15 @@ export default function ClipGridView({
     );
   }, [renderDraft, project.settings]);
 
+  // Rank by virality across the whole project (independent of the current sort),
+  // so the strongest clips always wear their "Top pick" ribbon.
+  const scoreRank = useMemo(() => {
+    const ranked = [...project.clips].sort((a, b) => b.score - a.score);
+    const m: Record<string, number> = {};
+    ranked.forEach((c, i) => (m[c.id] = i + 1));
+    return m;
+  }, [project.clips]);
+
   const ready = project.clips.filter((c) => c.export_url).length;
   const [learn, setLearn] = useState<Learning | null>(null);
   useEffect(() => {
@@ -519,6 +528,7 @@ export default function ClipGridView({
               key={c.id}
               clip={c}
               projectId={project.id}
+              rank={scoreRank[c.id]}
               selected={selected.includes(c.id)}
               onToggleSelect={toggleSelect}
             />

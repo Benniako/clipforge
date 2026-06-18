@@ -8,8 +8,22 @@ import ScoreBadge from "./ScoreBadge";
 interface Props {
   clip: Clip;
   projectId: string;
+  rank?: number;
   selected?: boolean;
   onToggleSelect?: (id: string) => void;
+}
+
+// A small "Top pick" ribbon for the strongest few clips — the at-a-glance cue
+// every social clipper uses so you know what to post first.
+function RankRibbon({ rank }: { rank?: number }) {
+  if (!rank || rank > 3) return null;
+  const label = rank === 1 ? "Top pick" : `#${rank}`;
+  return (
+    <span className={"rank-ribbon r" + rank} title="Ranked by virality score">
+      {rank === 1 ? "★ " : ""}
+      {label}
+    </span>
+  );
 }
 
 function StatusChip({ status }: { status: Clip["status"] }) {
@@ -27,7 +41,7 @@ function StatusChip({ status }: { status: Clip["status"] }) {
   );
 }
 
-export default function ClipCard({ clip, projectId, selected, onToggleSelect }: Props) {
+export default function ClipCard({ clip, projectId, rank, selected, onToggleSelect }: Props) {
   const nav = useNavigate();
   const open = () => nav(`/p/${projectId}/clip/${clip.id}`);
   const ready = clip.status === "ready" && clip.export_url;
@@ -49,6 +63,8 @@ export default function ClipCard({ clip, projectId, selected, onToggleSelect }: 
         role="button"
       >
         <StatusChip status={clip.status} />
+        <RankRibbon rank={rank} />
+        {ready && <span className="thumb-scrim" />}
         {onToggleSelect && ready && (
           <span
             onClick={(e) => {
