@@ -210,7 +210,7 @@ def reduce_scores(probs: dict[str, float]) -> tuple[float, str] | None:
     top_reason = max(group_best, key=group_best.get)
     # Combine groups so two distinct cues (cheer + laughter) beat one, but cap at
     # 1.0; the dominant group anchors the score.
-    combined = 1.0 - 1.0
+    combined = 0.0  # identity for the probabilistic-OR fold below
     for p in group_best.values():
         combined = combined + p - combined * p  # probabilistic OR
     return max(0.0, min(1.0, combined)), top_reason
