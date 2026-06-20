@@ -298,7 +298,7 @@ export default function Upload({ health }: { health: Health | null }) {
           </div>
         </div>
         <div className="field">
-          <label>Seitenverhaeltnis</label>
+          <label>Seitenverhältnis</label>
           <select className="input" value={aspect} onChange={(e) => setAspect(e.target.value)}>
             <option value="9:16">9:16 (Reels/Shorts/TikTok)</option>
             <option value="4:5">4:5 (Feed)</option>

@@ -1,8 +1,9 @@
 ﻿import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../lib/api";
-import type { Project } from "../lib/types";
+import type { ImportSettings, PowerMode, Project } from "../lib/types";
 import { fmtClock, fmtDuration, scoreColor } from "../lib/format";
+import { mediaTimeUrl } from "../lib/media";
 import ClipCard from "./ClipCard";
 import CueModal from "./CueModal";
 import VisualCueCalibration from "./VisualCueCalibration";
@@ -17,11 +18,18 @@ interface Learning {
 }
 
 type Sort = "score" | "timeline" | "duration";
+type ProjectClip = Project["clips"][number];
 
 const POWER_LABELS: Record<string, string> = {
-  balanced: "Balanced",
+  balanced: "Ausgewogen",
   max_gpu: "Max GPU",
-  quality: "Quality",
+  quality: "Qualität",
+};
+
+const SORT_LABELS: Record<Sort, string> = {
+  score: "Score",
+  timeline: "Timeline",
+  duration: "Dauer",
 };
 
 export default function ClipGridView({
@@ -120,7 +128,7 @@ export default function ClipGridView({
       setSelected([]);
     } catch (e: any) {
       // a failed *request* creates no montage card, so say it out loud
-      if (alive.current) setMontageErr(e?.message ?? "Could not create the montage.");
+      if (alive.current) setMontageErr(e?.message ?? "Montage konnte nicht erstellt werden.");
     } finally {
       if (alive.current) setMontaging(false);
     }
@@ -128,7 +136,7 @@ export default function ClipGridView({
 
   const clips = useMemo(() => {
     const list = project.clips.filter((c) => c.score >= minScore);
-    const by: Record<Sort, (a: any, b: any) => number> = {
+    const by: Record<Sort, (a: ProjectClip, b: ProjectClip) => number> = {
       score: (a, b) => b.score - a.score,
       timeline: (a, b) => a.start - b.start,
       duration: (a, b) => b.end - b.start - (a.end - a.start),
@@ -143,8 +151,8 @@ export default function ClipGridView({
   const activeSelected =
     selectedClips.find((c) => c.id === activeSelectedId) ?? selectedClips[0] ?? null;
   const selectedOriginalSrc =
-    project.source && activeSelected
-      ? `/media/${project.source.path}#t=${activeSelected.start.toFixed(3)},${activeSelected.end.toFixed(3)}`
+    activeSelected
+      ? mediaTimeUrl(project.source?.path, activeSelected.start, activeSelected.end)
       : undefined;
   const selectedPreviewSrc =
     selectedPreviewMode === "original" ? selectedOriginalSrc : activeSelected?.export_url ?? undefined;
@@ -208,16 +216,16 @@ export default function ClipGridView({
       window.location.reload(); // restart the processing view + polling
     } catch (e: any) {
       // e.g. 409 while a previous run is still processing
-      setMontageErr(e?.message ?? "Could not re-run this project.");
+      setMontageErr(e?.message ?? "Projekt konnte nicht neu berechnet werden.");
     }
   };
 
   const rerunWithDraft = async () => {
     try {
-      await api.reprocess(project.id, normalizedRenderDraft as any);
+      await api.reprocess(project.id, normalizedRenderDraft as Partial<ImportSettings>);
       window.location.reload();
     } catch (e: any) {
-      setMontageErr(e?.message ?? "Could not re-run with these settings.");
+      setMontageErr(e?.message ?? "Projekt konnte mit diesen Einstellungen nicht neu berechnet werden.");
     }
   };
 
@@ -239,7 +247,7 @@ export default function ClipGridView({
         await new Promise((r) => setTimeout(r, 1500));
       }
     } catch (e: any) {
-      if (alive.current) setMontageErr(e?.message ?? "Could not re-render selected clips.");
+      if (alive.current) setMontageErr(e?.message ?? "Ausgewählte Clips konnten nicht neu gerendert werden.");
     } finally {
       if (alive.current) setRerenderingSelected(false);
     }
@@ -258,16 +266,16 @@ export default function ClipGridView({
             )}
           </div>
           <span className="muted tiny">
-            {fmtDuration(project.source?.duration ?? 0)} source -{" "}
-            {project.clips.length} clips - {ready} rendered - {project.settings.aspect} -{" "}
-            {POWER_LABELS[project.settings.power_mode] ?? "Balanced"}
+            {fmtDuration(project.source?.duration ?? 0)} Quelle -{" "}
+            {project.clips.length} Clips - {ready} gerendert - {project.settings.aspect} -{" "}
+            {POWER_LABELS[project.settings.power_mode] ?? "Ausgewogen"}
           </span>
         </div>
         <div className="row">
           {learn && learn.total_ratings > 0 && (
             <span
               className="pill"
-              title={`Learned: ${learnTitle}. Click to reset.`}
+              title={`Gelernt: ${learnTitle}. Klicken zum Zurücksetzen.`}
               onClick={resetLearning}
               style={{ cursor: "pointer", color: "var(--good)" }}
             >
@@ -277,7 +285,7 @@ export default function ClipGridView({
           )}
           {project.content_type === "gameplay" && (
             <button className="btn ghost sm" onClick={() => setShowCues(true)}
-              title="Add and test game sounds or OCR phrases, then re-run detection">
+              title="Spiel-Sounds oder OCR-Begriffe hinzufügen, testen und dann neu berechnen">
               Spiel-Cues
             </button>
           )}
@@ -372,7 +380,7 @@ export default function ClipGridView({
             <select
               className="input"
               value={renderDraft.power_mode}
-              onChange={(e) => setRenderDraft((d) => ({ ...d, power_mode: e.target.value as any }))}
+              onChange={(e) => setRenderDraft((d) => ({ ...d, power_mode: e.target.value as PowerMode }))}
             >
               <option value="balanced">Ausgewogen</option>
               <option value="max_gpu">Max GPU</option>
@@ -421,7 +429,7 @@ export default function ClipGridView({
                 className={"toggle" + (renderDraft.tighten ? " on" : "")}
                 onClick={() => setRenderDraft((d) => ({ ...d, tighten: !d.tighten }))}
               >
-                <span>Jump cuts</span>
+                <span>Jump-Cuts</span>
                 <i>{renderDraft.tighten ? "An" : "Aus"}</i>
               </button>
               <button
@@ -435,7 +443,7 @@ export default function ClipGridView({
                 className={"toggle" + (renderDraft.denoise ? " on" : "")}
                 onClick={() => setRenderDraft((d) => ({ ...d, denoise: !d.denoise }))}
               >
-                <span>Clean voice</span>
+                <span>Saubere Stimme</span>
                 <i>{renderDraft.denoise ? "An" : "Aus"}</i>
               </button>
               <button
@@ -462,9 +470,9 @@ export default function ClipGridView({
               <button
                 className={"toggle" + (renderDraft.use_cues ? " on" : "")}
                 onClick={() => setRenderDraft((d) => ({ ...d, use_cues: !d.use_cues }))}
-                title="Use installed custom game sounds as exact-match evidence"
+                title="Installierte eigene Spielsounds als exaktes Erkennungs-Signal nutzen"
               >
-                <span>Custom sounds</span>
+                <span>Eigene Sounds</span>
                 <i>{renderDraft.use_cues ? "An" : "Aus"}</i>
               </button>
               <button
@@ -478,14 +486,14 @@ export default function ClipGridView({
                 className={"toggle" + (renderDraft.auto_length ? " on" : "")}
                 onClick={() => setRenderDraft((d) => ({ ...d, auto_length: !d.auto_length }))}
               >
-                <span>Auto length</span>
+                <span>Auto-Länge</span>
                 <i>{renderDraft.auto_length ? "An" : "Aus"}</i>
               </button>
             </div>
           </div>
           {project.content_type === "gameplay" && (
             <div className="field wide timing-controls">
-              <label>Clip context</label>
+              <label>Clip-Kontext</label>
               <button
                 className={"toggle" + (contextAuto ? " on" : "")}
                 onClick={() =>
@@ -497,13 +505,13 @@ export default function ClipGridView({
                 }
                 style={{ marginBottom: 8 }}
               >
-                <span>Automatic context</span>
+                <span>Automatischer Kontext</span>
                 <i>{contextAuto ? "An" : "Aus"}</i>
               </button>
               {(renderDraft.lead_seconds !== null || renderDraft.tail_seconds !== null) && (
                 <>
               <div className="range-label">
-                <span>Before detected moment</span>
+                <span>Vor dem erkannten Moment</span>
                 <b>{renderDraft.lead_seconds ?? 16}s</b>
               </div>
               <input
@@ -515,7 +523,7 @@ export default function ClipGridView({
                 onChange={(e) => setRenderDraft((d) => ({ ...d, lead_seconds: Number(e.target.value) }))}
               />
               <div className="range-label">
-                <span>After detected moment</span>
+                <span>Nach dem erkannten Moment</span>
                 <b>{renderDraft.tail_seconds ?? 20}s</b>
               </div>
               <input
@@ -534,7 +542,7 @@ export default function ClipGridView({
       </div>
 
       <div className="grid-head" style={{ marginTop: 22 }}>
-        <span className="muted tiny">Sort</span>
+        <span className="muted tiny">Sortierung</span>
         <div className="seg" style={{ width: "auto" }}>
           {(["score", "timeline", "duration"] as Sort[]).map((s) => (
             <button
@@ -543,7 +551,7 @@ export default function ClipGridView({
               style={{ minWidth: 84, textTransform: "capitalize" }}
               onClick={() => setSort(s)}
             >
-              {s === "score" ? "Virality" : s}
+              {SORT_LABELS[s]}
             </button>
           ))}
         </div>
@@ -558,7 +566,7 @@ export default function ClipGridView({
               await api.setAspect(project.id, e.target.value);
               window.location.reload(); // show live render progress
             } catch (err: any) {
-              setMontageErr(err?.message ?? "Could not change the format.");
+              setMontageErr(err?.message ?? "Format konnte nicht geändert werden.");
             }
           }}
         >
@@ -568,7 +576,7 @@ export default function ClipGridView({
           <option value="16:9">16:9 breit</option>
         </select>
         <div className="spacer" />
-        <span className="muted tiny">Min score: {minScore}+</span>
+        <span className="muted tiny">Min. Score: {minScore}+</span>
         <input
           type="range"
           min={0}
@@ -578,13 +586,13 @@ export default function ClipGridView({
           onChange={(e) => setMinScore(Number(e.target.value))}
           style={{ width: 160 }}
         />
-        <button className="btn ghost sm" onClick={refresh} title="Refresh">
+        <button className="btn ghost sm" onClick={refresh} title="Aktualisieren">
           Neu
         </button>
       </div>
 
       {clips.length === 0 ? (
-        <div className="empty">No clips match this filter. Lower the minimum score.</div>
+        <div className="empty">Keine Clips passen zu diesem Filter. Senke den Mindest-Score.</div>
       ) : (
         <div className="clip-grid">
           {clips.map((c) => (
@@ -604,9 +612,9 @@ export default function ClipGridView({
         <div className="panel section selected-preview">
           <div className="row" style={{ justifyContent: "space-between", marginBottom: 12 }}>
             <div className="col">
-              <h3>Selected preview</h3>
+              <h3>Auswahl-Vorschau</h3>
               <span className="muted tiny">
-                {selectedClips.length} clip{selectedClips.length === 1 ? "" : "s"} in montage order
+                {selectedClips.length} Clip{selectedClips.length === 1 ? "" : "s"} in Montage-Reihenfolge
               </span>
             </div>
             <div className="row selected-preview-actions">
@@ -615,7 +623,7 @@ export default function ClipGridView({
                   className={selectedPreviewMode === "rendered" ? "on" : ""}
                   onClick={() => setSelectedPreviewMode("rendered")}
                 >
-                  Rendered
+                  Gerendert
                 </button>
                 <button
                   className={selectedPreviewMode === "original" ? "on" : ""}
@@ -629,10 +637,10 @@ export default function ClipGridView({
                 onClick={rerenderSelected}
                 disabled={rerenderingSelected}
               >
-                {rerenderingSelected ? <><span className="spinner" /> Rerendering...</> : "Rerender selected"}
+                {rerenderingSelected ? <><span className="spinner" /> Rendert neu...</> : "Auswahl neu rendern"}
               </button>
               <button className="btn ghost sm" onClick={() => setSelected([])}>
-                Clear
+                Leeren
               </button>
             </div>
           </div>
@@ -647,7 +655,7 @@ export default function ClipGridView({
                   poster={selectedPreviewMode === "rendered" ? activeSelected?.thumb_url ?? undefined : undefined}
                 />
               ) : (
-                <div className="empty">Select a clip to preview it.</div>
+                <div className="empty">Wähle einen Clip aus, um ihn hier anzusehen.</div>
               )}
             </div>
             <div className="selected-list">
@@ -662,7 +670,7 @@ export default function ClipGridView({
                     className="mini-thumb"
                     style={c.thumb_url ? { backgroundImage: `url(${c.thumb_url})` } : undefined}
                   />
-                  <span className="selected-title">{c.title || "Untitled clip"}</span>
+                  <span className="selected-title">{c.title || "Unbenannter Clip"}</span>
                   <span className="muted tiny">{fmtDuration(c.tightened_duration ?? c.end - c.start)}</span>
                 </button>
               ))}
@@ -681,7 +689,7 @@ export default function ClipGridView({
         <div className="spacer" style={{ flex: 1 }} />
         {selected.length > 0 && (
           <button className="btn ghost sm" onClick={() => setSelected([])}>
-            Clear
+            Leeren
           </button>
         )}
         <button
@@ -699,7 +707,7 @@ export default function ClipGridView({
 
       {project.montages.length > 0 && (
         <div style={{ marginTop: 28 }}>
-          <h3 style={{ marginBottom: 12 }}>Montages</h3>
+          <h3 style={{ marginBottom: 12 }}>Montagen</h3>
           <div className="clip-grid">
             {project.montages.map((m) => (
               <div className="clip-card" key={m.id}>
@@ -722,7 +730,7 @@ export default function ClipGridView({
                     <span className="ring" style={{ ["--p" as string]: m.score }}>
                       <i>{m.score}</i>
                     </span>
-                    <span>virality</span>
+                    <span>Score</span>
                   </span>
                   <div className="clip-title">{m.title}</div>
                   <div className="factors">

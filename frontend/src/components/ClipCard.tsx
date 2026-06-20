@@ -99,7 +99,7 @@ export default function ClipCard({ clip, projectId, rank, selected, onToggleSele
           <ScoreBadge score={clip.score} />
         </div>
         <div className="clip-title" onClick={open} role="button">
-          {clip.title || "Untitled clip"}
+          {clip.title || "Unbenannter Clip"}
         </div>
         <div className="factors">
           {clip.factors.slice(0, 2).map((f, i) => (
@@ -110,7 +110,7 @@ export default function ClipCard({ clip, projectId, rank, selected, onToggleSele
         </div>
         <div className="card-actions">
           <button className="btn sm ghost" onClick={open}>
-            Edit
+            Bearbeiten
           </button>
           {ready && (
             <a
@@ -132,7 +132,7 @@ export default function ClipCard({ clip, projectId, rank, selected, onToggleSele
           </button>
           <button
             className="btn sm ghost"
-            title="Less like this"
+            title="Weniger davon"
             onClick={(e) => rate(e, "down")}
             style={{ padding: "7px 9px", color: fb === "down" ? "var(--bad)" : undefined }}
           >

@@ -376,7 +376,7 @@ export default function CueLab({
               }}
             />
           </label>
-          <p className="muted tiny cue-file-name">{audioFile?.name || "No sample selected"}</p>
+          <p className="muted tiny cue-file-name">{audioFile?.name || "Noch kein Beispiel ausgewählt"}</p>
           <input
             className="input"
             value={audioLabel}

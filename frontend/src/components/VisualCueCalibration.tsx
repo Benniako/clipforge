@@ -3,6 +3,7 @@ import type { PointerEvent } from "react";
 import { api, type VisualCueMeta } from "../lib/api";
 import type { DetectedEvent, Project } from "../lib/types";
 import { fmtClock } from "../lib/format";
+import { mediaUrl } from "../lib/media";
 
 type Box = { x: number; y: number; w: number; h: number };
 type OcrResult = {
@@ -51,7 +52,7 @@ const waitForSeek = (video: HTMLVideoElement, t: number) =>
 
 export default function VisualCueCalibration({ project }: { project: Project }) {
   const game = project.settings.game_profile || "generic";
-  const videoSrc = project.source ? `/media/${project.source.path}` : "";
+  const videoSrc = mediaUrl(project.source?.path) ?? "";
   const ocrEvents = useMemo(
     () => (project.events || []).filter((e) => e.source === "ocr").sort((a, b) => a.t - b.t),
     [project.events],

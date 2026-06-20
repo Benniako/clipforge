@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { api } from "../lib/api";
 import type { Clip, Project, Rect, StyleTemplate } from "../lib/types";
 import { fmtClock, fmtDuration } from "../lib/format";
+import { mediaTimeUrl } from "../lib/media";
 import ScoreBadge from "../components/ScoreBadge";
 
 export default function ClipEditor() {
@@ -87,7 +88,7 @@ export default function ClipEditor() {
     if (!clip) return;
     const kept = keptSpeakers(clip, capSpeakers);
     const next = kept.includes(sp) ? kept.filter((x) => x !== sp) : [...kept, sp].sort((a, b) => a - b);
-    // A full set is the default ("all") — store it as null so re-renders show every speaker.
+    // A full set is the default ("all") - store it as null so re-renders show every speaker.
     setCapSpeakers(next.length === clip.speakers.length ? null : next);
   };
 
@@ -121,7 +122,7 @@ export default function ClipEditor() {
   const apply = async () => {
     if (!projectId || !clipId || !clip) return;
     setBusy(true);
-    setMsg("Re-rendering this clip…");
+    setMsg("Clip wird neu gerendert…");
     try {
       const edit: any = {};
       if (title !== clip.title) edit.title = title;
@@ -146,7 +147,7 @@ export default function ClipEditor() {
       await api.editClip(projectId, clipId, edit);
       await pollUntilReady();
     } catch (e: any) {
-      setMsg(e.message ?? "Edit failed");
+      setMsg(e.message ?? "Bearbeitung fehlgeschlagen");
       setBusy(false);
     }
   };
@@ -155,7 +156,7 @@ export default function ClipEditor() {
     if (!projectId || !clipId) return;
     for (let i = 0; i < 120; i++) {
       await new Promise((r) => setTimeout(r, 1000));
-      if (!alive.current) return; // user navigated away — stop polling
+      if (!alive.current) return; // user navigated away - stop polling
       const p = await api.getProject(projectId);
       if (!alive.current) return;
       const c = p.clips.find((x) => x.id === clipId);
@@ -164,7 +165,7 @@ export default function ClipEditor() {
         hydrate(c);
         setVer((v) => v + 1);
         setBusy(false);
-        setMsg("Updated ✓");
+        setMsg("Aktualisiert ✓");
         setTimeout(() => setMsg(null), 2500);
         return;
       }
@@ -175,7 +176,7 @@ export default function ClipEditor() {
       }
     }
     setBusy(false);
-    setMsg("Still rendering — check back shortly.");
+    setMsg("Rendert noch - schau gleich wieder vorbei.");
   };
 
   if (loadErr)
@@ -185,7 +186,7 @@ export default function ClipEditor() {
           <div className="col" style={{ alignItems: "center", gap: 12 }}>
             <span>{loadErr}</span>
             <Link className="btn ghost sm" to={projectId ? `/p/${projectId}` : "/"}>
-              ← Back to clips
+              ← Zurück zu den Clips
             </Link>
           </div>
         </div>
@@ -200,41 +201,39 @@ export default function ClipEditor() {
     );
 
   const renderedSrc = clip.export_url ? `${clip.export_url}?v=${ver}` : undefined;
-  const originalSrc = project.source
-    ? `/media/${project.source.path}#t=${start.toFixed(3)},${end.toFixed(3)}`
-    : undefined;
+  const originalSrc = mediaTimeUrl(project.source?.path, start, end);
   const videoSrc = previewMode === "original" ? originalSrc : renderedSrc;
 
   return (
     <div className="container">
       <div className="row" style={{ justifyContent: "space-between", marginBottom: 18 }}>
         <Link className="btn ghost sm" to={`/p/${projectId}`}>
-          ← All clips
+          ← Alle Clips
         </Link>
         <div className="row">
-          <button className="btn sm ghost" title="More like this (personalizes scoring)"
+          <button className="btn sm ghost" title="Mehr davon - personalisiert die Bewertung"
             onClick={() => rate("up")}
             style={{ color: fb === "up" ? "var(--good)" : undefined }}>
-            👍
+            Gut
           </button>
-          <button className="btn sm ghost" title="Less like this"
+          <button className="btn sm ghost" title="Weniger davon"
             onClick={() => rate("down")}
             style={{ color: fb === "down" ? "var(--bad)" : undefined }}>
-            👎
+            Schlecht
           </button>
           {clip.export_url && (
             <a className="btn sm" href={api.downloadClipUrl(projectId!, clipId!)} download>
-              ⬇ Download
+              Download
             </a>
           )}
           {clip.captions.words.length > 0 && (
             <a className="btn sm ghost" href={api.downloadSrtUrl(projectId!, clipId!)} download
-              title="Caption file for Premiere/Resolve">
+              title="Untertitel-Datei für Premiere/Resolve">
               .srt
             </a>
           )}
           <button className="btn primary sm" onClick={apply} disabled={!dirty || busy}>
-            {busy ? <><span className="spinner" /> Rendering…</> : "Apply & re-render"}
+            {busy ? <><span className="spinner" /> Rendert…</> : "Anwenden & neu rendern"}
           </button>
         </div>
       </div>
@@ -246,7 +245,7 @@ export default function ClipEditor() {
               className={previewMode === "rendered" ? "on" : ""}
               onClick={() => setPreviewMode("rendered")}
             >
-              Rendered
+              Gerendert
             </button>
             <button
               className={previewMode === "original" ? "on" : ""}
@@ -265,13 +264,13 @@ export default function ClipEditor() {
                 poster={previewMode === "rendered" ? clip.thumb_url ?? undefined : undefined}
               />
             ) : (
-              <div className="empty">Not rendered yet</div>
+              <div className="empty">Noch nicht gerendert</div>
             )}
           </div>
           <div className="panel section" style={{ marginTop: 14 }}>
             <div className="row" style={{ justifyContent: "space-between", marginBottom: 10 }}>
               <ScoreBadge score={clip.score} />
-              <span className="pill">{clip.reframe.tracked ? "Speaker-tracked" : clip.reframe.overridden ? "Manual crop" : "Center crop"}</span>
+              <span className="pill">{clip.reframe.tracked ? "Sprecher verfolgt" : clip.reframe.overridden ? "Manueller Crop" : "Zentrierter Crop"}</span>
             </div>
             <div className="factors">
               {clip.factors.map((f, i) => (
@@ -294,12 +293,12 @@ export default function ClipEditor() {
 
         <div className="controls-pane">
           <div className="panel section">
-            <h3>Title / hook</h3>
+            <h3>Titel / Hook</h3>
             <input className="input" value={title} onChange={(e) => setTitle(e.target.value)} />
           </div>
 
           <div className="panel section">
-            <h3>Trim</h3>
+            <h3>Schnitt</h3>
             <div className="muted tiny" style={{ marginBottom: 10 }}>
               {fmtClock(start)} → {fmtClock(end)} · {fmtDuration(end - start)}
             </div>
@@ -311,13 +310,13 @@ export default function ClipEditor() {
               onChange={(e) => setEnd(Math.max(Number(e.target.value), start + 1))} />
             {spanChanged && (
               <div className="tiny muted" style={{ marginTop: 8 }}>
-                Captions &amp; score will be recomputed for the new range.
+                Untertitel und Score werden für den neuen Bereich neu berechnet.
               </div>
             )}
           </div>
 
           <div className="panel section">
-            <h3>Caption style</h3>
+            <h3>Untertitel-Stil</h3>
             <div className="style-picker">
               {styles.map((s) => (
                 <div
@@ -338,29 +337,29 @@ export default function ClipEditor() {
             <h3>Reframe</h3>
             <div className="muted tiny" style={{ marginBottom: 10 }}>
               {cx === null
-                ? "Auto: following the speaker. Drag to set a fixed crop."
-                : `Manual crop center: ${Math.round(cx * 100)}% from left`}
+                ? "Auto: folgt dem Sprecher. Ziehe den Regler für einen festen Crop."
+                : `Manueller Crop-Mittelpunkt: ${Math.round(cx * 100)}% von links`}
             </div>
             <div className="range-row">
-              <span className="tiny muted">◀</span>
+              <span className="tiny muted">Links</span>
               <input type="range" min={0} max={1} step={0.01}
                 value={cx ?? 0.5}
                 onChange={(e) => setCx(Number(e.target.value))} />
-              <span className="tiny muted">▶</span>
+              <span className="tiny muted">Rechts</span>
             </div>
             {cx !== null && (
               <button className="btn ghost sm" style={{ marginTop: 10 }} onClick={() => setCx(null)}>
-                Reset to auto (needs new range to re-track)
+                Zurück auf Auto
               </button>
             )}
             <div style={{ marginTop: 14 }}>
-              <label className="tiny muted">Output aspect (this clip only)</label>
+              <label className="tiny muted">Ausgabeformat (nur dieser Clip)</label>
               <select className="input" value={aspect}
                 onChange={(e) => setAspect(e.target.value)}>
-                <option value="">Project default ({project.settings.aspect})</option>
+                <option value="">Projektstandard ({project.settings.aspect})</option>
                 <option value="9:16">9:16 (Reels/Shorts/TikTok)</option>
                 <option value="4:5">4:5 (Feed)</option>
-                <option value="1:1">1:1 (Square)</option>
+                <option value="1:1">1:1 (Quadrat)</option>
                 <option value="16:9">16:9 (YouTube)</option>
               </select>
             </div>
@@ -368,11 +367,11 @@ export default function ClipEditor() {
 
           {clip.kind === "gameplay" && (
             <div className="panel section">
-              <h3>Facecam layout</h3>
+              <h3>Facecam-Layout</h3>
               <div className="seg" style={{ marginBottom: 10 }}>
                 {[
-                  { id: "center", label: "Plain" },
-                  { id: "split", label: "Stacked" },
+                  { id: "center", label: "Nur Gameplay" },
+                  { id: "split", label: "Gestapelt" },
                   { id: "framed", label: "PiP" },
                 ].map((o) => (
                   <button
@@ -385,10 +384,10 @@ export default function ClipEditor() {
                     }}
                     title={
                       o.id === "split"
-                        ? "Streamer cam stacked above the gameplay"
+                        ? "Streamer-Cam über dem Gameplay stapeln"
                         : o.id === "framed"
-                          ? "Streamer cam overlaid on the gameplay"
-                          : "Gameplay only, no facecam"
+                          ? "Streamer-Cam über das Gameplay legen"
+                          : "Nur Gameplay, keine Facecam"
                     }
                   >
                     {o.label}
@@ -419,10 +418,10 @@ export default function ClipEditor() {
                   </div>
                   {(
                     [
-                      ["x", "Left", 0, 0.95],
-                      ["y", "Top", 0, 0.95],
-                      ["w", "Width", 0.05, 0.6],
-                      ["h", "Height", 0.05, 0.6],
+                      ["x", "Links", 0, 0.95],
+                      ["y", "Oben", 0, 0.95],
+                      ["w", "Breite", 0.05, 0.6],
+                      ["h", "Höhe", 0.05, 0.6],
                     ] as const
                   ).map(([k, label, min, max]) => (
                     <div className="range-row" key={k}>
@@ -438,8 +437,8 @@ export default function ClipEditor() {
                     </div>
                   ))}
                   <span className="muted tiny">
-                    Mark the streamer cam — it'll be{" "}
-                    {layout === "split" ? "stacked above the gameplay" : "overlaid on the gameplay"}.
+                    Markiere die Streamer-Cam - sie wird{" "}
+                    {layout === "split" ? "über dem Gameplay gestapelt" : "über das Gameplay gelegt"}.
                   </span>
                 </>
               )}
@@ -448,7 +447,7 @@ export default function ClipEditor() {
 
           {clip.speakers.length > 1 && (
             <div className="panel section">
-              <h3>Speakers <span className="muted tiny">— toggle who appears in captions</span></h3>
+              <h3>Sprecher <span className="muted tiny">- wähle, wer in Untertiteln erscheint</span></h3>
               <div className="seg" style={{ flexWrap: "wrap", marginBottom: 8 }}>
                 {clip.speakers.map((sp) => {
                   const on = keptSpeakers(clip, capSpeakers).includes(sp);
@@ -457,22 +456,21 @@ export default function ClipEditor() {
                       key={sp}
                       className={on ? "on" : ""}
                       onClick={() => toggleSpeaker(sp)}
-                      title={on ? "Shown in captions — click to hide" : "Hidden from captions — click to show"}
+                      title={on ? "In Untertiteln sichtbar - klicken zum Ausblenden" : "Aus Untertiteln ausgeblendet - klicken zum Einblenden"}
                     >
-                      {on ? "🟢" : "⚪"} Speaker {sp + 1}
+                      {on ? "An" : "Aus"} Sprecher {sp + 1}
                     </button>
                   );
                 })}
               </div>
               <span className="muted tiny">
-                Captions only show the speakers turned on — useful when one mic picks up
-                cross-talk or you only want the host's lines.
+                Untertitel zeigen nur aktivierte Sprecher - praktisch bei Übersprechen oder wenn nur der Host sichtbar sein soll.
               </span>
             </div>
           )}
 
           <div className="panel section">
-            <h3>Captions <span className="muted tiny">— fix any transcription error</span></h3>
+            <h3>Untertitel <span className="muted tiny">- Transkriptionsfehler korrigieren</span></h3>
             <div className="caption-list">
               {words.map((w, i) => (
                 <div className="caption-row" key={i}>
