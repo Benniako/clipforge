@@ -273,8 +273,6 @@ class Engine:
                                                events_out=detected)
             if not gcs:
                 raise RuntimeError("no highlights found in this footage")
-            with store.mutate(project_id) as p:
-                p.events = detected
             # Learn reusable AUDIO cues from the on-screen (OCR) events: snip the
             # game sound at each banner and save it, so the cheap audio matcher
             # catches that event on future videos even with OCR off.
@@ -311,10 +309,12 @@ class Engine:
             for gc in gcs:
                 words = ([w for w in transcript.words if w.end > gc.start and w.t < gc.end]
                          if real_speech else [])  # never carry filler text
+                features = dict(gc.features)
+                features["evidence_t"] = round(float(gc.peak_t), 3)
                 clips.append(Clip(
                     start=gc.start, end=gc.end, title=gc.title,
                     kind="gameplay", score=gc.score, factors=gc.factors,
-                    features=gc.features,
+                    features=features,
                     # Mute captions around matched game sounds — the announcer
                     # saying "Double Kill" isn't the streamer talking.
                     caption_mute=[[round(t - 0.4, 3), round(t + 2.6, 3)]
@@ -455,6 +455,8 @@ class Engine:
         clips.sort(key=lambda c: c.score, reverse=True)
         with store.mutate(project_id) as p:
             p.clips = clips
+            if kind == "gameplay":
+                p.events = gameplay_mod.accepted_events_for_clips(detected, clips)
 
         # 4. reframe ------------------------------------------------------
         out_w, out_h = project.settings.dims()
@@ -549,14 +551,7 @@ class Engine:
                          project.settings.burn_captions, project.settings.motion,
                          project.settings.power_mode.value)
 
-        with store.mutate(project_id) as p:
-            ready = sum(1 for c in p.clips if c.status == ClipStatus.ready)
-            p.status = ProjectStatus.ready
-            p.progress = JobProgress(
-                stage="done", stage_index=len(STAGES), total_stages=len(STAGES),
-                message=f"Done — {ready} clips ready", pct=100.0,
-                stages=self._stage_view(len(STAGES), 1.0),
-            )
+        self._finish_render_progress(project_id)
         log.info("project %s complete", project_id)
 
     # First-person games keep the action at the crosshair — never chase motion.
@@ -643,6 +638,44 @@ class Engine:
                 c.thumb_url = _media_url(thumb)
                 c.error = None
 
+    def _finish_render_progress(self, project_id: str,
+                                selected_ids: set[str] | None = None) -> None:
+        with store.mutate(project_id) as p:
+            ready = sum(1 for c in p.clips if c.status == ClipStatus.ready)
+            failed = sum(1 for c in p.clips if c.status == ClipStatus.failed)
+            if selected_ids is not None:
+                selected_ready = sum(1 for c in p.clips
+                                     if c.id in selected_ids and c.status == ClipStatus.ready)
+                if selected_ready == 0:
+                    for c in p.clips:
+                        if c.id in selected_ids and c.status != ClipStatus.failed:
+                            c.status = ClipStatus.failed
+                            c.error = "Selected re-render did not produce an output."
+                    p.status = ProjectStatus.ready if ready else ProjectStatus.failed
+                    p.progress = JobProgress(
+                        stage="render", stage_index=5, total_stages=len(STAGES),
+                        message="Selected re-render failed for every selected clip",
+                        pct=100.0, stages=self._stage_view(5, 1.0))
+                    return
+            if ready == 0:
+                p.status = ProjectStatus.failed
+                p.error = "Rendering failed for every clip."
+                p.progress = JobProgress(
+                    stage="render", stage_index=5, total_stages=len(STAGES),
+                    message="Rendering failed for every clip",
+                    pct=100.0, stages=self._stage_view(5, 1.0))
+                return
+            if failed:
+                msg = f"{failed} clip(s) failed to render."
+                if msg not in p.warnings:
+                    p.warnings.append(msg)
+            p.status = ProjectStatus.ready
+            p.error = None
+            p.progress = JobProgress(
+                stage="done", stage_index=len(STAGES), total_stages=len(STAGES),
+                message=f"Done - {ready} clips ready", pct=100.0,
+                stages=self._stage_view(len(STAGES), 1.0))
+
     # -- single-clip re-render (editor edits) -----------------------------
     def rerender_clip(self, project_id: str, clip_id: str) -> None:
         # Runs on a bare thread spawned by the API: any exception here would
@@ -686,13 +719,7 @@ class Engine:
                              out_w, out_h, project.settings.burn_captions,
                              project.settings.motion,
                              project.settings.power_mode.value)
-            with store.mutate(project_id) as p:
-                ready = sum(1 for c in p.clips if c.status == ClipStatus.ready)
-                p.status = ProjectStatus.ready
-                p.progress = JobProgress(
-                    stage="done", stage_index=len(STAGES), total_stages=len(STAGES),
-                    message=f"Done — {ready} clips ready", pct=100.0,
-                    stages=self._stage_view(len(STAGES), 1.0))
+            self._finish_render_progress(project_id)
         except Exception as e:
             log.error("re-render all failed for %s: %s", project_id, e)
             try:
@@ -724,13 +751,7 @@ class Engine:
                              out_w, out_h, project.settings.burn_captions,
                              project.settings.motion,
                              project.settings.power_mode.value)
-            with store.mutate(project_id) as p:
-                ready = sum(1 for c in p.clips if c.status == ClipStatus.ready)
-                p.status = ProjectStatus.ready
-                p.progress = JobProgress(
-                    stage="done", stage_index=len(STAGES), total_stages=len(STAGES),
-                    message=f"Done - {ready} clips ready", pct=100.0,
-                    stages=self._stage_view(len(STAGES), 1.0))
+            self._finish_render_progress(project_id, selected_ids=wanted)
         except Exception as e:
             log.error("selected re-render failed for %s: %s", project_id, e)
             for cid in clip_ids:

@@ -2,14 +2,46 @@ import { useState } from "react";
 import { api } from "../lib/api";
 import type { CuesStatus } from "../lib/api";
 
+const EVENT_LABELS: Record<string, string> = {
+  kill: "Kill",
+  double_kill: "Doppel-Kill",
+  triple_kill: "Triple-Kill",
+  quad_kill: "Vierfach-Kill",
+  ace: "Ace",
+  clutch: "Clutch",
+  spike_plant: "Spike platziert",
+  spike_defuse: "Spike entschaerft",
+  headshot: "Headshot",
+  bomb_plant: "Bombe gelegt",
+  bomb_defuse: "Bombe entschaerft",
+  goal: "Tor",
+  whistle: "Pfiff",
+  crowd_roar: "Jubel",
+  demolition: "Demolition",
+  save: "Parade",
+  stinger: "Stinger",
+  scream: "Schrei",
+  jumpscare: "Jumpscare",
+  airhorn: "Airhorn",
+  hype: "Hype",
+  laugh: "Lacher",
+  applause: "Applaus",
+  bruh: "Bruh",
+  wow: "Wow",
+};
+
 export default function CueManager({
   game,
   cues,
   onChange,
+  enabled,
+  onToggle,
 }: {
   game: string;
   cues: CuesStatus | null;
   onChange: (c: CuesStatus) => void;
+  enabled?: boolean;
+  onToggle?: (enabled: boolean) => void;
 }) {
   const pack = cues?.[game];
   const [urls, setUrls] = useState<Record<string, string>>({});
@@ -29,13 +61,12 @@ export default function CueManager({
       onChange(await api.addCue(game, event, file ? { file } : { url }));
       setUrls((u) => ({ ...u, [event]: "" }));
     } catch (e: any) {
-      setErr(`Could not add the "${event}" cue: ${e?.message ?? "unknown error"}`);
+      setErr(`Cue "${event}" konnte nicht hinzugefuegt werden: ${e?.message ?? "unbekannter Fehler"}`);
     } finally {
       setBusy(null);
     }
   };
 
-  // Install every row that has a URL typed in — one click instead of N.
   const saveAll = async () => {
     setBusyAll(true);
     setErr(null);
@@ -48,12 +79,12 @@ export default function CueManager({
         onChange(await api.addCue(game, ev.name, { url }));
         setUrls((u) => ({ ...u, [ev.name]: "" }));
       } catch (e: any) {
-        errors.push(`${ev.name}: ${e?.message ?? "failed"}`);
+        errors.push(`${ev.name}: ${e?.message ?? "fehlgeschlagen"}`);
       }
     }
     setBusy(null);
     setBusyAll(false);
-    if (errors.length) setErr(`Some cues failed — ${errors.join(" · ")}`);
+    if (errors.length) setErr(`Einige Cues sind fehlgeschlagen: ${errors.join(" | ")}`);
   };
 
   const remove = async (event: string) => {
@@ -62,7 +93,7 @@ export default function CueManager({
     try {
       onChange(await api.removeCue(game, event));
     } catch (e: any) {
-      setErr(`Could not remove the "${event}" cue: ${e?.message ?? "unknown error"}`);
+      setErr(`Cue "${event}" konnte nicht entfernt werden: ${e?.message ?? "unbekannter Fehler"}`);
     } finally {
       setBusy(null);
     }
@@ -70,54 +101,77 @@ export default function CueManager({
 
   return (
     <div className="panel section" style={{ marginTop: 16 }}>
-      <h3>
-        Pinpoint cues — {pack.label}{" "}
-        <span className="muted tiny">({pack.configured}/{pack.total} configured)</span>
-      </h3>
+      <div className="cue-manager-head">
+        <div>
+          <h3>
+            Eigene Sound-Cues - {pack.label}{" "}
+            <span className="muted tiny">({pack.configured}/{pack.total} konfiguriert)</span>
+          </h3>
+          {onToggle && (
+            <p className="muted tiny" style={{ margin: "6px 0 0" }}>
+              Das steuert nur, ob diese gespeicherten Sounds fuer die Clip-Erkennung genutzt werden.
+            </p>
+          )}
+        </div>
+        {onToggle && (
+          <button
+            className={"toggle cue-use-toggle" + (enabled ? " on" : "")}
+            onClick={() => onToggle(!enabled)}
+            title="Eigene Referenzsounds fuer die naechste Erkennung ein- oder ausschalten"
+          >
+            <span>In Clips nutzen</span>
+            <i>{enabled ? "An" : "Aus"}</i>
+          </button>
+        )}
+      </div>
       <p className="muted tiny" style={{ marginBottom: 12 }}>
-        Optional: paste a sound URL (a MyInstants page link works) or upload a file for each
-        event to detect it exactly. Without cues, ClipForge still finds the loud moments
-        automatically. <b>Typed URLs aren't stored until you hit Add or Save all.</b>
+        Optional: Fuege eine Sound-URL ein oder lade einen sauberen Referenzsound hoch.
+        ClipForge nutzt diese Sounds als zusaetzliches Signal, nicht als garantiertes Highlight.
+        <b> Eingegebene URLs werden erst gespeichert, wenn du Hinzufuegen oder Alle speichern klickst.</b>
       </p>
+      {onToggle && !enabled && (
+        <p className="tiny cue-off-note">
+          Eigene Sound-Erkennung ist fuer neue Clips aus. Du kannst hier trotzdem Sounds verwalten.
+        </p>
+      )}
       {err && (
         <p className="tiny" style={{ color: "var(--bad)", marginBottom: 10 }}>
-          ⚠ {err}
+          {err}
         </p>
       )}
       <div className="caption-list">
         {pack.events.map((e) => (
           <div key={e.name} className="row" style={{ gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-            <span style={{ width: 130, fontWeight: 600, color: e.configured ? "var(--good)" : undefined }}>
-              {e.configured ? "✓" : "○"} {e.name}
-            </span>
-            <input
-              className="input"
-              style={{ flex: 1, minWidth: 170 }}
-              placeholder={`${e.hint} — paste URL`}
-              value={urls[e.name] || ""}
-              onChange={(ev) => setUrls((u) => ({ ...u, [e.name]: ev.target.value }))}
-            />
-            <a
-              className="btn sm ghost"
-              href={`https://www.myinstants.com/en/search/?name=${encodeURIComponent(e.hint)}`}
-              target="_blank"
-              rel="noreferrer"
-              title={`Search MyInstants for "${e.hint}" — right-click the sound's Download link, copy the address, paste it here`}
-            >
-              🔍 Find
-            </a>
+              <span style={{ width: 130, fontWeight: 600, color: e.configured ? "var(--good)" : undefined }}>
+                {e.configured ? "aktiv" : "neu"} {EVENT_LABELS[e.name] ?? e.name}
+              </span>
+              <input
+                className="input"
+                style={{ flex: 1, minWidth: 170 }}
+                placeholder={`${EVENT_LABELS[e.name] ?? e.name} - URL einfuegen`}
+                value={urls[e.name] || ""}
+                onChange={(ev) => setUrls((u) => ({ ...u, [e.name]: ev.target.value }))}
+              />
+              <a
+                className="btn sm ghost"
+                href={`https://www.myinstants.com/de/search/?name=${encodeURIComponent(e.hint)}`}
+                target="_blank"
+                rel="noreferrer"
+                title={`MyInstants nach ${EVENT_LABELS[e.name] ?? e.name} durchsuchen`}
+              >
+                Finden
+              </a>
             <button className="btn sm" disabled={busy === e.name} onClick={() => add(e.name)}>
-              {busy === e.name ? "…" : "Add"}
+              {busy === e.name ? "..." : "Hinzufuegen"}
             </button>
-            <label className="btn sm ghost" style={{ cursor: "pointer" }} title="Upload a sound file">
-              File
+            <label className="btn sm ghost" style={{ cursor: "pointer" }} title="Sounddatei hochladen">
+              Datei
               <input
                 type="file"
                 accept="audio/*"
                 hidden
                 onChange={(ev) => {
                   const f = ev.target.files?.[0];
-                  // reset so picking the same file again re-fires the event
                   ev.target.value = "";
                   if (f) add(e.name, f);
                 }}
@@ -125,7 +179,7 @@ export default function CueManager({
             </label>
             {e.configured && (
               <button className="btn sm danger" disabled={busy === e.name} onClick={() => remove(e.name)}>
-                ✕
+                Entfernen
               </button>
             )}
           </div>
@@ -133,12 +187,18 @@ export default function CueManager({
       </div>
       {filled.length > 0 && (
         <div className="row" style={{ marginTop: 12, justifyContent: "flex-end" }}>
-          <button className="btn primary sm" disabled={busyAll} onClick={saveAll}
-            title="Download and install every URL you've pasted above">
+          <button
+            className="btn primary sm"
+            disabled={busyAll}
+            onClick={saveAll}
+            title="Alle oben eingefuegten URLs herunterladen und installieren"
+          >
             {busyAll ? (
-              <><span className="spinner" /> Saving…</>
+              <>
+                <span className="spinner" /> Speichert...
+              </>
             ) : (
-              <>⬇ Save all ({filled.length})</>
+              <>Alle speichern ({filled.length})</>
             )}
           </button>
         </div>

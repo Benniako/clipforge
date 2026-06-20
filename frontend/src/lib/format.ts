@@ -1,4 +1,4 @@
-export function fmtDuration(s: number): string {
+﻿export function fmtDuration(s: number): string {
   if (!s || s < 0) return "0:00";
   const m = Math.floor(s / 60);
   const sec = Math.round(s % 60);
@@ -12,7 +12,7 @@ export function fmtClock(s: number): string {
   return `${m}:${sec.toString().padStart(2, "0")}.${cs}`;
 }
 
-// Green (great) → yellow (ok) → red (weak).
+// Green (great) â†’ yellow (ok) â†’ red (weak).
 export function scoreColor(score: number): string {
   if (score >= 75) return "var(--good)";
   if (score >= 55) return "#b6e36b";
@@ -22,8 +22,9 @@ export function scoreColor(score: number): string {
 
 export function timeAgo(epochSeconds: number): string {
   const diff = Date.now() / 1000 - epochSeconds;
-  if (diff < 60) return "just now";
-  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
-  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
-  return `${Math.floor(diff / 86400)}d ago`;
+  if (diff < 60) return "gerade eben";
+  if (diff < 3600) return `vor ${Math.floor(diff / 60)} Min`;
+  if (diff < 86400) return `vor ${Math.floor(diff / 3600)} Std`;
+  return `vor ${Math.floor(diff / 86400)} Tg`;
 }
+

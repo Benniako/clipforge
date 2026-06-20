@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import os
 import shutil
 import subprocess
@@ -58,7 +59,10 @@ def _clamp_lengths(min_len: float, max_len: float) -> tuple[float, float]:
 def _clamp_pad(v: float | None) -> float | None:
     if v is None:
         return None
-    return round(max(0.0, min(float(v), 60.0)), 3)
+    value = float(v)
+    if not math.isfinite(value):
+        return None
+    return round(max(0.0, min(value, 60.0)), 3)
 
 
 def _system_usage() -> dict:
@@ -129,6 +133,7 @@ async def create_project(
     facecam_layout: str = Form("auto"),
     use_ocr: bool = Form(True),
     use_vlm: bool = Form(True),
+    use_cues: bool = Form(True),
     use_audio_events: bool = Form(True),
     cue_learning: bool = Form(True),
     auto_length: bool = Form(False),
@@ -173,6 +178,7 @@ async def create_project(
                         else "auto"),
         use_ocr=use_ocr,
         use_vlm=use_vlm,
+        use_cues=use_cues,
         use_audio_events=use_audio_events,
         cue_learning=cue_learning,
         auto_length=auto_length,
@@ -340,6 +346,7 @@ class Reprocess(BaseModel):
     facecam_layout: str | None = None
     use_ocr: bool | None = None
     use_vlm: bool | None = None
+    use_cues: bool | None = None
     use_audio_events: bool | None = None
     cue_learning: bool | None = None
     auto_length: bool | None = None
@@ -397,6 +404,8 @@ def reprocess(project_id: str, body: Reprocess | None = None) -> Project:
             s.use_ocr = body.use_ocr
         if body.use_vlm is not None:
             s.use_vlm = body.use_vlm
+        if body.use_cues is not None:
+            s.use_cues = body.use_cues
         if body.use_audio_events is not None:
             s.use_audio_events = body.use_audio_events
         if body.cue_learning is not None:

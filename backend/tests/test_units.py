@@ -17,7 +17,8 @@ import types
 # Isolate the learning DB before anything imports settings.
 os.environ.setdefault("CLIPFORGE_DATA_DIR", tempfile.mkdtemp(prefix="clipforge-test-"))
 
-from app.models import (Clip, ImportSettings, Platform, Reframe,
+from app.models import (Clip, ClipStatus, DetectedEvent, ImportSettings,
+                        Platform, Project, ProjectStatus, Reframe,
                         ReframeKeyframe, Transcript, Word)
 from app.pipeline import captionize, render
 from app.pipeline import captions as C
@@ -69,12 +70,14 @@ def test_ass_timestamp_never_emits_60_seconds():
 
 def test_srt_output_format():
     from app.models import CaptionSet, CaptionWord
-    from app.pipeline.captions import build_srt
+    from app.pipeline.captions import _srt_ts, build_srt
     cs = CaptionSet(words=[CaptionWord(t=0.0, d=0.4, text="Hallo"),
                            CaptionWord(t=0.5, d=0.4, text="Welt")],
                     max_words_per_line=2)
     srt = build_srt(cs)
     assert srt.startswith("1\n00:00:00,000 --> 00:00:00,900\nHallo Welt")
+    assert _srt_ts(1.9996) == "00:00:02,000"
+    assert _srt_ts(59.9996) == "00:01:00,000"
 
 
 def test_spa_fallback_serves_index_for_client_routes(tmp_path=None):
@@ -755,6 +758,28 @@ def test_status_ws_reports_missing_project():
         assert ws.receive_json() == {"error": "project not found"}
 
 
+def test_render_finish_fails_project_when_no_clips_ready():
+    from app import store
+    from app.pipeline.orchestrator import Engine
+
+    store.init_db()
+    p = Project(
+        id="proj_render_finish_none_ready",
+        status=ProjectStatus.processing,
+        clips=[
+            Clip(start=0, end=5, status=ClipStatus.failed, error="boom"),
+            Clip(start=5, end=10, status=ClipStatus.failed, error="boom"),
+        ],
+    )
+    store.save(p)
+    Engine()._finish_render_progress(p.id)
+    out = store.get(p.id)
+    assert out is not None
+    assert out.status == ProjectStatus.failed
+    assert "every clip" in (out.error or "").lower()
+    assert out.progress.stage == "render"
+
+
 def test_multikill_streaks_chain_and_outscore_single_kills():
     from app.media.ffmpeg import MediaInfo
     from app.providers.detect_cues import CueEvent
@@ -807,6 +832,120 @@ def test_cue_streaks_do_not_chain_unrelated_valorant_events():
                              features={"cue": 0.99, "ocr": 0.9})
     apply_evidence_caps([confirmed])
     assert confirmed.score == 99
+
+
+def test_custom_sound_cues_can_be_disabled():
+    from app.providers import detect_gameplay as DG
+
+    calls = []
+    old_find = DG.detect_cues.find_events
+    DG.detect_cues.find_events = lambda wav, path: calls.append((wav, path)) or ["hit"]
+    try:
+        disabled = DG._cue_events("source.wav", ImportSettings(
+            game_profile="valorant", use_cues=False))
+        assert disabled == []
+        assert calls == []
+
+        enabled = DG._cue_events("source.wav", ImportSettings(
+            game_profile="valorant", use_cues=True))
+        assert enabled == ["hit", "hit"]      # active game + common cues
+        assert len(calls) == 2
+    finally:
+        DG.detect_cues.find_events = old_find
+
+
+def test_corroboration_requires_same_moment_cluster():
+    from app.providers.detect_cues import CueEvent
+    from app.providers.detect_ocr import OcrEvent
+    from app.providers.audio_events import AudioEvent
+    from app.providers.detect_gameplay import GameplayClip, apply_corroboration
+
+    far = GameplayClip(start=90, end=130, score=80, peak_t=100.0,
+                       features={})
+    apply_corroboration(
+        [far],
+        [CueEvent(t=100.0, label="kill", similarity=0.95)],
+        [OcrEvent(t=120.0, label="kill", text="headshot", confidence=0.9)],
+    )
+    assert far.score == 80
+    assert "corroborated" not in far.features
+
+    near = GameplayClip(start=90, end=130, score=80, peak_t=100.0,
+                        features={})
+    apply_corroboration(
+        [near],
+        [CueEvent(t=100.0, label="kill", similarity=0.95)],
+        [OcrEvent(t=102.0, label="kill", text="headshot", confidence=0.9)],
+    )
+    assert near.score > 80
+    assert near.features["corroborated"] == 1.0
+    assert near.features["cue"] == 0.95
+
+    mismatch = GameplayClip(start=90, end=130, score=80, peak_t=100.0,
+                            features={})
+    apply_corroboration(
+        [mismatch],
+        [CueEvent(t=100.0, label="spike_plant", similarity=0.95)],
+        [OcrEvent(t=101.0, label="kill", text="headshot", confidence=0.9)],
+    )
+    assert mismatch.score == 80
+    assert "corroborated" not in mismatch.features
+
+    soft = GameplayClip(start=90, end=130, score=80, peak_t=100.0,
+                        features={})
+    apply_corroboration(
+        [soft],
+        [],
+        [OcrEvent(t=100.0, label="kill", text="headshot", confidence=0.9)],
+        [AudioEvent(t=101.0, label="explosive_action", confidence=0.9)],
+    )
+    assert soft.score == 83
+    assert "corroborated" not in soft.features
+    assert soft.features["supporting_audio"] == 1.0
+
+
+def test_only_accepted_events_are_shown_for_final_clips():
+    from app.providers.detect_gameplay import GameplayClip, accepted_events_for_clips
+
+    clip = GameplayClip(start=90, end=130, score=80, peak_t=100.0,
+                        cue_ts=[104.0])
+    events = [
+        DetectedEvent(t=100.0, source="cue", label="kill", confidence=0.95),
+        DetectedEvent(t=104.3, source="cue", label="kill", confidence=0.92),
+        DetectedEvent(t=120.0, source="ocr", label="kill", confidence=0.9),
+        DetectedEvent(t=300.0, source="cue", label="kill", confidence=0.99),
+    ]
+    kept = accepted_events_for_clips(events, [clip])
+    assert [(e.source, e.label, round(e.t, 1)) for e in kept] == [
+        ("cue", "kill", 100.0),
+        ("cue", "kill", 104.3),
+    ]
+
+    shifted_ocr_clip = GameplayClip(start=90, end=130, score=88, peak_t=90.0,
+                                    features={"ocr": 0.9, "evidence_t": 120.0})
+    kept = accepted_events_for_clips(events, [shifted_ocr_clip])
+    assert [(e.source, e.label, round(e.t, 1)) for e in kept] == [
+        ("ocr", "kill", 120.0),
+    ]
+
+
+def test_single_audio_or_model_signal_cannot_score_99():
+    from app.providers.detect_gameplay import GameplayClip, apply_evidence_caps
+
+    audio_only = GameplayClip(start=0, end=10, score=99,
+                              features={"audio_event": 0.95})
+    apply_evidence_caps([audio_only])
+    assert audio_only.score == 86
+
+    model_only = GameplayClip(start=0, end=10, score=99,
+                              features={"vlm_viral": 0.95})
+    apply_evidence_caps([model_only])
+    assert model_only.score == 89
+
+    two_signals = GameplayClip(start=0, end=10, score=99,
+                               features={"reaction": 0.8, "excitement": 0.8})
+    apply_evidence_caps([two_signals])
+    assert two_signals.score == 99
 
 
 def test_caption_exclude_mutes_cue_windows():
@@ -917,6 +1056,16 @@ def test_ocr_keyword_matching_finds_viral_markers():
     assert O.match_keywords("loading please wait", "generic") == []
     # exact matching must never fire on clean unrelated text (fuzzy off here)
     assert O.match_keywords("the quick brown fox", "generic", fuzzy=False) == []
+
+
+def test_saved_visual_cues_extend_ocr_lexicon():
+    from app import visual_cues
+    from app.providers import detect_ocr as O
+
+    visual_cues.add_visual_cue("valorant", "custom_killfeed", "One enemy remaining")
+    assert ("custom_killfeed", "one enemy remaining") in O.match_keywords(
+        "HUD: ONE ENEMY REMAINING", "valorant", fuzzy=False)
+    assert not O.match_keywords("HUD: ONE ENEMY REMAINING", "cs2", fuzzy=False)
 
 
 def test_ocr_valorant_german_markers_and_easyocr_shapes():
@@ -1070,7 +1219,7 @@ def test_common_cue_pack_is_available_for_all_games():
     from app import game_packs
     status = game_packs.pack_status()
     assert "common" in status
-    assert status["common"]["label"].lower().startswith("common")
+    assert status["common"]["label"].lower().startswith(("common", "allgemein"))
     assert {e["name"] for e in status["common"]["events"]} >= {"airhorn", "hype", "laugh"}
 
 
@@ -1102,13 +1251,13 @@ def test_corroboration_boosts_multi_signal_clips():
     from app.providers.detect_cues import CueEvent
     from app.providers.detect_gameplay import GameplayClip, apply_corroboration
     from app.providers.detect_ocr import OcrEvent
-    c = GameplayClip(start=10, end=30, score=70)
+    c = GameplayClip(start=10, end=30, score=70, peak_t=20)
     apply_corroboration([c], [CueEvent(t=20, label="kill", similarity=0.9)],
                         [OcrEvent(t=21, label="kill", text="kill", confidence=0.8)])
     assert c.score > 70 and c.features.get("corroborated") == 1.0
     assert any("confirm" in f.label.lower() for f in c.factors)
     # a single source does not corroborate
-    c2 = GameplayClip(start=10, end=30, score=70)
+    c2 = GameplayClip(start=10, end=30, score=70, peak_t=20)
     apply_corroboration([c2], [CueEvent(t=20, label="kill", similarity=0.9)], [])
     assert c2.score == 70
 
@@ -1139,6 +1288,16 @@ def test_custom_event_padding_and_clap_clips():
         info, st, lead=lead, tail=tail)
     assert clips and clips[0].start == 73 and clips[0].end == 89
     assert clips[0].features["audio_event"] == 0.8
+
+
+def test_manual_clip_context_rejects_nonfinite_values():
+    from app.api.routes_projects import _clamp_pad
+
+    assert _clamp_pad(None) is None
+    assert _clamp_pad(float("nan")) is None
+    assert _clamp_pad(float("inf")) is None
+    assert _clamp_pad(-5) == 0.0
+    assert _clamp_pad(999) == 60.0
 
 
 def test_cue_learning_pending_labels():

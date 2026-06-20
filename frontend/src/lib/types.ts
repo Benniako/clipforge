@@ -128,6 +128,7 @@ export interface ImportSettings {
   facecam_layout: string;
   use_ocr: boolean;
   use_vlm: boolean;
+  use_cues: boolean;
   use_audio_events: boolean;
   cue_learning: boolean;
   auto_length: boolean;

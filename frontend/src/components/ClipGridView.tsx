@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+﻿import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../lib/api";
 import type { Project } from "../lib/types";
@@ -49,11 +49,12 @@ export default function ClipGridView({
     facecam_layout: project.settings.facecam_layout,
     use_ocr: project.settings.use_ocr,
     use_vlm: project.settings.use_vlm,
+    use_cues: project.settings.use_cues,
     use_audio_events: project.settings.use_audio_events,
     cue_learning: project.settings.cue_learning,
     auto_length: project.settings.auto_length,
-    lead_seconds: project.settings.lead_seconds ?? 16,
-    tail_seconds: project.settings.tail_seconds ?? 20,
+    lead_seconds: project.settings.lead_seconds,
+    tail_seconds: project.settings.tail_seconds,
   });
   const alive = useRef(true); // stops the montage poll after unmount
 
@@ -81,11 +82,12 @@ export default function ClipGridView({
       facecam_layout: project.settings.facecam_layout,
       use_ocr: project.settings.use_ocr,
       use_vlm: project.settings.use_vlm,
+      use_cues: project.settings.use_cues,
       use_audio_events: project.settings.use_audio_events,
       cue_learning: project.settings.cue_learning,
       auto_length: project.settings.auto_length,
-      lead_seconds: project.settings.lead_seconds ?? 16,
-      tail_seconds: project.settings.tail_seconds ?? 20,
+      lead_seconds: project.settings.lead_seconds,
+      tail_seconds: project.settings.tail_seconds,
     });
   }, [project.id, project.settings]);
 
@@ -105,7 +107,7 @@ export default function ClipGridView({
       await api.createMontage(project.id, selected);
       // poll until the new montage finishes rendering
       for (let i = 0; i < 90; i++) {
-        if (!alive.current) return; // user navigated away — stop polling
+        if (!alive.current) return; // user navigated away â€” stop polling
         const p = await api.getProject(project.id);
         if (!alive.current) return;
         onChange(p);
@@ -144,26 +146,33 @@ export default function ClipGridView({
       : undefined;
   const selectedPreviewSrc =
     selectedPreviewMode === "original" ? selectedOriginalSrc : activeSelected?.export_url ?? undefined;
+  const contextAuto = renderDraft.lead_seconds === null && renderDraft.tail_seconds === null;
+  const normalizedRenderDraft = {
+    ...renderDraft,
+    lead_seconds: contextAuto ? null : renderDraft.lead_seconds ?? 16,
+    tail_seconds: contextAuto ? null : renderDraft.tail_seconds ?? 20,
+  };
 
   const renderDirty = useMemo(() => {
     const s = project.settings;
     return (
-      renderDraft.power_mode !== s.power_mode ||
-      renderDraft.aspect !== s.aspect ||
-      renderDraft.burn_captions !== s.burn_captions ||
-      renderDraft.tighten !== s.tighten ||
-      renderDraft.denoise !== s.denoise ||
-      renderDraft.motion !== s.motion ||
-      renderDraft.facecam_layout !== s.facecam_layout ||
-      renderDraft.use_ocr !== s.use_ocr ||
-      renderDraft.use_vlm !== s.use_vlm ||
-      renderDraft.use_audio_events !== s.use_audio_events ||
-      renderDraft.cue_learning !== s.cue_learning ||
-      renderDraft.auto_length !== s.auto_length ||
-      renderDraft.lead_seconds !== (s.lead_seconds ?? 16) ||
-      renderDraft.tail_seconds !== (s.tail_seconds ?? 20)
+      normalizedRenderDraft.power_mode !== s.power_mode ||
+      normalizedRenderDraft.aspect !== s.aspect ||
+      normalizedRenderDraft.burn_captions !== s.burn_captions ||
+      normalizedRenderDraft.tighten !== s.tighten ||
+      normalizedRenderDraft.denoise !== s.denoise ||
+      normalizedRenderDraft.motion !== s.motion ||
+      normalizedRenderDraft.facecam_layout !== s.facecam_layout ||
+      normalizedRenderDraft.use_ocr !== s.use_ocr ||
+      normalizedRenderDraft.use_vlm !== s.use_vlm ||
+      normalizedRenderDraft.use_cues !== s.use_cues ||
+      normalizedRenderDraft.use_audio_events !== s.use_audio_events ||
+      normalizedRenderDraft.cue_learning !== s.cue_learning ||
+      normalizedRenderDraft.auto_length !== s.auto_length ||
+      normalizedRenderDraft.lead_seconds !== s.lead_seconds ||
+      normalizedRenderDraft.tail_seconds !== s.tail_seconds
     );
-  }, [renderDraft, project.settings]);
+  }, [normalizedRenderDraft, project.settings]);
 
   // Rank by virality across the whole project (independent of the current sort),
   // so the strongest clips always wear their "Top pick" ribbon.
@@ -183,7 +192,7 @@ export default function ClipGridView({
   const learnTitle = learn
     ? Object.values(learn.learned_top_features)
         .flatMap((m) => Object.entries(m).map(([k, v]) => `${k} ${Math.round(v * 100)}%`))
-        .join(", ") || "Rate clips 👍/👎 to personalize"
+        .join(", ") || "Rate clips ðŸ‘/ðŸ‘Ž to personalize"
     : "";
 
   const resetLearning = async () => {
@@ -203,7 +212,7 @@ export default function ClipGridView({
 
   const rerunWithDraft = async () => {
     try {
-      await api.reprocess(project.id, renderDraft as any);
+      await api.reprocess(project.id, normalizedRenderDraft as any);
       window.location.reload();
     } catch (e: any) {
       setMontageErr(e?.message ?? "Could not re-run with these settings.");
@@ -242,13 +251,13 @@ export default function ClipGridView({
             <h2>{project.name}</h2>
             {project.content_type && (
               <span className="pill" style={{ color: project.content_type === "gameplay" ? "#ff9f43" : "var(--accent)" }}>
-                {project.content_type === "gameplay" ? "🎮 Gameplay" : "🎙 Talking"}
+                {project.content_type === "gameplay" ? "ðŸŽ® Gameplay" : "ðŸŽ™ Talking"}
               </span>
             )}
           </div>
           <span className="muted tiny">
-            {fmtDuration(project.source?.duration ?? 0)} source ·{" "}
-            {project.clips.length} clips · {ready} rendered · {project.settings.aspect} ·{" "}
+            {fmtDuration(project.source?.duration ?? 0)} source -{" "}
+            {project.clips.length} clips - {ready} rendered - {project.settings.aspect} -{" "}
             {POWER_LABELS[project.settings.power_mode] ?? "Balanced"}
           </span>
         </div>
@@ -260,25 +269,25 @@ export default function ClipGridView({
               onClick={resetLearning}
               style={{ cursor: "pointer", color: "var(--good)" }}
             >
-              🧠 Personalizing · {learn.likes}👍 {learn.dislikes}👎
-              {learn.trims > 0 ? ` · ${learn.trims}✂` : ""}
+              ðŸ§  Personalizing - {learn.likes}ðŸ‘ {learn.dislikes}ðŸ‘Ž
+              {learn.trims > 0 ? ` - ${learn.trims}âœ‚` : ""}
             </span>
           )}
           {project.content_type === "gameplay" && (
             <button className="btn ghost sm" onClick={() => setShowCues(true)}
-              title="Add reference game sounds so key moments (kills, goals…) are detected exactly — then Re-run">
-              🎯 Game cues
+              title="Add and test game sounds or OCR phrases, then re-run detection">
+              ðŸŽ¯ Game cues
             </button>
           )}
           <button className="btn ghost sm" onClick={rerun}
-            title="Re-run on the same video — applies your 👍/👎, new cues, and settings">
-            ↻ Re-run
+            title="Re-run on the same video â€” applies your ðŸ‘/ðŸ‘Ž, new cues, and settings">
+            Neu berechnen
           </button>
           <Link className="btn ghost sm" to="/">
-            ← New project
+            Zurueck - Neues Projekt
           </Link>
           <a className="btn primary sm" href={api.exportBatchUrl(project.id)}>
-            ⬇ Export all ({ready})
+            Alle exportieren ({ready})
           </a>
         </div>
       </div>
@@ -292,7 +301,7 @@ export default function ClipGridView({
           }}
         >
           {project.warnings.map((w, i) => (
-            <div key={i}>⚠ {w}</div>
+            <div key={i}>Hinweis: {w}</div>
           ))}
         </div>
       )}
@@ -300,17 +309,17 @@ export default function ClipGridView({
       {project.events?.length > 0 && (
         <div className="panel section" style={{ marginTop: 16 }}>
           <span className="muted tiny">
-            Detected events ({project.events.length}) — the cues &amp; on-screen text the highlights keyed off
+            Verwendete Ereignisse ({project.events.length}) - uebernommene Cues und Bildschirmtreffer in den finalen Clips
           </span>
           <div className="row" style={{ flexWrap: "wrap", gap: 6, marginTop: 8 }}>
             {project.events.slice(0, 30).map((e, i) => (
               <span key={i} className="pill"
-                title={`${e.detail || e.label} · ${Math.round(e.confidence * 100)}% match`}>
-                {e.source === "ocr" ? "🔤" : "🔊"} {e.label} · {fmtClock(e.t)}
+                title={`${e.detail || e.label} - ${Math.round(e.confidence * 100)}% match`}>
+                {e.source === "ocr" ? "OCR" : "Audio"} {e.label} - {fmtClock(e.t)}
               </span>
             ))}
             {project.events.length > 30 && (
-              <span className="muted tiny">+{project.events.length - 30} more</span>
+              <span className="muted tiny">+{project.events.length - 30} weitere</span>
             )}
           </div>
         </div>
@@ -319,39 +328,39 @@ export default function ClipGridView({
       <div className="panel section render-controls" style={{ marginTop: 16 }}>
         <div className="row" style={{ justifyContent: "space-between", alignItems: "flex-start", gap: 14 }}>
           <div className="col">
-            <h3>Render controls</h3>
+            <h3>Render-Steuerung</h3>
             <span className="muted tiny">
-              Change engine mode or output treatment, then re-run this source.
+              Passe Modus oder Ausgabe an und starte dieses Material erneut.
             </span>
           </div>
           <button className="btn primary sm" onClick={rerunWithDraft} disabled={!renderDirty}>
-            Re-run with controls
+            Mit Einstellungen neu starten
           </button>
         </div>
         <div className="render-control-grid">
           <div className="field">
-            <label>Power mode</label>
+            <label>Leistungsmodus</label>
             <select
               className="input"
               value={renderDraft.power_mode}
               onChange={(e) => setRenderDraft((d) => ({ ...d, power_mode: e.target.value as any }))}
             >
-              <option value="balanced">Balanced</option>
+              <option value="balanced">Ausgewogen</option>
               <option value="max_gpu">Max GPU</option>
-              <option value="quality">Quality</option>
+              <option value="quality">Qualitaet</option>
             </select>
           </div>
           <div className="field">
-            <label>Output aspect</label>
+            <label>Ausgabeformat</label>
             <select
               className="input"
               value={renderDraft.aspect}
               onChange={(e) => setRenderDraft((d) => ({ ...d, aspect: e.target.value }))}
             >
-              <option value="9:16">9:16 vertical</option>
-              <option value="4:5">4:5 feed</option>
-              <option value="1:1">1:1 square</option>
-              <option value="16:9">16:9 wide</option>
+              <option value="9:16">9:16 vertikal</option>
+              <option value="4:5">4:5 Feed</option>
+              <option value="1:1">1:1 Quadrat</option>
+              <option value="16:9">16:9 breit</option>
             </select>
           </div>
           {project.content_type === "gameplay" && (
@@ -363,107 +372,133 @@ export default function ClipGridView({
                 onChange={(e) => setRenderDraft((d) => ({ ...d, facecam_layout: e.target.value }))}
               >
                 <option value="auto">Auto</option>
-                <option value="split">Stacked</option>
+                <option value="split">Gestapelt</option>
                 <option value="framed">PiP</option>
-                <option value="off">Off</option>
+                <option value="off">Aus</option>
               </select>
             </div>
           )}
           <div className="field toggle-field">
-            <label>Toggles</label>
+            <label>Schalter</label>
             <div className="toggle-stack compact">
               <button
                 className={"toggle" + (renderDraft.burn_captions ? " on" : "")}
                 onClick={() => setRenderDraft((d) => ({ ...d, burn_captions: !d.burn_captions }))}
               >
-                <span>Captions</span>
-                <i>{renderDraft.burn_captions ? "On" : "Off"}</i>
+                <span>Untertitel</span>
+                <i>{renderDraft.burn_captions ? "An" : "Aus"}</i>
               </button>
               <button
                 className={"toggle" + (renderDraft.tighten ? " on" : "")}
                 onClick={() => setRenderDraft((d) => ({ ...d, tighten: !d.tighten }))}
               >
                 <span>Jump cuts</span>
-                <i>{renderDraft.tighten ? "On" : "Off"}</i>
+                <i>{renderDraft.tighten ? "An" : "Aus"}</i>
               </button>
               <button
                 className={"toggle" + (renderDraft.motion === "push" ? " on" : "")}
                 onClick={() => setRenderDraft((d) => ({ ...d, motion: d.motion === "push" ? "none" : "push" }))}
               >
                 <span>Push-in</span>
-                <i>{renderDraft.motion === "push" ? "On" : "Off"}</i>
+                <i>{renderDraft.motion === "push" ? "An" : "Aus"}</i>
               </button>
               <button
                 className={"toggle" + (renderDraft.denoise ? " on" : "")}
                 onClick={() => setRenderDraft((d) => ({ ...d, denoise: !d.denoise }))}
               >
                 <span>Clean voice</span>
-                <i>{renderDraft.denoise ? "On" : "Off"}</i>
+                <i>{renderDraft.denoise ? "An" : "Aus"}</i>
               </button>
               <button
                 className={"toggle" + (renderDraft.use_ocr ? " on" : "")}
                 onClick={() => setRenderDraft((d) => ({ ...d, use_ocr: !d.use_ocr }))}
               >
                 <span>OCR</span>
-                <i>{renderDraft.use_ocr ? "On" : "Off"}</i>
+                <i>{renderDraft.use_ocr ? "An" : "Aus"}</i>
               </button>
               <button
                 className={"toggle" + (renderDraft.use_vlm ? " on" : "")}
                 onClick={() => setRenderDraft((d) => ({ ...d, use_vlm: !d.use_vlm }))}
               >
-                <span>AI vision</span>
-                <i>{renderDraft.use_vlm ? "On" : "Off"}</i>
+                <span>KI-Bildanalyse</span>
+                <i>{renderDraft.use_vlm ? "An" : "Aus"}</i>
               </button>
               <button
                 className={"toggle" + (renderDraft.use_audio_events ? " on" : "")}
                 onClick={() => setRenderDraft((d) => ({ ...d, use_audio_events: !d.use_audio_events }))}
               >
-                <span>Audio events</span>
-                <i>{renderDraft.use_audio_events ? "On" : "Off"}</i>
+                <span>Audio-Ereignisse</span>
+                <i>{renderDraft.use_audio_events ? "An" : "Aus"}</i>
+              </button>
+              <button
+                className={"toggle" + (renderDraft.use_cues ? " on" : "")}
+                onClick={() => setRenderDraft((d) => ({ ...d, use_cues: !d.use_cues }))}
+                title="Use installed custom game sounds as exact-match evidence"
+              >
+                <span>Custom sounds</span>
+                <i>{renderDraft.use_cues ? "An" : "Aus"}</i>
               </button>
               <button
                 className={"toggle" + (renderDraft.cue_learning ? " on" : "")}
                 onClick={() => setRenderDraft((d) => ({ ...d, cue_learning: !d.cue_learning }))}
               >
-                <span>Cue learning</span>
-                <i>{renderDraft.cue_learning ? "On" : "Off"}</i>
+                <span>Cue-Lernen</span>
+                <i>{renderDraft.cue_learning ? "An" : "Aus"}</i>
               </button>
               <button
                 className={"toggle" + (renderDraft.auto_length ? " on" : "")}
                 onClick={() => setRenderDraft((d) => ({ ...d, auto_length: !d.auto_length }))}
               >
                 <span>Auto length</span>
-                <i>{renderDraft.auto_length ? "On" : "Off"}</i>
+                <i>{renderDraft.auto_length ? "An" : "Aus"}</i>
               </button>
             </div>
           </div>
           {project.content_type === "gameplay" && (
             <div className="field wide timing-controls">
-              <label>Event padding</label>
+              <label>Clip context</label>
+              <button
+                className={"toggle" + (contextAuto ? " on" : "")}
+                onClick={() =>
+                  setRenderDraft((d) =>
+                    d.lead_seconds === null && d.tail_seconds === null
+                      ? { ...d, lead_seconds: 16, tail_seconds: 20 }
+                      : { ...d, lead_seconds: null, tail_seconds: null },
+                  )
+                }
+                style={{ marginBottom: 8 }}
+              >
+                <span>Automatic context</span>
+                <i>{contextAuto ? "An" : "Aus"}</i>
+              </button>
+              {(renderDraft.lead_seconds !== null || renderDraft.tail_seconds !== null) && (
+                <>
               <div className="range-label">
-                <span>Seconds before event</span>
-                <b>{renderDraft.lead_seconds}s</b>
+                <span>Before detected moment</span>
+                <b>{renderDraft.lead_seconds ?? 16}s</b>
               </div>
               <input
                 type="range"
                 min={0}
                 max={30}
                 step={1}
-                value={renderDraft.lead_seconds}
+                value={renderDraft.lead_seconds ?? 16}
                 onChange={(e) => setRenderDraft((d) => ({ ...d, lead_seconds: Number(e.target.value) }))}
               />
               <div className="range-label">
-                <span>Seconds after event</span>
-                <b>{renderDraft.tail_seconds}s</b>
+                <span>After detected moment</span>
+                <b>{renderDraft.tail_seconds ?? 20}s</b>
               </div>
               <input
                 type="range"
                 min={2}
                 max={30}
                 step={1}
-                value={renderDraft.tail_seconds}
+                value={renderDraft.tail_seconds ?? 20}
                 onChange={(e) => setRenderDraft((d) => ({ ...d, tail_seconds: Number(e.target.value) }))}
               />
+                </>
+              )}
             </div>
           )}
         </div>
@@ -488,7 +523,7 @@ export default function ClipGridView({
           className="input"
           style={{ width: "auto", padding: "7px 10px" }}
           value={project.settings.aspect}
-          title="Change the output format now — re-renders every clip; moments, scores and captions stay the same"
+          title="Change the output format now â€” re-renders every clip; moments, scores and captions stay the same"
           onChange={async (e) => {
             try {
               await api.setAspect(project.id, e.target.value);
@@ -498,10 +533,10 @@ export default function ClipGridView({
             }
           }}
         >
-          <option value="9:16">9:16 vertical</option>
-          <option value="4:5">4:5 feed</option>
-          <option value="1:1">1:1 square</option>
-          <option value="16:9">16:9 wide</option>
+          <option value="9:16">9:16 vertikal</option>
+          <option value="4:5">4:5 Feed</option>
+          <option value="1:1">1:1 Quadrat</option>
+          <option value="16:9">16:9 breit</option>
         </select>
         <div className="spacer" />
         <span className="muted tiny">Min score: {minScore}+</span>
@@ -515,7 +550,7 @@ export default function ClipGridView({
           style={{ width: 160 }}
         />
         <button className="btn ghost sm" onClick={refresh} title="Refresh">
-          ↻
+          â†»
         </button>
       </div>
 
@@ -611,8 +646,8 @@ export default function ClipGridView({
       <div className="row" style={{ marginTop: 22, gap: 12, flexWrap: "wrap" }}>
         <span className="muted tiny">
           {selected.length === 0
-            ? "Tip: tick clips (✓ on the thumbnail) to combine them into a montage."
-            : `${selected.length} selected — they'll play in the order you ticked them.`}
+            ? "Tip: tick clips (âœ“ on the thumbnail) to combine them into a montage."
+            : `${selected.length} selected â€” they'll play in the order you ticked them.`}
         </span>
         <div className="spacer" style={{ flex: 1 }} />
         {selected.length > 0 && (
@@ -625,7 +660,7 @@ export default function ClipGridView({
           onClick={makeMontage}
           disabled={selected.length < 2 || montaging}
         >
-          {montaging ? <><span className="spinner" /> Building…</> : `🎬 Create montage (${selected.length})`}
+          {montaging ? <><span className="spinner" /> Buildingâ€¦</> : `ðŸŽ¬ Create montage (${selected.length})`}
         </button>
       </div>
 
@@ -648,7 +683,7 @@ export default function ClipGridView({
                 >
                   {m.status !== "ready" && (
                     <span className="status-chip" style={{ color: m.status === "failed" ? "var(--bad)" : "var(--warn)" }}>
-                      {m.status === "failed" ? "Failed" : "Rendering…"}
+                      {m.status === "failed" ? "Fehlgeschlagen" : "Renderingâ€¦"}
                     </span>
                   )}
                   {m.status === "ready" && <span className="dur">{fmtDuration(m.duration)}</span>}
@@ -669,7 +704,7 @@ export default function ClipGridView({
                   {m.status === "ready" && m.export_url && (
                     <div className="card-actions">
                       <a className="btn sm" href={api.downloadMontageUrl(project.id, m.id)} download>
-                        ⬇ Download
+                        â¬‡ Download
                       </a>
                     </div>
                   )}
@@ -682,3 +717,5 @@ export default function ClipGridView({
     </div>
   );
 }
+
+

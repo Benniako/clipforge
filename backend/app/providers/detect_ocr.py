@@ -27,6 +27,7 @@ from pathlib import Path
 from ..config import get_settings
 from ..media import ffmpeg
 from ..media.ffmpeg import MediaInfo
+from .. import visual_cues
 
 log = logging.getLogger("clipforge.ocr")
 
@@ -100,6 +101,8 @@ def lexicon(profile: str | None) -> dict[str, tuple[str, ...]]:
                       (profile or "generic").lower().replace(" ", ""))
     merged: dict[str, tuple[str, ...]] = {k: v for k, v in _GENERIC.items()}
     for label, phrases in _PROFILE_EXTRA.get(name, {}).items():
+        merged[label] = tuple(dict.fromkeys(merged.get(label, ()) + phrases))
+    for label, phrases in visual_cues.lexicon_extra(name).items():
         merged[label] = tuple(dict.fromkeys(merged.get(label, ()) + phrases))
     return merged
 

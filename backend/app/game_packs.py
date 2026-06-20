@@ -1,7 +1,7 @@
-"""Cue packs — the canonical "what sounds to add" per game.
+"""Cue packs - the canonical "what sounds to add" per game.
 
 ClipForge matches reference game sounds (see app/providers/detect_cues.py) to
-pinpoint events. We can't ship the copyrighted audio, but we ship the *structure*:
+pinpoint events. We can't ship the copyrighted audio, but we ship the structure:
 which events each supported game has, a search hint for finding the sound, and a
 status check for which cues you've added. Drop files (any audio format) named
 ``<event>.<ext>`` into ``<data>/game_cues/<game>/``.
@@ -21,49 +21,49 @@ from .providers.detect_cues import CUE_EXTS
 
 PACKS: dict[str, dict] = {
     "valorant": {"label": "Valorant", "events": [
-        ("kill", "Kill banner ‘ding’ (repeats = multi-kill, scores higher)", "valorant kill sound"),
-        ("double_kill", "2nd-kill banner tone", "valorant double kill sound"),
-        ("triple_kill", "3rd-kill banner tone", "valorant triple kill sound"),
-        ("quad_kill", "4th-kill banner tone", "valorant quadra kill sound"),
-        ("ace", "Ace announcer line", "valorant ace sound"),
-        ("clutch", "Clutch announcer line", "valorant clutch sound"),
-        ("spike_plant", "Spike planted", "valorant spike planted sound"),
-        ("spike_defuse", "Spike defused", "valorant defuse sound"),
+        ("kill", "Kill-Banner-Sound (mehrfach = Multikill, zaehlt staerker)", "valorant kill sound"),
+        ("double_kill", "Sound fuer den zweiten Kill", "valorant double kill sound"),
+        ("triple_kill", "Sound fuer den dritten Kill", "valorant triple kill sound"),
+        ("quad_kill", "Sound fuer den vierten Kill", "valorant quadra kill sound"),
+        ("ace", "Ace-Ansage", "valorant ace sound"),
+        ("clutch", "Clutch-Ansage", "valorant clutch sound"),
+        ("spike_plant", "Spike platziert", "valorant spike planted sound"),
+        ("spike_defuse", "Spike entschaerft", "valorant defuse sound"),
     ]},
     "cs2": {"label": "CS2", "events": [
-        ("kill", "Kill confirm (repeats = multi-kill, scores higher)", "cs2 kill sound"),
-        ("headshot", "Headshot ‘ding’", "cs2 headshot sound"),
-        ("bomb_plant", "Bomb planted", "cs2 bomb planted sound"),
-        ("bomb_defuse", "Bomb defused", "cs2 defuse sound"),
+        ("kill", "Kill-Bestaetigung (mehrfach = Multikill, zaehlt staerker)", "cs2 kill sound"),
+        ("headshot", "Headshot-Sound", "cs2 headshot sound"),
+        ("bomb_plant", "Bombe gelegt", "cs2 bomb planted sound"),
+        ("bomb_defuse", "Bombe entschaerft", "cs2 defuse sound"),
     ]},
     "eafc": {"label": "EA FC / FIFA", "events": [
-        ("goal", "Goal net + commentary", "ea fc goal sound"),
-        ("whistle", "Referee whistle", "fc 26 referee whistle"),
-        ("crowd_roar", "Crowd roar", "football crowd roar"),
+        ("goal", "Tor plus Kommentar", "ea fc goal sound"),
+        ("whistle", "Schiedsrichterpfiff", "fc 26 referee whistle"),
+        ("crowd_roar", "Publikumsjubel", "football crowd roar"),
     ]},
     "rocketleague": {"label": "Rocket League", "events": [
-        ("goal", "Goal explosion", "rocket league goal explosion sound"),
+        ("goal", "Tor-Explosion", "rocket league goal explosion sound"),
         ("demolition", "Demolition", "rocket league demolition sound"),
-        ("save", "Save", "rocket league save sound"),
+        ("save", "Parade", "rocket league save sound"),
     ]},
     "horror": {"label": "Horror", "events": [
-        ("stinger", "Musical sting", "horror stinger sound"),
-        ("scream", "Scream", "scream sound effect"),
-        ("jumpscare", "Jump-scare hit", "jumpscare sound"),
+        ("stinger", "Schock-Stinger", "horror stinger sound"),
+        ("scream", "Schrei", "scream sound effect"),
+        ("jumpscare", "Jumpscare-Impact", "jumpscare sound"),
     ]},
-    # Cross-game sounds: imported here, they're matched for EVERY game profile
+    # Cross-game sounds: imported here, they're matched for every game profile
     # (the detector scans <data>/game_cues/common/ alongside the active game).
-    "common": {"label": "Common (all games)", "events": [
-        ("airhorn", "Airhorn / hype blast", "airhorn sound"),
-        ("hype", "Hype / let's go shout", "lets go hype sound"),
-        ("laugh", "Laughter burst", "laugh sound effect"),
-        ("applause", "Applause / crowd cheer", "applause sound"),
-        ("bruh", "Bruh / fail moment", "bruh sound effect"),
-        ("wow", "Wow / shocked reaction", "wow sound effect"),
+    "common": {"label": "Allgemein (alle Spiele)", "events": [
+        ("airhorn", "Airhorn / Hype-Stoss", "airhorn sound"),
+        ("hype", "Hype / Let's-go-Shout", "lets go hype sound"),
+        ("laugh", "Lach-Explosion", "laugh sound effect"),
+        ("applause", "Applaus / Jubel", "applause sound"),
+        ("bruh", "Bruh / Fail-Moment", "bruh sound effect"),
+        ("wow", "Wow / Schock-Reaktion", "wow sound effect"),
     ]},
 }
 
-# Folder scanned for cues that apply regardless of game — kept out of the
+# Folder scanned for cues that apply regardless of game - kept out of the
 # per-game cue dir so it's reused everywhere (see detect_gameplay._cue_events).
 COMMON_PACK = "common"
 
@@ -94,7 +94,7 @@ _REL_AUDIO_RE = re.compile(r"[\"']([^\"'\s<>]+" + _AUDIO_EXT + r")[\"']", re.IGN
 def audio_url_from_html(html: str, base_url: str) -> str | None:
     """First audio-file URL referenced by an HTML page (absolute), or None.
 
-    Lets users paste a soundboard *page* link (the natural thing to copy)
+    Lets users paste a soundboard page link (the natural thing to copy)
     instead of hunting for the raw .mp3 address.
     """
     m = _ABS_AUDIO_RE.search(html)
@@ -125,13 +125,13 @@ def install_cue_from_url(game: str, event: str, url: str) -> None:
         dl = Path(tmp) / "in"
         _download(url, dl)
         head = dl.read_bytes()[:256].lstrip()
-        if head.startswith((b"<", b"\xef\xbb\xbf<")):  # an HTML page, not audio
+        if head.startswith((b"<", b"\xef\xbb\xbf<")):
             found = audio_url_from_html(
                 dl.read_text(encoding="utf-8", errors="ignore"), url)
             if not found:
                 raise ValueError(
-                    "that page has no direct audio link — right-click the "
-                    "sound's download button and paste the copied address")
+                    "diese Seite enthaelt keinen direkten Audio-Link - kopiere "
+                    "die Adresse des Download-Buttons und fuege sie hier ein")
             _download(found, dl)
         install_cue(game, event, str(dl))
 

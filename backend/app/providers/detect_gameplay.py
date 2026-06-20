@@ -81,6 +81,26 @@ _GW_FACTOR = {
 # a visible reaction earn ~2.3x the engagement of gameplay-only clips
 # (creator-platform data, 2026) — the reaction IS the content.
 REACTION_WEIGHT = 0.2
+CONFIRM_WINDOW = 3.0
+
+
+def _label_family(label: str | None) -> str:
+    """Collapse detector labels into event families for corroboration."""
+    s = (label or "").lower().replace("-", "_").replace(" ", "_")
+    if s.startswith("auto_"):
+        s = s[5:]
+    if any(k in s for k in ("kill", "headshot", "eliminiert", "eliminated", "ace")):
+        return "kill"
+    if any(k in s for k in ("spike", "plant", "defus", "entscharf", "bomb")):
+        return "objective"
+    if any(k in s for k in ("victory", "defeat", "verloren", "gewonnen", "round")):
+        return "round"
+    return s
+
+
+def _same_event_family(a: str | None, b: str | None) -> bool:
+    fa, fb = _label_family(a), _label_family(b)
+    return bool(fa and fb and fa == fb)
 
 
 def with_reaction(weights: dict[str, float]) -> dict[str, float]:
@@ -365,19 +385,93 @@ def apply_corroboration(clips: list["GameplayClip"], cue_events: list,
     audio cue and the OCR banner agree on the same instant, it's a guaranteed
     beat. Mutates clips in place: small score bonus + an explainable factor."""
     for c in clips:
-        cues = [e for e in cue_events if c.start <= e.t <= c.end]
-        ocrs = [e for e in ocr_events if c.start <= e.t <= c.end]
-        audios = [e for e in (audio_events or []) if c.start <= e.t <= c.end]
-        active = [name for name, evs in (("audio", cues), ("on-screen", ocrs),
-                                         ("CLAP", audios)) if evs]
-        if len(active) >= 2:
-            count = len(cues) + len(ocrs) + len(audios)
+        cues = _clustered_events(c, cue_events)
+        ocrs = _clustered_events(c, ocr_events)
+        audios = _clustered_events(c, audio_events or [])
+        matching_ocrs = [
+            o for o in ocrs
+            if any(_same_event_family(getattr(q, "label", None),
+                                      getattr(o, "label", None)) for q in cues)
+        ]
+        exact_confirm = bool(cues and matching_ocrs)
+        soft_support = bool(not cues and ocrs and audios)
+        if exact_confirm:
+            active = [name for name, evs in (("cue", cues), ("on-screen", matching_ocrs),
+                                             ("CLAP", audios)) if evs]
+            count = len(cues) + len(matching_ocrs) + len(audios)
             bonus = min(14, 6 + 2 * max(count - 2, 0) + 2 * (len(active) - 2))
             c.score = int(max(1, min(99, c.score + bonus)))
             c.features["corroborated"] = 1.0
+            c.features["cue"] = round(max(
+                float(c.features.get("cue", 0.0)),
+                max(float(getattr(q, "similarity", 0.0)) for q in cues),
+            ), 4)
             c.factors.insert(0, ScoreFactor(
                 label="Multimodal confirm", weight=float(bonus),
-                detail="Both the game sound and the on-screen text fire here — a sure highlight"))
+                detail="A matching game sound and matching on-screen text fire here"))
+        elif soft_support:
+            bonus = 3
+            c.score = int(max(1, min(89, c.score + bonus)))
+            c.features["supporting_audio"] = 1.0
+            c.factors.insert(0, ScoreFactor(
+                label="Audio supports OCR", weight=float(bonus),
+                detail="Generic audio energy lines up with on-screen text, but no exact cue matched"))
+
+
+def _anchor_times(c) -> list[float]:
+    feats = getattr(c, "features", {}) or {}
+    base = feats.get("evidence_t", getattr(c, "peak_t", getattr(c, "start", 0.0)))
+    anchors = [float(base)]
+    anchors += [float(t) for t in getattr(c, "cue_ts", []) or []]
+    return anchors
+
+
+def _clustered_events(c, events: list, *, window: float = CONFIRM_WINDOW) -> list:
+    anchors = _anchor_times(c)
+    return [
+        e for e in events
+        if c.start <= float(e.t) <= c.end
+        and any(abs(float(e.t) - a) <= window for a in anchors)
+    ]
+
+
+def accepted_events_for_clips(events: list[DetectedEvent],
+                              clips: list["GameplayClip"] | list,
+                              *, window: float = CONFIRM_WINDOW
+                              ) -> list[DetectedEvent]:
+    """Return only detector events that actually supported a final clip."""
+    out: list[DetectedEvent] = []
+    seen: set[tuple[str, str, int]] = set()
+    for c in clips:
+        clustered = _clustered_events(c, events, window=window)
+        feats = getattr(c, "features", {}) or {}
+        has_cue = float(feats.get("cue", 0.0)) > 0.0 or bool(getattr(c, "cue_ts", []))
+        has_ocr = float(feats.get("ocr", 0.0)) > 0.0
+        has_audio = (
+            float(feats.get("audio_event", 0.0)) > 0.0
+            or float(feats.get("supporting_audio", 0.0)) > 0.0
+        )
+        if has_cue and has_ocr:
+            clustered = [
+                e for e in clustered
+                if e.source != "cue" or any(
+                    _same_event_family(e.label, other.label)
+                    for other in clustered if other.source == "ocr")
+            ]
+        elif not has_cue:
+            clustered = [e for e in clustered if e.source != "cue"]
+        if not has_ocr:
+            clustered = [e for e in clustered if e.source != "ocr"]
+        if not has_audio:
+            clustered = [e for e in clustered if e.source != "audio"]
+        for e in clustered:
+            key = (e.source, e.label, int(round(float(e.t) * 1000)))
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(e)
+    out.sort(key=lambda e: e.t)
+    return out
 
 
 def _record_events(events_out: list | None, cue_events: list,
@@ -473,6 +567,8 @@ def _cue_dir(profile_name: str) -> str:
 
 def _cue_events(wav_path: str, settings: ImportSettings) -> list:
     """Match reference game sounds from <data>/game_cues/<profile>/ (+ /common)."""
+    if not getattr(settings, "use_cues", True):
+        return []
     base = get_settings().data_dir / "game_cues"
     events = []
     for sub in {_cue_dir(settings.game_profile), "common"}:
@@ -582,15 +678,30 @@ def _cue_clips(events: list, info: MediaInfo, lead: float, tail: float,
 
 def apply_evidence_caps(clips: list["GameplayClip"] | list) -> None:
     """Prevent one weak signal from maxing virality by itself."""
-    hard_signals = (
-        "ocr", "corroborated", "vlm_viral", "audio_event", "reaction",
-        "excitement",
-    )
     for c in clips:
         feats = getattr(c, "features", {}) or {}
-        has_hard_signal = any(float(feats.get(k, 0.0)) > 0.15 for k in hard_signals)
-        if feats.get("cue", 0.0) > 0.0 and not has_hard_signal:
+        cue = float(feats.get("cue", 0.0))
+        ocr = float(feats.get("ocr", 0.0))
+        reaction = float(feats.get("reaction", 0.0))
+        excitement = float(feats.get("excitement", 0.0))
+        corroborated = float(feats.get("corroborated", 0.0)) > 0.0
+        exceptional = (
+            corroborated
+            or (cue >= 0.88 and ocr >= 0.82)
+            or (reaction >= 0.55 and (ocr >= 0.82 or excitement >= 0.72 or cue >= 0.88))
+        )
+        if not exceptional:
+            c.score = min(int(c.score), 89)
+        if feats.get("cue", 0.0) > 0.0 and not exceptional:
             c.score = min(int(c.score), 88)
+        audio_only = (
+            feats.get("audio_event", 0.0) > 0.0
+            and cue <= 0.0
+            and ocr <= 0.0
+            and reaction < 0.55
+        )
+        if audio_only and not exceptional:
+            c.score = min(int(c.score), 86)
 
 
 def apply_title_fallbacks(clips: list["GameplayClip"] | list) -> None:

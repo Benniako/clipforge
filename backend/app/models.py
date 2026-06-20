@@ -83,7 +83,7 @@ class Word(BaseModel):
 
 class Transcript(BaseModel):
     words: list[Word] = Field(default_factory=list)
-    language: str = "en"
+    language: str = "de"
     speakers: int = 1
     provider: str = "synthetic"
 
@@ -319,6 +319,7 @@ class ImportSettings(BaseModel):
     # previous best-effort behaviour, while the UI can now make them explicit.
     use_ocr: bool = True
     use_vlm: bool = True
+    use_cues: bool = True
     use_audio_events: bool = True
     cue_learning: bool = True
     # Let ClipForge pick a platform/content tuned range instead of the manual
@@ -366,8 +367,8 @@ class Project(BaseModel):
     progress: JobProgress = Field(default_factory=JobProgress)
     content_type: str | None = None       # detected/used: "talking" | "gameplay"
     facecam: Rect | None = None           # detected streamer cam region, if any
-    # Audio-cue + OCR events found in the source, sorted by time — saved so the
-    # user can see what drove the highlights and reuse them.
+    # Accepted audio-cue/OCR/audio events tied to final clips, sorted by time.
+    # Raw detector candidates stay internal so the UI does not overstate proof.
     events: list[DetectedEvent] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)  # non-fatal issues for the UI
     error: str | None = None

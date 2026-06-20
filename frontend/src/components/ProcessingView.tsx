@@ -17,19 +17,19 @@ export default function ProcessingView({
     status.settings?.power_mode === "max_gpu"
       ? "Max GPU"
       : status.settings?.power_mode === "quality"
-        ? "Quality"
-        : "Balanced";
+        ? "Qualitaet"
+        : "Ausgewogen";
 
   return (
     <div className="container">
       <div className="row" style={{ justifyContent: "space-between", marginBottom: 8 }}>
-        <h2>Making your clips…</h2>
+        <h2>Deine Clips werden erstellt...</h2>
         <Link className="btn ghost sm" to="/">
-          ← Leave & come back later
+          Zurueck zur Startseite
         </Link>
       </div>
       <p className="muted">
-        This runs in the background — it’s safe to close this tab. {p.message}
+        Das laeuft im Hintergrund weiter - du kannst diesen Tab sicher schliessen. {p.message}
       </p>
       <div className="row" style={{ marginTop: 10, flexWrap: "wrap" }}>
         <span className="pill">{powerLabel}</span>
@@ -45,7 +45,7 @@ export default function ProcessingView({
             VRAM {(sys.gpu_mem_mb / 1024).toFixed(1)}/{(sys.gpu_mem_total_mb / 1024).toFixed(1)} GB
           </span>
         ) : null}
-        <span className="muted tiny">Live previews appear below as clips finish rendering.</span>
+        <span className="muted tiny">Vorschauen erscheinen unten, sobald einzelne Clips fertig sind.</span>
       </div>
 
       <div className="panel" style={{ padding: 22, marginTop: 16 }}>
@@ -74,7 +74,7 @@ export default function ProcessingView({
       {renderedClips.length > 0 && (
         <div style={{ marginTop: 28 }}>
           <h3 style={{ marginBottom: 12 }}>
-            Clips are finishing as they render ({renderedClips.length})
+            Fertige Clips waehrend des Renderns ({renderedClips.length})
           </h3>
           <div className="clip-grid">
             {renderedClips.map((c) => (

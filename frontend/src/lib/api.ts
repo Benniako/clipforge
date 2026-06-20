@@ -17,8 +17,9 @@ export interface CueEvent {
 }
 export type CuesStatus = Record<
   string,
-  { label: string; configured: number; total: number; events: CueEvent[] }
+  { label: string; configured: number; total: number; events: CueEvent[]; visual?: Record<string, string[]> }
 >;
+export type VisualCuesStatus = Record<string, Record<string, string[]>>;
 
 async function json<T>(res: Response): Promise<T> {
   if (!res.ok) {
@@ -55,6 +56,7 @@ export interface CreateProjectInput {
   facecam_layout: string;
   use_ocr: boolean;
   use_vlm: boolean;
+  use_cues: boolean;
   use_audio_events: boolean;
   cue_learning: boolean;
   auto_length: boolean;
@@ -81,6 +83,71 @@ export const api = {
 
   removeCue: (game: string, event: string) =>
     fetch(`/api/cues/${game}/${event}`, { method: "DELETE" }).then((r) => json<CuesStatus>(r)),
+
+  visualCues: () => fetch("/api/cues/visual").then((r) => json<VisualCuesStatus>(r)),
+
+  addVisualCue: (game: string, label: string, phrase: string) => {
+    const fd = new FormData();
+    fd.set("phrase", phrase);
+    return fetch(`/api/cues/visual/${game}/${label}`, { method: "POST", body: fd }).then((r) =>
+      json<VisualCuesStatus>(r),
+    );
+  },
+
+  removeVisualCue: (game: string, label: string, phrase?: string) => {
+    const qs = phrase ? `?phrase=${encodeURIComponent(phrase)}` : "";
+    return fetch(`/api/cues/visual/${game}/${label}${qs}`, { method: "DELETE" }).then((r) =>
+      json<VisualCuesStatus>(r),
+    );
+  },
+
+  testOcrCue: (
+    game: string,
+    file: File,
+    box: { x: number; y: number; w: number; h: number },
+    opts: { label?: string; save?: boolean } = {},
+  ) => {
+    const fd = new FormData();
+    fd.set("game", game);
+    fd.set("file", file);
+    fd.set("x", String(box.x));
+    fd.set("y", String(box.y));
+    fd.set("w", String(box.w));
+    fd.set("h", String(box.h));
+    if (opts.label) fd.set("label", opts.label);
+    fd.set("save", String(!!opts.save));
+    return fetch("/api/cues/lab/ocr", { method: "POST", body: fd }).then((r) =>
+      json<{ text: string; matches: { label: string; phrase: string }[]; saved: boolean; visual: VisualCuesStatus }>(r),
+    );
+  },
+
+  testAudioCues: (game: string, file: File) => {
+    const fd = new FormData();
+    fd.set("game", game);
+    fd.set("file", file);
+    return fetch("/api/cues/lab/audio", { method: "POST", body: fd }).then((r) =>
+      json<{ count: number; events: { t: number; label: string; similarity: number; source: string }[] }>(r),
+    );
+  },
+
+  testAudioWindow: (
+    game: string,
+    file: File,
+    start: number,
+    duration: number,
+    opts: { label?: string; save?: boolean } = {},
+  ) => {
+    const fd = new FormData();
+    fd.set("game", game);
+    fd.set("file", file);
+    fd.set("start", String(start));
+    fd.set("duration", String(duration));
+    fd.set("save", String(!!opts.save));
+    if (opts.label) fd.set("label", opts.label);
+    return fetch("/api/cues/lab/audio-window", { method: "POST", body: fd }).then((r) =>
+      json<{ count: number; saved: boolean; start: number; duration: number; events: { t: number; label: string; similarity: number; source: string }[] }>(r),
+    );
+  },
 
   listProjects: () => fetch("/api/projects").then((r) => json<ProjectSummary[]>(r)),
 
@@ -133,6 +200,7 @@ export const api = {
       fd.set("facecam_layout", input.facecam_layout);
       fd.set("use_ocr", String(input.use_ocr));
       fd.set("use_vlm", String(input.use_vlm));
+      fd.set("use_cues", String(input.use_cues));
       fd.set("use_audio_events", String(input.use_audio_events));
       fd.set("cue_learning", String(input.cue_learning));
       fd.set("auto_length", String(input.auto_length));

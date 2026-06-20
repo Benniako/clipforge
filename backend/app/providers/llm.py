@@ -132,11 +132,11 @@ def _clean_title(text: str) -> str:
     return text[:80]
 
 
-def suggest_title(transcript_excerpt: str, *, lang: str = "en") -> str | None:
+def suggest_title(transcript_excerpt: str, *, lang: str = "de") -> str | None:
     """Return an LLM-written hook title, or None if unavailable/failed."""
     if not transcript_excerpt.strip() or not available():
         return None
-    lang_name = {"de": "German", "en": "English"}.get((lang or "en")[:2], "the same language")
+    lang_name = {"de": "German", "en": "English"}.get((lang or "de")[:2], "the same language")
     prompt = (
         "You write viral short-form video titles. From the transcript below, "
         f"write ONE punchy hook title in {lang_name}, under 60 characters. "

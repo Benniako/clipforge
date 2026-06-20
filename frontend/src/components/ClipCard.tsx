@@ -1,4 +1,4 @@
-import { useState } from "react";
+﻿import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../lib/api";
 import type { Clip } from "../lib/types";
@@ -29,9 +29,9 @@ function RankRibbon({ rank }: { rank?: number }) {
 function StatusChip({ status }: { status: Clip["status"] }) {
   if (status === "ready") return null;
   const map: Record<string, [string, string]> = {
-    rendering: ["Rendering…", "var(--warn)"],
-    pending: ["Queued", "var(--muted)"],
-    failed: ["Failed", "var(--bad)"],
+    rendering: ["Renderingâ€¦", "var(--warn)"],
+    pending: ["Warteschlange", "var(--muted)"],
+    failed: ["Fehlgeschlagen", "var(--bad)"],
   };
   const [label, color] = map[status] ?? [status, "var(--muted)"];
   return (
@@ -79,7 +79,7 @@ export default function ClipCard({ clip, projectId, rank, selected, onToggleSele
               border: "1px solid rgba(255,255,255,0.3)", color: "#fff", cursor: "pointer",
             }}
           >
-            {selected ? "✓" : ""}
+            {selected ? "âœ“" : ""}
           </span>
         )}
         {ready && (
@@ -91,7 +91,7 @@ export default function ClipCard({ clip, projectId, rank, selected, onToggleSele
         )}
         <span className="dur">
           {fmtDuration(clip.tightened_duration ?? clip.end - clip.start)}
-          {clip.tightened_duration != null && " ✂"}
+          {clip.tightened_duration != null && " âœ‚"}
         </span>
       </div>
       <div className="clip-body">
@@ -124,11 +124,11 @@ export default function ClipCard({ clip, projectId, rank, selected, onToggleSele
           <div className="spacer" style={{ flex: 1 }} />
           <button
             className="btn sm ghost"
-            title="More like this — teaches the local scorer your taste"
+            title="More like this â€” teaches the local scorer your taste"
             onClick={(e) => rate(e, "up")}
             style={{ padding: "7px 9px", color: fb === "up" ? "var(--good)" : undefined }}
           >
-            👍
+            ðŸ‘
           </button>
           <button
             className="btn sm ghost"
@@ -136,10 +136,12 @@ export default function ClipCard({ clip, projectId, rank, selected, onToggleSele
             onClick={(e) => rate(e, "down")}
             style={{ padding: "7px 9px", color: fb === "down" ? "var(--bad)" : undefined }}
           >
-            👎
+            ðŸ‘Ž
           </button>
         </div>
       </div>
     </div>
   );
 }
+
+
