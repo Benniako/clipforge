@@ -1023,6 +1023,16 @@ def test_set_aspect_endpoint_validation():
     assert r.status_code == 404          # then the project must exist
 
 
+def test_ready_endpoint_is_lightweight():
+    from starlette.testclient import TestClient
+    from app.main import create_app
+
+    c = TestClient(create_app(), raise_server_exceptions=False)
+    r = c.get("/api/ready")
+    assert r.status_code == 200
+    assert r.json()["ok"] is True
+
+
 def test_clip_aspect_override_falls_back_to_project_dims():
     from app.models import ASPECTS
     st = ImportSettings(aspect="9:16")

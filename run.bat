@@ -1,4 +1,5 @@
 @echo off
+setlocal
 cd /d "%~dp0"
 if not exist ".venv\Scripts\python.exe" (
     echo Please run setup.bat first.
@@ -28,10 +29,32 @@ REM set CLIPFORGE_CODEC=av1
 echo Starting Ollama if available...
 powershell -ExecutionPolicy Bypass -NoProfile -File "%~dp0scripts\setup_ollama_models.ps1" -StartOnly >nul 2>&1
 
-echo Starting ClipForge backend in a new window...
-start "ClipForge backend - close this window to stop" .venv\Scripts\python.exe -m uvicorn app.main:app --app-dir backend --port 8000
-echo Waiting for the server to come up, then opening your browser...
-timeout /t 4 /nobreak >nul
+echo Checking ClipForge backend...
+powershell -NoProfile -ExecutionPolicy Bypass -Command "try { $r = Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:8000/api/ready' -TimeoutSec 2; if ($r.StatusCode -eq 200) { exit 0 } } catch {}; exit 1" >nul 2>&1
+if errorlevel 1 (
+    echo Starting ClipForge backend in a new window...
+    start "ClipForge backend - close this window to stop" "%~dp0.venv\Scripts\python.exe" -m uvicorn app.main:app --app-dir backend --port 8000
+) else (
+    echo ClipForge backend is already running.
+)
+
+echo Waiting until the server is ready...
+for /l %%I in (1,1,60) do (
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "try { $r = Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:8000/api/ready' -TimeoutSec 2; if ($r.StatusCode -eq 200) { exit 0 } } catch {}; exit 1" >nul 2>&1
+    if not errorlevel 1 goto ready
+    timeout /t 1 /nobreak >nul
+)
+
+echo(
+echo ClipForge did not become ready on http://localhost:8000.
+echo If the backend window closed, scroll up there for the Python error.
+echo You can also run this for details:
+echo   .venv\Scripts\python.exe -m uvicorn app.main:app --app-dir backend --port 8000
+echo(
+pause
+exit /b 1
+
+:ready
 start "" http://localhost:8000
 echo(
 echo ClipForge is running at  http://localhost:8000

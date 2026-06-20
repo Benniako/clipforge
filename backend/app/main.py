@@ -85,6 +85,16 @@ def create_app() -> FastAPI:
             "output": {"width": settings.out_width, "height": settings.out_height},
         }
 
+    @app.get("/api/ready", tags=["meta"])
+    def ready() -> dict:
+        """Fast readiness probe for launch scripts.
+
+        /api/health intentionally checks optional AI backends, which can take a
+        few seconds when Ollama or audio detectors are waking up. Startup scripts
+        only need to know that FastAPI finished booting and can serve the SPA.
+        """
+        return {"ok": True, "version": __version__}
+
     app.include_router(routes_projects.router)
     app.include_router(routes_clips.router)
     app.include_router(routes_cues.router)
