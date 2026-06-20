@@ -401,7 +401,10 @@ class Engine:
             try:
                 self._advance(project_id, 2, "Listening for crowd / hype…")
                 for clip in clips:
-                    res = ae_mod.event_score(wav_path, clip.start, clip.end)
+                    res = ae_mod.event_score(
+                        wav_path, clip.start, clip.end,
+                        profile=project.settings.game_profile,
+                        language=project.settings.language)
                     if res is not None:
                         hype, reason = res
                         clip.score, clip.factors = ae_mod.apply_event_bonus(

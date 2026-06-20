@@ -589,7 +589,8 @@ def _audio_events(wav_path: str, duration: float, settings: ImportSettings) -> l
         threshold = 0.55 if mode == "quality" else 0.58
         return audio_events_mod.find_events(
             wav_path, duration, window=window, hop=hop, threshold=threshold,
-            limit=max(settings.target_clips, 6))
+            limit=max(settings.target_clips, 6), profile=settings.game_profile,
+            language=settings.language)
     except Exception as e:
         log.warning("CLAP audio event search failed: %s", e)
         return []

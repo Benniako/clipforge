@@ -39,22 +39,119 @@ HYPE_CLASSES: dict[str, tuple[str, ...]] = {
     "impact": ("smash", "crash", "shatter", "glass", "slam"),
 }
 
-CLAP_PROMPTS: dict[str, str] = {
-    "crowd cheering": "people cheering and applauding loudly",
-    "laughter": "people laughing hard",
-    "excited shouting": "excited shouting and screaming",
-    "explosive action": "explosions gunshots and intense action",
-    "impact": "a loud crash smash or impact",
-    "victory fanfare": "a triumphant game victory fanfare or win sound",
-    "surprise reaction": "a streamer gasping in surprise or shock",
+CLAP_PROMPTS: dict[str, tuple[str, ...]] = {
+    "crowd cheering": (
+        "people cheering and applauding loudly",
+        "a crowd erupts after an exciting sports or game moment",
+        "German viewers cheering after a win",
+    ),
+    "laughter": (
+        "people laughing hard",
+        "a streamer laughing at a funny moment",
+        "German streamer laughter",
+    ),
+    "excited shouting": (
+        "excited shouting and screaming",
+        "a streamer yells loudly during intense gameplay",
+        "German excited gaming commentary",
+    ),
+    "explosive action": (
+        "explosions gunshots and intense action",
+        "rapid shooter combat with gunfire and impacts",
+        "intense gameplay fight sounds",
+    ),
+    "impact": (
+        "a loud crash smash or impact",
+        "a sudden hit impact or heavy thud",
+    ),
+    "victory fanfare": (
+        "a triumphant game victory fanfare or win sound",
+        "round won music sting in a competitive game",
+    ),
+    "surprise reaction": (
+        "a streamer gasping in surprise or shock",
+        "shocked voice reaction after an unexpected moment",
+    ),
 }
 
-NEGATIVE_CLAP_PROMPTS: dict[str, str] = {
-    "menu click": "video game menu click user interface sound",
-    "lobby music": "calm video game lobby menu background music",
-    "loading sound": "loading screen ambient loop or transition sound",
-    "keyboard/mouse": "keyboard typing and mouse clicking at a desktop",
-    "low energy ambience": "quiet low energy silence room tone or ambience",
+GAME_CLAP_PROMPTS: dict[str, dict[str, tuple[str, ...]]] = {
+    "valorant": {
+        "valorant kill": (
+            "Valorant kill confirmation sound",
+            "tactical shooter headshot kill sound",
+            "enemy eliminated sound in Valorant",
+        ),
+        "spike objective": (
+            "Valorant spike planted announcer",
+            "Valorant spike defused announcer",
+            "tactical shooter bomb plant or defuse announcer",
+        ),
+        "round win": (
+            "Valorant round victory announcer",
+            "team won the round in a tactical shooter",
+        ),
+    },
+    "cs2": {
+        "cs2 kill": (
+            "Counter Strike headshot kill sound",
+            "Counter Strike enemy killed gunshot impact",
+        ),
+        "bomb objective": (
+            "Counter Strike bomb planted announcer",
+            "Counter Strike bomb defused announcer",
+        ),
+        "round win": (
+            "Counter Terrorists win announcer",
+            "Terrorists win announcer in Counter Strike",
+        ),
+    },
+    "eafc": {
+        "goal celebration": (
+            "football goal crowd celebration",
+            "soccer commentator screams goal",
+            "German football goal celebration commentary",
+        ),
+        "referee whistle": (
+            "football referee whistle at an important play",
+            "penalty whistle in a football match",
+        ),
+    },
+    "rocketleague": {
+        "goal explosion": (
+            "Rocket League goal explosion",
+            "arcade car soccer goal scored sound",
+        ),
+        "epic save": (
+            "Rocket League epic save announcer",
+            "arcade car soccer save announcer",
+        ),
+    },
+}
+_PROFILE_ALIAS = {"auto": "generic", "cs": "cs2", "fifa": "eafc"}
+
+NEGATIVE_CLAP_PROMPTS: dict[str, tuple[str, ...]] = {
+    "menu click": (
+        "video game menu click user interface sound",
+        "game settings menu navigation clicks",
+        "agent select or inventory menu user interface",
+    ),
+    "lobby music": (
+        "calm video game lobby menu background music",
+        "ambient waiting room music before a match starts",
+        "non gameplay menu music loop",
+    ),
+    "loading sound": (
+        "loading screen ambient loop or transition sound",
+        "matchmaking loading screen with no action",
+    ),
+    "keyboard/mouse": (
+        "keyboard typing and mouse clicking at a desktop",
+        "computer mouse clicks without gameplay action",
+    ),
+    "low energy ambience": (
+        "quiet low energy silence room tone or ambience",
+        "steady background hum with no exciting event",
+    ),
 }
 
 
@@ -249,6 +346,12 @@ def reduce_clap_window(pos_sims: dict[str, float],
     if pos is None:
         return None
     hype, reason = pos
+    raw_pos = float(pos_sims.get(reason, 0.0))
+    raw_neg = max((float(v) for v in neg_sims.values()), default=-1.0)
+    if raw_pos - raw_neg < 0.06:
+        log.debug("CLAP rejected %s because positive/negative margin was %.3f",
+                  reason, raw_pos - raw_neg)
+        return None
     neg = reduce_negative_similarities(neg_sims)
     if neg is not None:
         risk, neg_reason = neg
@@ -261,7 +364,52 @@ def reduce_clap_window(pos_sims: dict[str, float],
     return hype, reason
 
 
-def _clap_similarity_rows(paths: list[str]) -> list[tuple[dict[str, float], dict[str, float]]]:
+def _normalize_profile(profile: str | None) -> str:
+    name = (profile or "generic").lower().replace(" ", "")
+    return _PROFILE_ALIAS.get(name, name)
+
+
+def _prompt_sets(profile: str | None = None, language: str | None = None
+                 ) -> tuple[dict[str, tuple[str, ...]], dict[str, tuple[str, ...]]]:
+    pos = {label: tuple(prompts) for label, prompts in CLAP_PROMPTS.items()}
+    name = _normalize_profile(profile)
+    for label, prompts in GAME_CLAP_PROMPTS.get(name, {}).items():
+        pos[label] = tuple(dict.fromkeys(pos.get(label, ()) + prompts))
+    lang = (language or "").lower()
+    if lang.startswith("de"):
+        pos["excited shouting"] = tuple(dict.fromkeys(
+            pos.get("excited shouting", ()) + (
+                "German streamer shouts after an intense play",
+                "German gaming voice gets loud and excited",
+            )))
+        pos["surprise reaction"] = tuple(dict.fromkeys(
+            pos.get("surprise reaction", ()) + (
+                "German streamer gasps in surprise",
+                "German voice shocked by a gameplay moment",
+            )))
+    return pos, NEGATIVE_CLAP_PROMPTS
+
+
+def _flatten_prompts(groups: dict[str, tuple[str, ...]]) -> tuple[list[str], list[str]]:
+    labels: list[str] = []
+    prompts: list[str] = []
+    for label, variants in groups.items():
+        for prompt in variants:
+            labels.append(label)
+            prompts.append(prompt)
+    return labels, prompts
+
+
+def _group_prompt_scores(labels: list[str], values) -> dict[str, float]:
+    scores: dict[str, float] = {}
+    for label, val in zip(labels, values):
+        scores[label] = max(scores.get(label, -1.0), float(val))
+    return scores
+
+
+def _clap_similarity_rows(paths: list[str], *, profile: str | None = None,
+                          language: str | None = None
+                          ) -> list[tuple[dict[str, float], dict[str, float]]]:
     if not paths:
         return []
     model = _load_clap()
@@ -270,7 +418,10 @@ def _clap_similarity_rows(paths: list[str]) -> list[tuple[dict[str, float], dict
     try:
         import numpy as np
 
-        all_prompts = [*CLAP_PROMPTS.values(), *NEGATIVE_CLAP_PROMPTS.values()]
+        pos_prompts, neg_prompts = _prompt_sets(profile, language)
+        pos_labels, pos_texts = _flatten_prompts(pos_prompts)
+        neg_labels, neg_texts = _flatten_prompts(neg_prompts)
+        all_prompts = [*pos_texts, *neg_texts]
         audio = _embedding_array(model.get_audio_embedding_from_filelist, paths)
         text = _embedding_array(model.get_text_embedding, all_prompts)
         if audio.ndim == 1:
@@ -280,13 +431,11 @@ def _clap_similarity_rows(paths: list[str]) -> list[tuple[dict[str, float], dict
         audio = audio / np.maximum(np.linalg.norm(audio, axis=1, keepdims=True), 1e-6)
         text = text / np.maximum(np.linalg.norm(text, axis=1, keepdims=True), 1e-6)
         vals = audio @ text.T
-        pos_labels = list(CLAP_PROMPTS)
-        neg_labels = list(NEGATIVE_CLAP_PROMPTS)
         rows: list[tuple[dict[str, float], dict[str, float]]] = []
         for row in vals:
-            pos = {reason: float(row[i]) for i, reason in enumerate(pos_labels)}
+            pos = _group_prompt_scores(pos_labels, row[:len(pos_labels)])
             neg_off = len(pos_labels)
-            neg = {reason: float(row[neg_off + i]) for i, reason in enumerate(neg_labels)}
+            neg = _group_prompt_scores(neg_labels, row[neg_off:neg_off + len(neg_labels)])
             rows.append((pos, neg))
         return rows
     except Exception as e:
@@ -308,8 +457,9 @@ def _embedding_array(fn, values):
     return np.asarray(out, dtype=np.float32)
 
 
-def _clap_score(seg_path: str) -> tuple[float, str] | None:
-    rows = _clap_similarity_rows([seg_path])
+def _clap_score(seg_path: str, *, profile: str | None = None,
+                language: str | None = None) -> tuple[float, str] | None:
+    rows = _clap_similarity_rows([seg_path], profile=profile, language=language)
     if not rows:
         return None
     return reduce_clap_window(*rows[0])
@@ -317,7 +467,8 @@ def _clap_score(seg_path: str) -> tuple[float, str] | None:
 
 def find_events(wav_path: str, duration: float, *, window: float = 6.0,
                 hop: float = 3.0, threshold: float = 0.35,
-                limit: int = 20) -> list[AudioEvent]:
+                limit: int = 20, profile: str | None = None,
+                language: str | None = None) -> list[AudioEvent]:
     """Zero-shot CLAP search over audio windows.
 
     Returns highlight-like audio events (cheer/laugh/action/etc.) while filtering
@@ -360,7 +511,8 @@ def find_events(wav_path: str, duration: float, *, window: float = 6.0,
                     pairs.append((start + dur / 2.0, str(seg)))
                 except Exception as e:
                     log.debug("CLAP window extract failed at %.1fs: %s", start, e)
-            rows = _clap_similarity_rows([p for _, p in pairs])
+            rows = _clap_similarity_rows([p for _, p in pairs],
+                                         profile=profile, language=language)
 
         events: list[AudioEvent] = []
         for (t_mid, _path), row in zip(pairs, rows):
@@ -388,7 +540,9 @@ def find_events(wav_path: str, duration: float, *, window: float = 6.0,
         return []
 
 
-def event_score(wav_path: str, start: float, end: float) -> tuple[float, str] | None:
+def event_score(wav_path: str, start: float, end: float, *,
+                profile: str | None = None,
+                language: str | None = None) -> tuple[float, str] | None:
     """(hype 0..1, reason) for a clip's audio span, or None.
 
     Uses PANNs when available, then CLAP as a zero-shot fallback. Reads only the
@@ -425,7 +579,7 @@ def event_score(wav_path: str, start: float, end: float) -> tuple[float, str] | 
                     if pann is not None:
                         return pann
             if get_settings().has_clap:
-                return _clap_score(str(seg))
+                return _clap_score(str(seg), profile=profile, language=language)
             return None
     except Exception as e:
         log.warning("audio-event scoring failed (%s)", e)

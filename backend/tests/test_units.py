@@ -1556,8 +1556,21 @@ def test_audio_event_reduce_and_bonus():
     assert AE.reduce_clap_similarities({"crowd cheering": 0.1}) is None
     assert AE.reduce_clap_window(
         {"crowd cheering": 0.42}, {"lobby music": 0.48}) is None
+    assert AE.reduce_clap_window(
+        {"crowd cheering": 0.34}, {"lobby music": 0.31}) is None
     gated = AE.reduce_clap_window({"crowd cheering": 0.42}, {"lobby music": 0.24})
     assert gated is not None and gated[1] == "crowd cheering"
+
+
+def test_clap_prompts_include_game_and_german_context():
+    from app.providers import audio_events as AE
+
+    pos, neg = AE._prompt_sets("valorant", "de")
+    joined_pos = " ".join(p for prompts in pos.values() for p in prompts).lower()
+    joined_neg = " ".join(p for prompts in neg.values() for p in prompts).lower()
+    assert "valorant" in joined_pos and "spike" in joined_pos
+    assert "german streamer" in joined_pos
+    assert "lobby" in joined_neg and "menu" in joined_neg
 
 
 def test_clap_loader_hides_server_args_and_restores_argv():
