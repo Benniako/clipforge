@@ -48,7 +48,8 @@ def _ensure_cuda_dlls() -> None:
     """On Windows, make pip-installed NVIDIA runtime DLLs loadable.
 
     ctranslate2 detects CUDA via the driver, but executing a model needs
-    cuBLAS/cuDNN. The ``nvidia-cublas-cu12``/``nvidia-cudnn-cu12`` wheels ship
+    cuBLAS/cuDNN. The ``nvidia-cublas-cu12``/``nvidia-cudnn-cu12`` wheels (and
+    matching cu13 wheels when installed) ship
     them into ``site-packages/nvidia/*/bin`` — outside any default DLL search
     path — so without this hook GPU transcription dies with
     "Library cublas64_12.dll is not found" and the pipeline silently degrades
@@ -57,7 +58,7 @@ def _ensure_cuda_dlls() -> None:
     if os.name != "nt":
         return
     try:
-        import nvidia  # namespace package owned by the nvidia-*-cu12 wheels
+        import nvidia  # namespace package owned by the nvidia-*-cu12/cu13 wheels
     except Exception:
         return
     for root in getattr(nvidia, "__path__", []):

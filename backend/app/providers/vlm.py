@@ -29,7 +29,7 @@ _MODEL = os.environ.get("CLIPFORGE_VLM_MODEL", "")  # empty = auto-pick
 
 # Vision-capable Ollama families. Within a family the largest installed size
 # wins, so qwen2.5vl:32b beats qwen2.5vl:7b automatically.
-_VISION_PREFERRED = ("qwen2.5vl", "qwen2.5-vl", "qwen2-vl",
+_VISION_PREFERRED = ("qwen3-vl", "qwen2.5vl", "qwen2.5-vl", "qwen2-vl",
                      "llama3.2-vision", "llava-llama3", "llava",
                      "bakllava", "minicpm-v", "moondream", "gemma3")
 _SIZE_RE = re.compile(r"(?::|-)(\d+(?:\.\d+)?)b\b", re.IGNORECASE)
@@ -123,6 +123,25 @@ _NEGATIVE_REASON_TERMS = (
     "menu", "lobby", "loading", "black screen", "static", "desktop",
     "scoreboard only", "boring", "transition", "blurry", "unclear",
 )
+_PROMPTS = {
+    "en": (
+        "Rate how viral these clip frames look. Reward visible action, reaction, "
+        "clarity, and a strong first-frame hook. Penalize menu/lobby/loading/"
+        "black/desktop/blur/scoreboard-only/no-action frames below 35. Reply:\n"
+        "SCORE: <0-100> | REASON: <max 8 words>"
+    ),
+    "de": (
+        "Bewerte, wie viral diese Clip-Frames wirken. Belohne sichtbare Action, "
+        "Reaktion, klare Bildsprache und einen starken Hook in den ersten Frames. "
+        "Bestrafe Menue/Lobby/Ladebildschirm/schwarzes Bild/Desktop/unscharfe/"
+        "nur Scoreboard/keine Action Frames unter 35. Antworte exakt:\n"
+        "SCORE: <0-100> | REASON: <max 8 words>"
+    ),
+}
+
+
+def _prompt_for(lang: str | None) -> str:
+    return _PROMPTS.get((lang or "en")[:2].lower(), _PROMPTS["en"])
 
 
 def _parse(text: str) -> tuple[float, str] | None:
@@ -143,7 +162,8 @@ def _parse(text: str) -> tuple[float, str] | None:
 
 
 def score_visual(src_path: str, start: float, end: float, *,
-                 n_frames: int = 3, timeout: float = 30.0) -> tuple[float, str] | None:
+                 n_frames: int = 3, timeout: float = 30.0,
+                 lang: str = "en") -> tuple[float, str] | None:
     """Ask the local VLM how viral a clip *looks*. (0..1, reason) or None."""
     if not available():
         return None
@@ -151,12 +171,7 @@ def score_visual(src_path: str, start: float, end: float, *,
     images = _grab_frames_b64(src_path, start, end, n_frames)
     if not model or not images:
         return None
-    prompt = (
-        "Rate how viral these clip frames look. Reward visible action, reaction, "
-        "clarity, and a strong first-frame hook. Penalize menu/lobby/loading/"
-        "black/desktop/blur/scoreboard-only/no-action frames below 35. Reply:\n"
-        "SCORE: <0-100> | REASON: <max 8 words>"
-    )
+    prompt = _prompt_for(lang)
     body = {"model": model, "prompt": prompt, "images": images, "stream": False,
             "think": False, "options": {"temperature": 0.4, "num_predict": 60}}
     for payload in (body, {k: v for k, v in body.items() if k != "think"}):
@@ -180,7 +195,8 @@ def score_visual(src_path: str, start: float, end: float, *,
 
 def score_visuals(src_path: str, spans: list[tuple[float, float]], *,
                   budget: float = 45.0, max_workers: int = 2,
-                  n_frames: int = 3, timeout: float = 30.0
+                  n_frames: int = 3, timeout: float = 30.0,
+                  lang: str = "en"
                   ) -> dict[int, tuple[float, str]]:
     """Concurrent VLM reads for many clip spans, capped by a time budget.
 
@@ -193,7 +209,7 @@ def score_visuals(src_path: str, spans: list[tuple[float, float]], *,
     out: dict[int, tuple[float, str]] = {}
     ex = cf.ThreadPoolExecutor(max_workers=max(1, max_workers))
     futs = {ex.submit(score_visual, src_path, a, b,
-                      n_frames=n_frames, timeout=timeout): i
+                      n_frames=n_frames, timeout=timeout, lang=lang): i
             for i, (a, b) in enumerate(spans)}
     done, _ = cf.wait(futs, timeout=budget)
     for f in done:

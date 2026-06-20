@@ -980,6 +980,7 @@ def test_gameplay_hashtags_lead_with_the_game():
 def test_ollama_model_autopick_prefers_strongest():
     from app.providers import llm
     assert llm._resolve_model(["llama3.2:latest", "qwen3:8b"]) == "qwen3:8b"
+    assert llm._resolve_model(["gemma4:12b", "llama3.3:70b"]) == "gemma4:12b"
     assert llm._resolve_model(["qwen3:8b", "qwen3:14b"]) == "qwen3:14b"
     assert llm._resolve_model(["qwen2.5vl:7b", "qwen3:8b"]) == "qwen3:8b"
     assert llm._resolve_model(["llama3.2:latest"]) == "llama3.2:latest"
@@ -1048,6 +1049,8 @@ def test_ocr_keyword_matching_finds_viral_markers():
     from app.providers import detect_ocr as O
     # noisy OCR text still matches the marker as a normalized substring
     assert ("victory", "victory") in O.match_keywords("|| VICT0RY ||".replace("0", "o"), "valorant")
+    assert any(l == "victory" for l, _ in O.match_keywords("SIEG - RUNDE GEWONNEN", "generic"))
+    assert any(l == "kill" for l, _ in O.match_keywords("KRASSER KOPFSCHUSS", "generic"))
     assert any(l == "kill" for l, _ in O.match_keywords("ENEMY DOUBLE KILL", "cs2"))
     assert any(l == "goal" for l, _ in O.match_keywords("GOOOAL!! what a save", "rocketleague"))
     # word-boundary: "ko" must not fire inside "took"
@@ -1074,6 +1077,10 @@ def test_ocr_valorant_german_markers_and_easyocr_shapes():
     assert any(l == "kill" for l, _ in O.match_keywords("GEGNER ÜBRIG", "valorant"))
     assert any(l == "spike" for l, _ in O.match_keywords("SPIKE ENTSCHÄRFT", "valorant"))
 
+    assert any(l == "bomb" for l, _ in O.match_keywords("BOMBE WURDE GELEGT", "cs2"))
+    assert any(l == "win" for l, _ in O.match_keywords("TERRORISTEN GEWINNEN", "cs2"))
+    assert any(l == "goal" for l, _ in O.match_keywords("TOR! ELFMETER VERWANDELT", "eafc"))
+
     class Reader:
         def readtext(self, _path, detail=1, paragraph=False):
             assert paragraph is False
@@ -1084,6 +1091,20 @@ def test_ocr_valorant_german_markers_and_easyocr_shapes():
 
     text = O._easyocr_text(Reader(), "frame.png")
     assert "Spike platziert" in text and "Headshot" in text
+
+
+def test_paddle_text_accepts_ocr_result_objects():
+    from app.providers import detect_ocr as O
+
+    class ResultObject:
+        rec_texts = ["Sieg", "Kopfschuss"]
+
+    class Reader:
+        def predict(self, _path):
+            return [ResultObject(), {"rec_texts": ["Bombe gelegt"]}]
+
+    text = O._paddle_text(Reader(), "frame.png")
+    assert "Sieg" in text and "Kopfschuss" in text and "Bombe gelegt" in text
 
 
 def test_ocr_fuzzy_matches_garbled_text():
@@ -1646,6 +1667,7 @@ def test_vlm_keyframe_times_are_inside_span():
 
 def test_vlm_model_autopick_accepts_hyphenated_qwen_name():
     from app.providers import vlm
+    assert vlm._resolve_model(["qwen3-vl:8b", "qwen2.5vl:32b"]) == "qwen3-vl:8b"
     assert vlm._resolve_model(["qwen2.5-vl:7b", "llava:latest"]) == "qwen2.5-vl:7b"
     assert vlm._resolve_model(["qwen2.5vl:7b", "qwen2.5vl:32b"]) == "qwen2.5vl:32b"
 
@@ -1653,6 +1675,7 @@ def test_vlm_model_autopick_accepts_hyphenated_qwen_name():
 def test_vlm_negative_reason_caps_score():
     from app.providers import vlm
     assert vlm._parse("SCORE: 88 | REASON: loading screen")[0] <= 0.35
+    assert "Bewerte" in vlm._prompt_for("de")
 
 
 def test_orchestrator_passes_source_path_to_vlm_scorer():
@@ -1663,20 +1686,21 @@ def test_orchestrator_passes_source_path_to_vlm_scorer():
     calls = []
 
     def fake_score_visuals(src_path, spans, *, budget=45.0, max_workers=2,
-                           n_frames=3, timeout=30.0):
-        calls.append((src_path, spans, budget, max_workers, n_frames, timeout))
+                           n_frames=3, timeout=30.0, lang="en"):
+        calls.append((src_path, spans, budget, max_workers, n_frames, timeout, lang))
         return {0: (0.8, "strong frames")}
 
     try:
         vlm.available = lambda: True
         vlm.score_visuals = fake_score_visuals
-        out = O._score_visual_reads("source.mp4", [Clip(start=1.0, end=2.5)])
+        out = O._score_visual_reads("source.mp4", [Clip(start=1.0, end=2.5)],
+                                    lang="de")
     finally:
         vlm.available = old_available
         vlm.score_visuals = old_score_visuals
 
     assert out == {0: (0.8, "strong frames")}
-    assert calls == [("source.mp4", [(1.0, 2.5)], 45.0, 1, 2, 30.0)]
+    assert calls == [("source.mp4", [(1.0, 2.5)], 45.0, 1, 2, 30.0, "de")]
 
 
 if __name__ == "__main__":

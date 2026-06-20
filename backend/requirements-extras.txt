@@ -16,8 +16,10 @@ onnxruntime>=1.17
 # Better scene-cut snapping (adaptive detector). Light.
 scenedetect[opencv]>=0.6.4
 
-# Gameplay on-screen text (kill banners / scorelines / VICTORY). EasyOCR is the
-# gameplay-tuned default; swap for paddleocr if you prefer (see requirements-ocr.txt).
+# Gameplay on-screen text (kill banners / scorelines / VICTORY). PaddleOCR v6
+# is tried first when installed; EasyOCR remains the robust fallback.
+paddleocr>=3.2
+transformers>=4.45
 easyocr>=1.7
 rapidfuzz>=3.0
 
@@ -26,7 +28,8 @@ funasr>=1.1
 modelscope>=1.15
 
 # Content-aware vertical reframe — tracks people/objects through cuts.
-ultralytics>=8.3
+# Default is YOLO11 nano. Opt into YOLO26 with CLIPFORGE_YOLO_MODEL=yolo26n.pt.
+ultralytics>=8.4
 
 # Higher-quality transcription: forced word alignment + speaker diarization.
 # Diarization also needs a Hugging Face token (HF_TOKEN).
@@ -47,7 +50,7 @@ demucs>=4.0
 
 # Vision-language virality second opinion: scores how a clip *looks* from a few
 # keyframes via a local Ollama vision model — no pip install, just pull one, e.g.
-#   ollama pull qwen2.5vl     (or llava / llama3.2-vision / minicpm-v)
+#   ollama pull qwen3-vl      (or qwen2.5vl / llava / llama3.2-vision / minicpm-v)
 # Auto-detected; set CLIPFORGE_VLM_MODEL to force a specific model.
 
 # Active-speaker detection (LR-ASD / Light-ASD) is a GitHub checkout, not a pip

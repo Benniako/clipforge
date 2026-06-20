@@ -27,7 +27,7 @@ _MODEL = os.environ.get("CLIPFORGE_LLM_MODEL", "")
 # largest installed size wins, so pulling qwen3:32b later automatically upgrades
 # the local title/virality model.
 _FAMILY_RANK = (
-    "qwen3", "llama3.3", "llama3.1", "gemma3", "qwen2.5",
+    "qwen3", "gemma4", "llama3.3", "llama3.1", "gemma3", "qwen2.5",
     "mistral", "llama3.2", "deepseek-r1",
 )
 _VISION_HINTS = ("vl", "vision", "llava", "moondream", "minicpm-v")
@@ -136,7 +136,7 @@ def suggest_title(transcript_excerpt: str, *, lang: str = "de") -> str | None:
     """Return an LLM-written hook title, or None if unavailable/failed."""
     if not transcript_excerpt.strip() or not available():
         return None
-    lang_name = {"de": "German", "en": "English"}.get((lang or "de")[:2], "the same language")
+    lang_name = {"de": "German", "en": "English"}.get((lang or "de")[:2].lower(), "the same language")
     prompt = (
         "You write viral short-form video titles. From the transcript below, "
         f"write ONE punchy hook title in {lang_name}, under 60 characters. "
@@ -153,7 +153,7 @@ def suggest_title(transcript_excerpt: str, *, lang: str = "de") -> str | None:
 _SCORE_RE = re.compile(r"(\d{1,3})")
 
 
-def score_viral(transcript_excerpt: str, *, lang: str = "en"
+def score_viral(transcript_excerpt: str, *, lang: str = "de"
                 ) -> tuple[float, str] | None:
     """Ask the local model how viral a clip's content is.
 
@@ -164,10 +164,12 @@ def score_viral(transcript_excerpt: str, *, lang: str = "en"
     """
     if not transcript_excerpt.strip() or not available():
         return None
+    lang_name = {"de": "German", "en": "English"}.get((lang or "de")[:2].lower(), "the same language")
     prompt = (
         "You judge short-form video virality. Rate how likely the clip below is "
         "to go viral on TikTok/Reels/Shorts, considering hook strength, emotion, "
-        "payoff, and quotability. Reply with EXACTLY one line:\n"
+        "payoff, and quotability. "
+        f"Write the REASON in {lang_name}. Reply with EXACTLY one line:\n"
         "SCORE: <0-100> | REASON: <max 8 words>\n\n"
         f"Transcript: {transcript_excerpt[:600]}\n"
     )
@@ -192,7 +194,7 @@ def _parse_viral(text: str) -> tuple[float, str] | None:
     return val, (reason or "AI virality read")
 
 
-def score_virals(excerpts: list[str], *, lang: str = "en",
+def score_virals(excerpts: list[str], *, lang: str = "de",
                  budget: float = 30.0) -> dict[int, tuple[float, str]]:
     """LLM virality reads for many clips concurrently, capped by a time budget.
 
@@ -218,7 +220,7 @@ def score_virals(excerpts: list[str], *, lang: str = "en",
     return out
 
 
-def suggest_titles(excerpts: list[str], *, lang: str = "en",
+def suggest_titles(excerpts: list[str], *, lang: str = "de",
                    budget: float = 45.0) -> dict[int, str]:
     """Titles for many clips concurrently, capped by an overall time budget.
 

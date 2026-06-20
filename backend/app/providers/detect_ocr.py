@@ -9,7 +9,7 @@ installed, and matches the text against a per-game lexicon of viral markers.
 Backends, best-accuracy first (all optional — none installed ⇒ this returns
 nothing and the audio/cue path still works):
 
-  PaddleOCR (PP-OCRv5) → EasyOCR (strong on noisy game overlays) → Tesseract.
+  PaddleOCR (PP-OCRv6 -> PP-OCRv5) → EasyOCR (strong on noisy game overlays) → Tesseract.
 
 Only ~1 frame every couple of seconds is read, downscaled, so even a long VOD
 stays cheap. Pure helpers (keyword matching, frame-time sampling, de-dup) carry
@@ -44,14 +44,22 @@ class OcrEvent:
 # (lowercased, whole-ish) that, found in OCR text, mean that event. Matched as
 # normalized substrings, so "you have been eliminated" still hits "eliminated".
 _GENERIC: dict[str, tuple[str, ...]] = {
-    "victory": ("victory", "you win", "winner winner", "winner", "match won", "mission complete"),
-    "defeat": ("defeat", "you lose", "you died", "you are dead", "game over", "wasted", "mission failed"),
-    "eliminated": ("eliminated", "knocked", "knockout", "k.o", "ko", "finish him"),
+    "victory": ("victory", "you win", "winner winner", "winner", "match won",
+                "mission complete", "sieg", "gewonnen", "runde gewonnen",
+                "spiel gewonnen", "auftrag abgeschlossen"),
+    "defeat": ("defeat", "you lose", "you died", "you are dead", "game over",
+               "wasted", "mission failed", "niederlage", "verloren",
+               "du bist tot", "mission fehlgeschlagen"),
+    "eliminated": ("eliminated", "knocked", "knockout", "k.o", "ko",
+                   "finish him", "eliminiert", "ausgeschaltet",
+                   "niedergeschlagen", "besiegt"),
     "kill": ("double kill", "triple kill", "multi kill", "ultra kill", "rampage",
-             "killing spree", "first blood", "headshot"),
+             "killing spree", "first blood", "headshot", "doppelkill",
+             "dreifachkill", "mehrfachkill", "kopfschuss"),
     "ace": ("ace", "team ace", "flawless"),
     "clutch": ("clutch", "1v5", "1v4", "1v3"),
-    "record": ("new record", "personal best", "high score", "level up"),
+    "record": ("new record", "personal best", "high score", "level up",
+               "neuer rekord", "persoenlicher rekord", "level aufstieg"),
 }
 
 # Per-profile extra markers, merged over the generic set.
@@ -69,11 +77,17 @@ _PROFILE_EXTRA: dict[str, dict[str, tuple[str, ...]]] = {
         "round_win": ("round won", "runde gewonnen", "victory"),
     },
     "cs2": {
-        "bomb": ("bomb has been planted", "bomb planted", "bomb defused"),
-        "win": ("counter-terrorists win", "terrorists win", "ct win"),
+        "bomb": ("bomb has been planted", "bomb planted", "bomb defused",
+                 "bombe wurde gelegt", "bombe gelegt", "bombe platziert",
+                 "bombe entscharft", "bombe entschaerft"),
+        "win": ("counter-terrorists win", "terrorists win", "ct win",
+                "terroristen gewinnen", "antiterroreinheit gewinnt",
+                "counter terrorists gewinnen", "runde gewonnen", "sieg"),
     },
     "eafc": {
-        "goal": ("goal", "go!", "full time", "half time", "penalty", "red card"),
+        "goal": ("goal", "go!", "full time", "half time", "penalty", "red card",
+                 "tor", "halbzeit", "abpfiff", "elfmeter", "rote karte",
+                 "gelbe karte", "freistoss", "freistos"),
     },
     "rocketleague": {
         "goal": ("goal", "what a save", "save", "demolished", "epic save"),
@@ -237,6 +251,19 @@ def _make_paddle(gpu: bool):
     from paddleocr import PaddleOCR
 
     device = "gpu" if gpu else "cpu"
+    # PP-OCRv6 on PaddleOCR 3.2+ with the transformers engine. Older installs
+    # fall through to the existing PP-OCRv5/legacy constructor cascade.
+    try:
+        return PaddleOCR(
+            text_detection_model_name="PP-OCRv6_medium_det",
+            text_recognition_model_name="PP-OCRv6_medium_rec",
+            engine="transformers",
+            lang="en",
+            use_textline_orientation=False,
+            device=device,
+        )
+    except Exception as e:
+        log.info("PaddleOCR v6 unavailable, falling back (%s)", e)
     for kwargs in (
         # 3.x: angle classifier off (we only read horizontal banners), pick device.
         {"lang": "en", "use_textline_orientation": False, "device": device},
@@ -294,8 +321,18 @@ def _paddle_text(reader, path: str) -> str:
     lines: list[str] = []
     for page in res:
         # 3.x: dict-like result with a list of recognized strings.
-        if isinstance(page, dict) and "rec_texts" in page:
-            lines.extend(t for t in page["rec_texts"] if t)
+        rec_texts = None
+        if isinstance(page, dict):
+            rec_texts = page.get("rec_texts")
+        else:
+            rec_texts = getattr(page, "rec_texts", None)
+            if rec_texts is None:
+                try:
+                    rec_texts = page["rec_texts"]
+                except (TypeError, KeyError, IndexError):
+                    rec_texts = None
+        if rec_texts:
+            lines.extend(t for t in rec_texts if t)
             continue
         # 2.x: list of [box, (text, conf)] entries.
         for entry in (page or []):
