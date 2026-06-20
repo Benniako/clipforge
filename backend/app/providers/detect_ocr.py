@@ -18,6 +18,7 @@ no OCR dependency so they're unit-tested without a backend.
 from __future__ import annotations
 
 import logging
+import os
 import re
 import tempfile
 import unicodedata
@@ -248,6 +249,10 @@ def _make_paddle(gpu: bool):
     farm on either major version reads on-screen text instead of silently
     returning nothing.
     """
+    # PaddlePaddle 3.3.x can crash in oneDNN/PIR CPU inference on Windows.
+    # Disabling the default MKLDNN path keeps OCR usable while preserving the
+    # GPU/transformers attempts where the local runtime supports them.
+    os.environ.setdefault("PADDLE_PDX_ENABLE_MKLDNN_BYDEFAULT", "0")
     from paddleocr import PaddleOCR
 
     device = "gpu" if gpu else "cpu"
@@ -274,9 +279,15 @@ def _make_paddle(gpu: bool):
     ):
         try:
             return PaddleOCR(**kwargs)
-        except (TypeError, ValueError):
-            continue
+        except Exception as e:
+            log.info("PaddleOCR constructor fallback failed (%s): %s", kwargs, e)
     return PaddleOCR(lang="en")  # last resort — let a real error surface
+
+
+def _make_easyocr(gpu: bool):
+    import easyocr
+
+    return easyocr.Reader(["en"], gpu=gpu, verbose=False)
 
 
 def _get_reader(engine: str):
@@ -285,18 +296,21 @@ def _get_reader(engine: str):
         return _reader
     s = get_settings()
     gpu = s.device == "cuda"
+    attempts = []
     if engine == "paddleocr":
-        _reader = ("paddleocr", _make_paddle(gpu))
+        attempts.append(("paddleocr", lambda: _make_paddle(gpu)))
+        attempts.append(("easyocr", lambda: _make_easyocr(gpu)))
     elif engine == "easyocr":
-        import easyocr
-
-        _reader = ("easyocr", easyocr.Reader(["en"], gpu=gpu, verbose=False))
+        attempts.append(("easyocr", lambda: _make_easyocr(gpu)))
     elif engine == "tesseract":
-        import pytesseract  # noqa: F401
-
-        _reader = ("tesseract", None)
-    else:
-        _reader = ("", None)
+        attempts.append(("tesseract", lambda: None))
+    for kind, make in attempts:
+        try:
+            _reader = (kind, make())
+            return _reader
+        except Exception as e:
+            log.warning("%s OCR unavailable, trying fallback if present: %s", kind, e)
+    _reader = ("", None)
     return _reader
 
 

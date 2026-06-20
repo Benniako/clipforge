@@ -19,6 +19,7 @@ scenedetect[opencv]>=0.6.4
 # Gameplay on-screen text (kill banners / scorelines / VICTORY). PaddleOCR v6
 # is tried first when installed; EasyOCR remains the robust fallback.
 paddleocr>=3.2
+paddlepaddle>=3.2
 transformers>=4.45
 easyocr>=1.7
 rapidfuzz>=3.0

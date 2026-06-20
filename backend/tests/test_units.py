@@ -1117,6 +1117,33 @@ def test_paddle_text_accepts_ocr_result_objects():
     assert "Sieg" in text and "Kopfschuss" in text and "Bombe gelegt" in text
 
 
+def test_ocr_reader_falls_back_to_easyocr_when_paddle_fails():
+    from app.providers import detect_ocr as O
+
+    old_reader = O._reader
+    old_make_paddle = O._make_paddle
+    old_make_easyocr = O._make_easyocr
+
+    class EasyReader:
+        pass
+
+    try:
+        O._reader = None
+
+        def fail_paddle(_gpu):
+            raise RuntimeError("broken paddle runtime")
+
+        O._make_paddle = fail_paddle
+        O._make_easyocr = lambda _gpu: EasyReader()
+        kind, reader = O._get_reader("paddleocr")
+        assert kind == "easyocr"
+        assert isinstance(reader, EasyReader)
+    finally:
+        O._reader = old_reader
+        O._make_paddle = old_make_paddle
+        O._make_easyocr = old_make_easyocr
+
+
 def test_ocr_fuzzy_matches_garbled_text():
     from app.providers import detect_ocr as O
     try:

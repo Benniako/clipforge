@@ -12,7 +12,7 @@
 # PaddleOCR (PP-OCRv6 -> PP-OCRv5 fallback) is the most accurate overall.
 paddleocr>=3.2
 transformers>=4.45        # required for PP-OCRv6 engine="transformers"
-# paddlepaddle>=2.6           # or paddlepaddle-gpu for CUDA
+paddlepaddle>=3.2         # runtime engine used by PaddleOCR/PaddleX
 
 # EasyOCR is the robust fallback on noisy game overlays (kill feeds, HUDs).
 # It pulls PyTorch; a CUDA GPU makes it much faster but it runs on CPU too.
