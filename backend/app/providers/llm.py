@@ -50,10 +50,17 @@ def _rank_text_model(tag: str) -> tuple[int, int, float, str]:
 
 
 def _resolve_model(tags: list[str]) -> str | None:
-    """The model to use, given what the Ollama server has installed."""
+    """The model to use, given what the Ollama server has installed.
+
+    Filters out vision-only models — they accept text prompts but waste their
+    multimodal budget and some refuse without images. The VLM provider has its
+    own picker; only fall back to a vision model if the user forced it via
+    ``CLIPFORGE_LLM_MODEL``.
+    """
     if _MODEL:
         return _MODEL  # explicit choice always wins
-    return max(tags, key=_rank_text_model) if tags else None
+    text = [t for t in tags if not any(h in t.lower() for h in _VISION_HINTS)]
+    return max(text, key=_rank_text_model) if text else None
 
 
 def _refresh() -> None:

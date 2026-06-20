@@ -16,6 +16,10 @@ export interface CaptionWord {
   d: number;
   text: string;
   speaker: number | null;
+  // Marked by the backend's keyword-emphasis pass (caption_fx.annotate). Honoured
+  // at render time; the editor doesn't author these directly.
+  emphasis?: boolean;
+  emoji?: string | null;
 }
 
 export interface DetectedEvent {
@@ -31,6 +35,8 @@ export interface CaptionSet {
   words: CaptionWord[];
   style_id: string;
   max_words_per_line: number;
+  // Spoken language ("en"/"de"); drives the lexicon for keyword emphasis + emoji.
+  lang?: string;
 }
 
 export interface ReframeKeyframe {
@@ -211,6 +217,10 @@ export interface StyleTemplate {
   outline: string;
   y_frac: number;
   uppercase: boolean;
+  // Caption production-value flags — whether this preset enables keyword
+  // emphasis (power-word colour/scale across the line) and tasteful auto-emoji.
+  emphasis?: boolean;
+  emoji?: boolean;
 }
 
 export interface Health {

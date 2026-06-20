@@ -52,16 +52,31 @@ def _emphasis_set(lex: signals.Lexicon) -> frozenset[str]:
     return lex.quote | lex.payoff | lex.enumeration
 
 
+# When False, the per-line cap is computed only against `max_words_per_line`. The
+# real on-screen grouping in captions.py also breaks on speech-pause gaps wider
+# than LINE_GAP, so we accept a ``line_break`` predicate from the caller (defaults
+# to "after every N words") to keep the two views consistent.
+def _default_line_break(prev: CaptionWord | None, w: CaptionWord, *, line_gap: float
+                        ) -> bool:
+    return prev is not None and (w.t - (prev.t + prev.d)) > line_gap
+
+
 def annotate(words: list[CaptionWord], *, lang: str = "en",
              emphasis: bool = True, emoji: bool = False,
              max_words_per_line: int = 3,
              max_emphasis_per_line: int = 2,
-             max_emoji_per_line: int = 1) -> list[CaptionWord]:
+             max_emoji_per_line: int = 1,
+             line_gap: float = 0.9) -> list[CaptionWord]:
     """Return a copy of ``words`` with ``emphasis``/``emoji`` marks set.
 
     Emphasis is capped per on-screen line so a whole line never lights up (which
     would defeat the point); numbers always count as emphasis (they're the most
     scannable beat). Emoji are rarer still. Pure — mutates nothing in place.
+
+    A new line starts after ``max_words_per_line`` words OR after a speech pause
+    longer than ``line_gap`` — the same rule the renderer uses for line breaks
+    in ``captions._group_lines``, so a single-word line after a pause still
+    obeys its own emphasis budget instead of inheriting a stale one.
     """
     if not words or (not emphasis and not emoji):
         return words
@@ -71,8 +86,10 @@ def annotate(words: list[CaptionWord], *, lang: str = "en",
     line_emph = 0
     line_emoji = 0
     pos_in_line = 0
+    prev: CaptionWord | None = None
     for w in words:
-        if pos_in_line >= max_words_per_line:
+        if pos_in_line >= max_words_per_line or _default_line_break(
+                prev, w, line_gap=line_gap):
             pos_in_line = line_emph = line_emoji = 0  # new on-screen line
         tok = _norm(w.text)
         is_num = bool(_NUM_RE.search(w.text))
@@ -86,4 +103,5 @@ def annotate(words: list[CaptionWord], *, lang: str = "en",
             line_emoji += 1
         out.append(w.model_copy(update={"emphasis": mark_e, "emoji": emo}))
         pos_in_line += 1
+        prev = w
     return out

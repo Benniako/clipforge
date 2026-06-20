@@ -401,6 +401,11 @@ class Engine:
             try:
                 self._advance(project_id, 2, "Listening for crowd / hype…")
                 for clip in clips:
+                    # Skip clips born from an audio event already — they carry
+                    # the CLAP signal in their baseline score, so a second
+                    # apply_event_bonus would double-count the same evidence.
+                    if clip.features.get("audio_event", 0.0) > 0.0:
+                        continue
                     res = ae_mod.event_score(
                         wav_path, clip.start, clip.end,
                         profile=project.settings.game_profile,
@@ -449,6 +454,9 @@ class Engine:
         # empty or fails, so clamp every clip to the real media duration.
         if info.duration > 0:
             for clip in clips:
+                # Clamp both ends — a start past EOF would render an empty span
+                # before the duration filter below could drop it.
+                clip.start = round(max(0.0, min(clip.start, info.duration)), 3)
                 clip.end = round(min(clip.end, info.duration), 3)
             clips = [c for c in clips if c.end - c.start >= 1.0]
             if not clips:

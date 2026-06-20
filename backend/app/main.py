@@ -52,7 +52,12 @@ async def lifespan(app: FastAPI):
     store.init_db()
     feedback.init_db()
     engine.start()
-    engine.resume_incomplete()
+    # Don't block the lifespan startup on resuming N stranded projects —
+    # /api/ready would otherwise not answer until every store.mutate runs.
+    # The worker pool is already up; resume_incomplete just feeds the queue.
+    import threading
+    threading.Thread(target=engine.resume_incomplete,
+                     name="clipforge-resume", daemon=True).start()
     s = get_settings()
     logging.getLogger("clipforge").info("capabilities: %s", s.capability_report())
     yield

@@ -226,7 +226,10 @@ def _load_clap():
             log.info("LAION-CLAP audio tagging loaded")
         finally:
             sys.argv = old_argv
-    except BaseException as e:
+    except Exception as e:
+        # Catch only Exception, not BaseException, so KeyboardInterrupt/SystemExit
+        # during an interactive shutdown still propagate instead of silently
+        # disabling CLAP.
         log.info("CLAP audio tagging unavailable (%s)", e)
         _clap = False
     return _clap or None

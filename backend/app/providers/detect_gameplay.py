@@ -411,11 +411,14 @@ def apply_corroboration(clips: list["GameplayClip"], cue_events: list,
                 detail="A matching game sound and matching on-screen text fire here"))
         elif soft_support:
             bonus = 3
-            c.score = int(max(1, min(89, c.score + bonus)))
-            c.features["supporting_audio"] = 1.0
-            c.factors.insert(0, ScoreFactor(
-                label="Audio supports OCR", weight=float(bonus),
-                detail="Generic audio energy lines up with on-screen text, but no exact cue matched"))
+            # A bonus must never lower the score: an already-high clip (e.g. cue
+            # + reaction at 95) shouldn't be clamped down by the "support" cap.
+            if c.score < 89:
+                c.score = int(min(89, c.score + bonus))
+                c.features["supporting_audio"] = 1.0
+                c.factors.insert(0, ScoreFactor(
+                    label="Audio supports OCR", weight=float(bonus),
+                    detail="Generic audio energy lines up with on-screen text, but no exact cue matched"))
 
 
 def _anchor_times(c) -> list[float]:
