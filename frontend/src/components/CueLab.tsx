@@ -19,7 +19,7 @@ const cleanLabel = (s: string) =>
   s
     .trim()
     .toLowerCase()
-    .replace(/[^a-z0-9_-]+/g, "_")
+    .replace(/[^a-z0-9äöüß_-]+/g, "_")
     .replace(/^_+|_+$/g, "");
 
 export default function CueLab({
@@ -120,7 +120,7 @@ export default function CueLab({
   const captureVideoFrame = async () => {
     const video = videoRef.current;
     if (!video || !sourceFile) {
-      setErr("Waehle zuerst ein Video aus.");
+      setErr("Wähle zuerst ein Video aus.");
       return;
     }
     if (!video.videoWidth || !video.videoHeight) {
@@ -161,7 +161,8 @@ export default function CueLab({
     setErr(null);
     try {
       if (save && manualPhrase.trim()) {
-        const next = await api.addVisualCue(game, label, manualPhrase.trim());
+        await api.addVisualCueRegion(game, label, box, { name: label, phrase: manualPhrase.trim() });
+        const next = await api.visualCues();
         onVisualChange(next);
         setOcrResult((r) => r && { ...r, saved: true, visual: next });
       } else {
@@ -178,7 +179,7 @@ export default function CueLab({
 
   const testAudio = async () => {
     if (!audioFile) {
-      setErr("Fuege zuerst ein Audio- oder Video-Beispiel hinzu.");
+      setErr("Füge zuerst ein Audio- oder Video-Beispiel hinzu.");
       return;
     }
     setBusy("test-audio");
@@ -194,7 +195,7 @@ export default function CueLab({
 
   const useAudioWindow = async (save: boolean) => {
     if (!sourceFile || !videoRef.current) {
-      setErr("Waehle ein Video und gehe zuerst zur Cue-Stelle.");
+      setErr("Wähle ein Video und gehe zuerst zur Cue-Stelle.");
       return;
     }
     const label = cleanLabel(audioLabel);
@@ -221,7 +222,7 @@ export default function CueLab({
 
   const saveAudio = async () => {
     if (!audioFile) {
-      setErr("Fuege zuerst einen sauberen Referenzsound hinzu.");
+      setErr("Füge zuerst einen sauberen Referenzsound hinzu.");
       return;
     }
     const label = cleanLabel(audioLabel);
@@ -259,7 +260,7 @@ export default function CueLab({
         <div>
           <h3>Cue-Testlabor</h3>
           <p className="muted tiny" style={{ margin: "6px 0 0" }}>
-            Gehe durch das importierte Video, erfasse einen Frame, teste OCR/Audio und speichere dann nuetzliche Cues.
+            Gehe durch das importierte Video, erfasse einen Frame, teste OCR/Audio und speichere dann nützliche Cues.
           </p>
         </div>
         {busy && <span className="pill">Arbeitet</span>}
@@ -386,7 +387,7 @@ export default function CueLab({
             <div className="cue-window-tools">
               <label className="muted tiny">Audiofenster an der aktuellen Stelle</label>
               <div className="range-label">
-                <span>Laenge des Ausschnitts</span>
+                <span>Länge des Ausschnitts</span>
                 <b>{audioWindowSeconds.toFixed(1)}s</b>
               </div>
               <input

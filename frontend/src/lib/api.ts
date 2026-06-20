@@ -20,6 +20,19 @@ export type CuesStatus = Record<
   { label: string; configured: number; total: number; events: CueEvent[]; visual?: Record<string, string[]> }
 >;
 export type VisualCuesStatus = Record<string, Record<string, string[]>>;
+export interface VisualCueRegion {
+  name: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+export interface VisualCueProfile {
+  phrases: Record<string, string[]>;
+  regions: Record<string, VisualCueRegion[]>;
+  false: Record<string, string[]>;
+}
+export type VisualCueMeta = Record<string, VisualCueProfile>;
 
 async function json<T>(res: Response): Promise<T> {
   if (!res.ok) {
@@ -34,6 +47,8 @@ async function json<T>(res: Response): Promise<T> {
   }
   return res.json() as Promise<T>;
 }
+
+const pathPart = (value: string) => encodeURIComponent(value);
 
 export interface CreateProjectInput {
   name?: string;
@@ -76,27 +91,55 @@ export const api = {
     const fd = new FormData();
     if (opts.url) fd.set("url", opts.url);
     if (opts.file) fd.set("file", opts.file);
-    return fetch(`/api/cues/${game}/${event}`, { method: "POST", body: fd }).then(
+    return fetch(`/api/cues/${pathPart(game)}/${pathPart(event)}`, { method: "POST", body: fd }).then(
       (r) => json<CuesStatus>(r),
     );
   },
 
   removeCue: (game: string, event: string) =>
-    fetch(`/api/cues/${game}/${event}`, { method: "DELETE" }).then((r) => json<CuesStatus>(r)),
+    fetch(`/api/cues/${pathPart(game)}/${pathPart(event)}`, { method: "DELETE" }).then((r) => json<CuesStatus>(r)),
 
   visualCues: () => fetch("/api/cues/visual").then((r) => json<VisualCuesStatus>(r)),
+
+  visualCueMeta: () => fetch("/api/cues/visual-meta").then((r) => json<VisualCueMeta>(r)),
 
   addVisualCue: (game: string, label: string, phrase: string) => {
     const fd = new FormData();
     fd.set("phrase", phrase);
-    return fetch(`/api/cues/visual/${game}/${label}`, { method: "POST", body: fd }).then((r) =>
+    return fetch(`/api/cues/visual/${pathPart(game)}/${pathPart(label)}`, { method: "POST", body: fd }).then((r) =>
       json<VisualCuesStatus>(r),
+    );
+  },
+
+  addVisualCueRegion: (
+    game: string,
+    label: string,
+    box: { x: number; y: number; w: number; h: number },
+    opts: { name?: string; phrase?: string } = {},
+  ) => {
+    const fd = new FormData();
+    fd.set("x", String(box.x));
+    fd.set("y", String(box.y));
+    fd.set("w", String(box.w));
+    fd.set("h", String(box.h));
+    if (opts.name) fd.set("name", opts.name);
+    if (opts.phrase) fd.set("phrase", opts.phrase);
+    return fetch(`/api/cues/visual/${pathPart(game)}/${pathPart(label)}/region`, { method: "POST", body: fd }).then((r) =>
+      json<VisualCueMeta>(r),
+    );
+  },
+
+  markVisualCueFalse: (game: string, label: string, phrase: string) => {
+    const fd = new FormData();
+    fd.set("phrase", phrase);
+    return fetch(`/api/cues/visual/${pathPart(game)}/${pathPart(label)}/false`, { method: "POST", body: fd }).then((r) =>
+      json<VisualCueMeta>(r),
     );
   },
 
   removeVisualCue: (game: string, label: string, phrase?: string) => {
     const qs = phrase ? `?phrase=${encodeURIComponent(phrase)}` : "";
-    return fetch(`/api/cues/visual/${game}/${label}${qs}`, { method: "DELETE" }).then((r) =>
+    return fetch(`/api/cues/visual/${pathPart(game)}/${pathPart(label)}${qs}`, { method: "DELETE" }).then((r) =>
       json<VisualCuesStatus>(r),
     );
   },
@@ -156,6 +199,12 @@ export const api = {
 
   status: (id: string) =>
     fetch(`/api/projects/${id}/status`).then((r) => json<StatusPayload>(r)),
+
+  pauseProject: (id: string) =>
+    fetch(`/api/projects/${id}/pause`, { method: "POST" }).then((r) => json<StatusPayload>(r)),
+
+  resumeProject: (id: string) =>
+    fetch(`/api/projects/${id}/resume`, { method: "POST" }).then((r) => json<StatusPayload>(r)),
 
   deleteProject: (id: string) =>
     fetch(`/api/projects/${id}`, { method: "DELETE" }).then((r) => json(r)),

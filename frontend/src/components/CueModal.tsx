@@ -36,11 +36,11 @@ export default function CueModal({ onClose }: { onClose: () => void }) {
         <div className="row" style={{ justifyContent: "space-between", marginBottom: 8 }}>
           <h3>Spiel-Cues</h3>
           <button className="btn ghost sm" onClick={onClose}>
-            Schliessen
+            Schließen
           </button>
         </div>
         <p className="muted tiny" style={{ marginTop: 0 }}>
-          Teste hier Sounds und Texterkennung im Bild und speichere nuetzliche Cues fuer spaetere
+          Teste hier Sounds und Texterkennung im Bild und speichere nützliche Cues für spätere
           Renderings. Visuelle Cues sind OCR-Begriffe. Audio-Cues sind saubere Referenzsounds.
         </p>
         {cues ? (
@@ -83,9 +83,9 @@ export default function CueModal({ onClose }: { onClose: () => void }) {
               </>
             )}
             <p className="muted tiny" style={{ marginBottom: 0 }}>
-              Gespeicherte Cues bleiben auf diesem Rechner und werden in kuenftigen Laeufen
+              Gespeicherte Cues bleiben auf diesem Rechner und werden in künftigen Läufen
               verwendet. Bei bestehenden Projekten die Erkennung neu starten, damit neue Cues
-              beruecksichtigt werden.
+              berücksichtigt werden.
             </p>
           </>
         ) : (

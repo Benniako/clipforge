@@ -16,8 +16,8 @@ function Caps({ health }: { health: Health | null }) {
     c.transcription === "synthetic"
       ? "Synthetische Transkription"
       : `${engine} ${c.whisper_model}` + (c.diarization ? " + Sprecher" : "");
-  const hw = `Geraet: ${c.device}${c.vram_gb ? ` - ${c.vram_gb} GB VRAM` : ""} - ${c.cpu} CPU` +
-    (c.auto_model ? " - Modell automatisch gewaehlt" : "");
+  const hw = `Gerät: ${c.device}${c.vram_gb ? ` - ${c.vram_gb} GB VRAM` : ""} - ${c.cpu} CPU` +
+    (c.auto_model ? " - Modell automatisch gewählt" : "");
   const ocrName = c.ocr
     ? { paddleocr: "PaddleOCR", easyocr: "EasyOCR", tesseract: "Tesseract" }[c.ocr] ?? "OCR"
     : "OCR";
@@ -40,8 +40,8 @@ function Caps({ health }: { health: Health | null }) {
       c.panns_audio ? "PANNs Audio" : c.clap_audio ? "CLAP Audio" : "Audio-Ereignisse",
       true,
       c.panns_audio
-        ? "Erkennt Jubel, Lachen und Explosionen fuer die Virality-Wertung"
-        : "Zero-Shot-Audio-Cues fuer Jubel, Lachen und Action",
+        ? "Erkennt Jubel, Lachen und Explosionen für die Virality-Wertung"
+        : "Zero-Shot-Audio-Cues für Jubel, Lachen und Action",
     ]);
   }
   if (c.denoise) items.push(["Saubere Stimme", true, "Trennt Sprache von Musik und Spielsound"]);
@@ -49,10 +49,10 @@ function Caps({ health }: { health: Health | null }) {
     items.push([
       `${c.reframe_engine === "yolo" ? "YOLO" : "MediaPipe"} Reframe`,
       true,
-      "Motiv-Tracking fuer 9:16",
+      "Motiv-Tracking für 9:16",
     ]);
   }
-  if (c.active_speaker) items.push(["Aktiver Sprecher", true, "LR-ASD folgt der tatsaechlich sprechenden Person"]);
+  if (c.active_speaker) items.push(["Aktiver Sprecher", true, "LR-ASD folgt der tatsächlich sprechenden Person"]);
   if (c.llm) items.push(["KI-Titel + Viral", true, c.llm_model ?? ""]);
   if (c.vlm) items.push(["KI-Bildanalyse", true, `Bildbewertung auf Keyframes${c.vlm_model ? ` (${c.vlm_model})` : ""}`]);
   return (
@@ -86,7 +86,7 @@ export default function App() {
         <button
           className="btn ghost sm"
           onClick={() => setShowCues(true)}
-          title="Referenzsounds oder OCR-Begriffe fuer Spielereignisse hinzufuegen und testen"
+          title="Referenzsounds oder OCR-Begriffe für Spielereignisse hinzufügen und testen"
         >
           Spiel-Cues
         </button>

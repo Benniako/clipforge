@@ -13,13 +13,14 @@ import os
 import sys
 import tempfile
 import types
+from pathlib import Path
 
 # Isolate the learning DB before anything imports settings.
 os.environ.setdefault("CLIPFORGE_DATA_DIR", tempfile.mkdtemp(prefix="clipforge-test-"))
 
 from app.models import (Clip, ClipStatus, DetectedEvent, ImportSettings,
                         Platform, Project, ProjectStatus, Reframe,
-                        ReframeKeyframe, Transcript, Word)
+                        ReframeKeyframe, SourceMedia, Transcript, Word)
 from app.pipeline import captionize, render
 from app.pipeline import captions as C
 from app.providers import detect, score, signals
@@ -758,6 +759,33 @@ def test_status_ws_reports_missing_project():
         assert ws.receive_json() == {"error": "project not found"}
 
 
+def test_pause_resume_project_endpoint():
+    from starlette.testclient import TestClient
+    from app import store
+    from app.main import create_app
+
+    store.init_db()
+    p = Project(
+        id="proj_pause_resume",
+        status=ProjectStatus.processing,
+        source=SourceMedia(filename="source.mp4", path="proj_pause_resume/source.mp4"),
+    )
+    store.save(p)
+    c = TestClient(create_app(), raise_server_exceptions=False)
+
+    paused = c.post(f"/api/projects/{p.id}/pause")
+    assert paused.status_code == 200
+    assert paused.json()["status"] == "paused"
+    assert "Paused" in paused.json()["progress"]["message"]
+
+    resumed = c.post(f"/api/projects/{p.id}/resume")
+    assert resumed.status_code == 200
+    assert resumed.json()["status"] in {"queued", "processing"}
+
+    missing = c.post("/api/projects/proj_missing/pause")
+    assert missing.status_code == 404
+
+
 def test_render_finish_fails_project_when_no_clips_ready():
     from app import store
     from app.pipeline.orchestrator import Engine
@@ -1079,6 +1107,37 @@ def test_saved_visual_cues_extend_ocr_lexicon():
     assert ("custom_killfeed", "one enemy remaining") in O.match_keywords(
         "HUD: ONE ENEMY REMAINING", "valorant", fuzzy=False)
     assert not O.match_keywords("HUD: ONE ENEMY REMAINING", "cs2", fuzzy=False)
+
+
+def test_visual_cue_regions_and_false_hits_are_persisted():
+    from app import visual_cues
+    from app.providers import detect_ocr as O
+
+    game = "unit_visual_calibration"
+    visual_cues.add_visual_cue(game, "killfeed", "Fake headshot")
+    visual_cues.add_visual_region(game, "killfeed", {"x": 0.55, "y": 0.02, "w": 0.35, "h": 0.22})
+    visual_cues.add_false_visual_cue(game, "killfeed", "Fake headshot")
+
+    meta = visual_cues.list_visual_meta()[game]
+    assert meta["phrases"]["killfeed"] == ["Fake headshot"]
+    assert meta["regions"]["killfeed"][0]["x"] == 0.55
+    assert visual_cues.is_false_positive(game, "killfeed", "HUD: FAKE HEADSHOT")
+    assert O.match_keywords("HUD: FAKE HEADSHOT", game, fuzzy=False) == []
+
+
+def test_saved_visual_regions_are_sampled_by_ocr_cropper():
+    from PIL import Image
+    from app import visual_cues
+    from app.providers import detect_ocr as O
+
+    game = "unit_region_scan"
+    visual_cues.add_visual_region(game, "scoreboard", {"x": 0.1, "y": 0.2, "w": 0.3, "h": 0.2})
+    with tempfile.TemporaryDirectory() as tmp:
+        tmpd = Path(tmp)
+        frame = tmpd / "frame.png"
+        Image.new("RGB", (640, 360), "black").save(frame)
+        crops = O._ocr_frame_images(frame, tmpd, idx=1, profile=game)
+    assert any(name.startswith("saved_scoreboard") for name, _ in crops)
 
 
 def test_ocr_valorant_german_markers_and_easyocr_shapes():

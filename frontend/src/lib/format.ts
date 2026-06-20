@@ -12,7 +12,7 @@ export function fmtClock(s: number): string {
   return `${m}:${sec.toString().padStart(2, "0")}.${cs}`;
 }
 
-// Green (great) â†’ yellow (ok) â†’ red (weak).
+// Green (great) -> yellow (ok) -> red (weak).
 export function scoreColor(score: number): string {
   if (score >= 75) return "var(--good)";
   if (score >= 55) return "#b6e36b";

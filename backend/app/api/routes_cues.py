@@ -35,6 +35,11 @@ def list_visual() -> dict:
     return visual_cues.list_visual_cues()
 
 
+@router.get("/visual-meta")
+def list_visual_meta() -> dict:
+    return visual_cues.list_visual_meta()
+
+
 @router.post("/visual/{game}/{label}")
 def add_visual(game: str, label: str, phrase: str = Form(...)) -> dict:
     try:
@@ -42,6 +47,35 @@ def add_visual(game: str, label: str, phrase: str = Form(...)) -> dict:
     except Exception as e:
         raise HTTPException(400, f"could not save visual cue: {e}")
     return visual_cues.list_visual_cues()
+
+
+@router.post("/visual/{game}/{label}/region")
+def add_visual_region(
+    game: str,
+    label: str,
+    x: float = Form(...),
+    y: float = Form(...),
+    w: float = Form(...),
+    h: float = Form(...),
+    name: str | None = Form(None),
+    phrase: str | None = Form(None),
+) -> dict:
+    try:
+        if phrase and phrase.strip():
+            visual_cues.add_visual_cue(game, label, phrase)
+        visual_cues.add_visual_region(game, label, {"x": x, "y": y, "w": w, "h": h}, name)
+    except Exception as e:
+        raise HTTPException(400, f"could not save visual cue region: {e}")
+    return visual_cues.list_visual_meta()
+
+
+@router.post("/visual/{game}/{label}/false")
+def add_false_visual(game: str, label: str, phrase: str = Form(...)) -> dict:
+    try:
+        visual_cues.add_false_visual_cue(game, label, phrase)
+    except Exception as e:
+        raise HTTPException(400, f"could not save false recognition: {e}")
+    return visual_cues.list_visual_meta()
 
 
 @router.delete("/visual/{game}/{label}")
@@ -101,6 +135,12 @@ async def test_ocr_box(
         if save:
             cue_label = label or (matches[0]["label"] if matches else "visual_cue")
             visual_cues.add_visual_cue(game, cue_label, text)
+            visual_cues.add_visual_region(
+                game,
+                cue_label,
+                {"x": x0 / iw, "y": y0 / ih, "w": (x1 - x0) / iw, "h": (y1 - y0) / ih},
+                cue_label,
+            )
             saved = True
         return {
             "text": text,

@@ -10,10 +10,10 @@ const EVENT_LABELS: Record<string, string> = {
   ace: "Ace",
   clutch: "Clutch",
   spike_plant: "Spike platziert",
-  spike_defuse: "Spike entschaerft",
+  spike_defuse: "Spike entschärft",
   headshot: "Headshot",
   bomb_plant: "Bombe gelegt",
-  bomb_defuse: "Bombe entschaerft",
+  bomb_defuse: "Bombe entschärft",
   goal: "Tor",
   whistle: "Pfiff",
   crowd_roar: "Jubel",
@@ -61,7 +61,7 @@ export default function CueManager({
       onChange(await api.addCue(game, event, file ? { file } : { url }));
       setUrls((u) => ({ ...u, [event]: "" }));
     } catch (e: any) {
-      setErr(`Cue "${event}" konnte nicht hinzugefuegt werden: ${e?.message ?? "unbekannter Fehler"}`);
+      setErr(`Cue "${event}" konnte nicht hinzugefügt werden: ${e?.message ?? "unbekannter Fehler"}`);
     } finally {
       setBusy(null);
     }
@@ -109,7 +109,7 @@ export default function CueManager({
           </h3>
           {onToggle && (
             <p className="muted tiny" style={{ margin: "6px 0 0" }}>
-              Das steuert nur, ob diese gespeicherten Sounds fuer die Clip-Erkennung genutzt werden.
+              Das steuert nur, ob diese gespeicherten Sounds für die Clip-Erkennung genutzt werden.
             </p>
           )}
         </div>
@@ -117,7 +117,7 @@ export default function CueManager({
           <button
             className={"toggle cue-use-toggle" + (enabled ? " on" : "")}
             onClick={() => onToggle(!enabled)}
-            title="Eigene Referenzsounds fuer die naechste Erkennung ein- oder ausschalten"
+            title="Eigene Referenzsounds für die nächste Erkennung ein- oder ausschalten"
           >
             <span>In Clips nutzen</span>
             <i>{enabled ? "An" : "Aus"}</i>
@@ -125,13 +125,13 @@ export default function CueManager({
         )}
       </div>
       <p className="muted tiny" style={{ marginBottom: 12 }}>
-        Optional: Fuege eine Sound-URL ein oder lade einen sauberen Referenzsound hoch.
-        ClipForge nutzt diese Sounds als zusaetzliches Signal, nicht als garantiertes Highlight.
-        <b> Eingegebene URLs werden erst gespeichert, wenn du Hinzufuegen oder Alle speichern klickst.</b>
+        Optional: Füge eine Sound-URL ein oder lade einen sauberen Referenzsound hoch.
+        ClipForge nutzt diese Sounds als zusätzliches Signal, nicht als garantiertes Highlight.
+        <b> Eingegebene URLs werden erst gespeichert, wenn du Hinzufügen oder Alle speichern klickst.</b>
       </p>
       {onToggle && !enabled && (
         <p className="tiny cue-off-note">
-          Eigene Sound-Erkennung ist fuer neue Clips aus. Du kannst hier trotzdem Sounds verwalten.
+          Eigene Sound-Erkennung ist für neue Clips aus. Du kannst hier trotzdem Sounds verwalten.
         </p>
       )}
       {err && (
@@ -148,7 +148,7 @@ export default function CueManager({
               <input
                 className="input"
                 style={{ flex: 1, minWidth: 170 }}
-                placeholder={`${EVENT_LABELS[e.name] ?? e.name} - URL einfuegen`}
+                placeholder={`${EVENT_LABELS[e.name] ?? e.name} - URL einfügen`}
                 value={urls[e.name] || ""}
                 onChange={(ev) => setUrls((u) => ({ ...u, [e.name]: ev.target.value }))}
               />
@@ -162,7 +162,7 @@ export default function CueManager({
                 Finden
               </a>
             <button className="btn sm" disabled={busy === e.name} onClick={() => add(e.name)}>
-              {busy === e.name ? "..." : "Hinzufuegen"}
+              {busy === e.name ? "..." : "Hinzufügen"}
             </button>
             <label className="btn sm ghost" style={{ cursor: "pointer" }} title="Sounddatei hochladen">
               Datei
@@ -191,7 +191,7 @@ export default function CueManager({
             className="btn primary sm"
             disabled={busyAll}
             onClick={saveAll}
-            title="Alle oben eingefuegten URLs herunterladen und installieren"
+            title="Alle oben eingefügten URLs herunterladen und installieren"
           >
             {busyAll ? (
               <>

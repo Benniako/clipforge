@@ -289,6 +289,28 @@ def project_status(project_id: str) -> dict:
     return payload
 
 
+@router.post("/{project_id}/pause")
+def pause_project(project_id: str) -> dict:
+    p = store.get(project_id)
+    if not p:
+        raise HTTPException(404, "project not found")
+    if p.status not in (ProjectStatus.queued, ProjectStatus.processing, ProjectStatus.paused):
+        raise HTTPException(409, "only queued or processing projects can be paused")
+    engine.pause(project_id)
+    return project_status(project_id)
+
+
+@router.post("/{project_id}/resume")
+def resume_project(project_id: str) -> dict:
+    p = store.get(project_id)
+    if not p:
+        raise HTTPException(404, "project not found")
+    if p.status != ProjectStatus.paused:
+        raise HTTPException(409, "project is not paused")
+    engine.resume(project_id)
+    return project_status(project_id)
+
+
 @router.websocket("/{project_id}/ws")
 async def project_ws(ws: WebSocket, project_id: str) -> None:
     """Push status updates while a project processes (UI falls back to
@@ -361,7 +383,7 @@ def reprocess(project_id: str, body: Reprocess | None = None) -> Project:
     p = store.get(project_id)
     if not p or not p.source:
         raise HTTPException(404, "project or source missing")
-    if p.status in (ProjectStatus.queued, ProjectStatus.processing):
+    if p.status in (ProjectStatus.queued, ProjectStatus.processing, ProjectStatus.paused):
         # A second concurrent run would fight the first over the same clip
         # files and clobber its store writes.
         raise HTTPException(409, "project is still processing — wait for it to finish")
@@ -455,7 +477,7 @@ def set_aspect(project_id: str, body: AspectBody) -> Project:
     p = store.get(project_id)
     if not p:
         raise HTTPException(404, "project not found")
-    if p.status in (ProjectStatus.queued, ProjectStatus.processing):
+    if p.status in (ProjectStatus.queued, ProjectStatus.processing, ProjectStatus.paused):
         raise HTTPException(409, "project is still processing — wait for it to finish")
     if not p.clips:
         raise HTTPException(409, "no clips to re-render yet")

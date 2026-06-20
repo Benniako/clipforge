@@ -173,7 +173,7 @@ def match_keywords(text: str, profile: str | None, *,
                 exact = _fuzzy_contains(p, toks, threshold=threshold)
             if exact and (best is None or len(p) > len(best)):
                 best = p
-        if best is not None:
+        if best is not None and not visual_cues.is_false_positive(profile, label, text):
             out.append((label, best))
     return out
 
@@ -406,22 +406,38 @@ def _ocr_frame_images(frame: Path, tmpd: Path, idx: int,
     """Return full frame plus game-specific ROIs that carry useful text."""
     name = _ALIAS.get((profile or "generic").lower().replace(" ", ""),
                       (profile or "generic").lower().replace(" ", ""))
-    if name not in {"valorant", "cs2"}:
-        return [("full", frame)]
     try:
         from PIL import Image, ImageOps
 
         im = Image.open(frame).convert("RGB")
         w, h = im.size
-        specs = [
-            ("killfeed", (int(w * 0.55), 0, w, int(h * 0.36))),
-            ("top_banner", (int(w * 0.20), 0, int(w * 0.80), int(h * 0.28))),
-            ("center_banner", (int(w * 0.16), int(h * 0.22),
-                               int(w * 0.84), int(h * 0.72))),
-        ]
+        specs: list[tuple[str, tuple[int, int, int, int]]] = []
+        if name in {"valorant", "cs2"}:
+            specs.extend([
+                ("killfeed", (int(w * 0.55), 0, w, int(h * 0.36))),
+                ("top_banner", (int(w * 0.20), 0, int(w * 0.80), int(h * 0.28))),
+                ("center_banner", (int(w * 0.16), int(h * 0.22),
+                                   int(w * 0.84), int(h * 0.72))),
+            ])
+        for label, regions in visual_cues.regions_extra(name).items():
+            for r_i, region in enumerate(regions):
+                try:
+                    x0 = int(float(region.get("x", 0.0)) * w)
+                    y0 = int(float(region.get("y", 0.0)) * h)
+                    x1 = int((float(region.get("x", 0.0)) + float(region.get("w", 1.0))) * w)
+                    y1 = int((float(region.get("y", 0.0)) + float(region.get("h", 1.0))) * h)
+                except (TypeError, ValueError):
+                    continue
+                x0 = max(0, min(w - 1, x0))
+                y0 = max(0, min(h - 1, y0))
+                x1 = max(x0 + 1, min(w, x1))
+                y1 = max(y0 + 1, min(h, y1))
+                specs.append((f"saved_{label}_{r_i}", (x0, y0, x1, y1)))
         out: list[tuple[str, Path]] = []
         if idx % 5 == 0:
             out.append(("full", frame))
+        if not specs:
+            return out or [("full", frame)]
         for roi, box in specs:
             crop = im.crop(box)
             if crop.width < 32 or crop.height < 24:

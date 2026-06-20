@@ -419,6 +419,9 @@ select.input {
 .stage.active {
   background: var(--panel-2);
 }
+.stage.paused {
+  background: rgba(245, 158, 11, 0.12);
+}
 .stage .ico {
   width: 26px;
   height: 26px;
@@ -439,6 +442,10 @@ select.input {
   border-color: var(--accent);
   color: var(--accent);
   animation: pulse 1.3s infinite;
+}
+.stage.paused .ico {
+  border-color: var(--warn);
+  color: var(--warn);
 }
 @keyframes pulse {
   0%,
@@ -939,6 +946,96 @@ input[type="range"] {
   color: var(--bad);
   font-weight: 800;
 }
+.scan-tabs {
+  width: auto;
+  min-width: 280px;
+}
+.visual-calibration {
+  margin-top: 14px;
+}
+.visual-calibration-grid {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.35fr) minmax(0, 1fr);
+  gap: 14px;
+}
+.calibration-events,
+.calibration-workspace {
+  min-width: 0;
+}
+.calibration-events h4 {
+  margin: 0 0 10px;
+  font-size: 13px;
+}
+.calibration-event-list {
+  display: grid;
+  gap: 8px;
+  max-height: 520px;
+  overflow: auto;
+  padding-right: 4px;
+}
+.calibration-event {
+  width: 100%;
+  text-align: left;
+  border: 1px solid var(--border);
+  background: var(--bg-2);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 10px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px 8px;
+}
+.calibration-event b {
+  font-size: 12px;
+}
+.calibration-event span {
+  font-size: 11px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.calibration-event small {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.calibration-event.on {
+  border-color: var(--accent);
+  background: rgba(124, 92, 255, 0.14);
+}
+.calibration-workspace {
+  display: grid;
+  gap: 12px;
+}
+.calibration-video {
+  display: grid;
+  gap: 10px;
+}
+.calibration-video video {
+  width: 100%;
+  max-height: 340px;
+  background: #05070c;
+  border: 1px solid var(--border-2);
+  border-radius: 8px;
+}
+.calibration-frame {
+  max-height: 520px;
+}
+.calibration-form {
+  display: grid;
+  gap: 8px;
+}
+.calibration-message {
+  margin: 0;
+  font-weight: 700;
+}
+.calibration-message.good {
+  color: var(--good);
+}
+.calibration-message.bad {
+  color: var(--bad);
+}
 .caption-row {
   display: flex;
   gap: 8px;
@@ -1055,6 +1152,16 @@ input[type="range"] {
   }
   .cue-lab-grid {
     grid-template-columns: 1fr;
+  }
+  .visual-calibration-grid {
+    grid-template-columns: 1fr;
+  }
+  .scan-tabs {
+    width: 100%;
+    min-width: 0;
+  }
+  .calibration-event-list {
+    max-height: 260px;
   }
   .cue-form-row {
     grid-template-columns: 1fr;

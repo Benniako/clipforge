@@ -21,20 +21,20 @@ from .providers.detect_cues import CUE_EXTS
 
 PACKS: dict[str, dict] = {
     "valorant": {"label": "Valorant", "events": [
-        ("kill", "Kill-Banner-Sound (mehrfach = Multikill, zaehlt staerker)", "valorant kill sound"),
-        ("double_kill", "Sound fuer den zweiten Kill", "valorant double kill sound"),
-        ("triple_kill", "Sound fuer den dritten Kill", "valorant triple kill sound"),
-        ("quad_kill", "Sound fuer den vierten Kill", "valorant quadra kill sound"),
+        ("kill", "Kill-Banner-Sound (mehrfach = Multikill, zählt stärker)", "valorant kill sound"),
+        ("double_kill", "Sound für den zweiten Kill", "valorant double kill sound"),
+        ("triple_kill", "Sound für den dritten Kill", "valorant triple kill sound"),
+        ("quad_kill", "Sound für den vierten Kill", "valorant quadra kill sound"),
         ("ace", "Ace-Ansage", "valorant ace sound"),
         ("clutch", "Clutch-Ansage", "valorant clutch sound"),
         ("spike_plant", "Spike platziert", "valorant spike planted sound"),
-        ("spike_defuse", "Spike entschaerft", "valorant defuse sound"),
+        ("spike_defuse", "Spike entschärft", "valorant defuse sound"),
     ]},
     "cs2": {"label": "CS2", "events": [
-        ("kill", "Kill-Bestaetigung (mehrfach = Multikill, zaehlt staerker)", "cs2 kill sound"),
+        ("kill", "Kill-Bestätigung (mehrfach = Multikill, zählt stärker)", "cs2 kill sound"),
         ("headshot", "Headshot-Sound", "cs2 headshot sound"),
         ("bomb_plant", "Bombe gelegt", "cs2 bomb planted sound"),
-        ("bomb_defuse", "Bombe entschaerft", "cs2 defuse sound"),
+        ("bomb_defuse", "Bombe entschärft", "cs2 defuse sound"),
     ]},
     "eafc": {"label": "EA FC / FIFA", "events": [
         ("goal", "Tor plus Kommentar", "ea fc goal sound"),
@@ -69,7 +69,7 @@ COMMON_PACK = "common"
 
 
 def _safe(name: str) -> str:
-    return re.sub(r"[^a-z0-9_-]", "", (name or "").lower().replace(" ", "_"))[:40] or "cue"
+    return re.sub(r"[^a-z0-9äöüß_-]", "", (name or "").lower().replace(" ", "_"))[:40] or "cue"
 
 
 def _dir(game: str):
@@ -130,8 +130,8 @@ def install_cue_from_url(game: str, event: str, url: str) -> None:
                 dl.read_text(encoding="utf-8", errors="ignore"), url)
             if not found:
                 raise ValueError(
-                    "diese Seite enthaelt keinen direkten Audio-Link - kopiere "
-                    "die Adresse des Download-Buttons und fuege sie hier ein")
+                    "diese Seite enthält keinen direkten Audio-Link - kopiere "
+                    "die Adresse des Download-Buttons und füge sie hier ein")
             _download(found, dl)
         install_cue(game, event, str(dl))
 

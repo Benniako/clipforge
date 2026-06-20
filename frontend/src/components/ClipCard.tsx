@@ -29,7 +29,7 @@ function RankRibbon({ rank }: { rank?: number }) {
 function StatusChip({ status }: { status: Clip["status"] }) {
   if (status === "ready") return null;
   const map: Record<string, [string, string]> = {
-    rendering: ["Renderingâ€¦", "var(--warn)"],
+    rendering: ["Rendering…", "var(--warn)"],
     pending: ["Warteschlange", "var(--muted)"],
     failed: ["Fehlgeschlagen", "var(--bad)"],
   };
@@ -79,7 +79,7 @@ export default function ClipCard({ clip, projectId, rank, selected, onToggleSele
               border: "1px solid rgba(255,255,255,0.3)", color: "#fff", cursor: "pointer",
             }}
           >
-            {selected ? "âœ“" : ""}
+            {selected ? "✓" : ""}
           </span>
         )}
         {ready && (
@@ -91,7 +91,7 @@ export default function ClipCard({ clip, projectId, rank, selected, onToggleSele
         )}
         <span className="dur">
           {fmtDuration(clip.tightened_duration ?? clip.end - clip.start)}
-          {clip.tightened_duration != null && " âœ‚"}
+          {clip.tightened_duration != null && " Schnitt"}
         </span>
       </div>
       <div className="clip-body">
@@ -124,11 +124,11 @@ export default function ClipCard({ clip, projectId, rank, selected, onToggleSele
           <div className="spacer" style={{ flex: 1 }} />
           <button
             className="btn sm ghost"
-            title="More like this â€” teaches the local scorer your taste"
+            title="Mehr davon - verbessert die lokale Bewertung"
             onClick={(e) => rate(e, "up")}
             style={{ padding: "7px 9px", color: fb === "up" ? "var(--good)" : undefined }}
           >
-            ðŸ‘
+            Gut
           </button>
           <button
             className="btn sm ghost"
@@ -136,7 +136,7 @@ export default function ClipCard({ clip, projectId, rank, selected, onToggleSele
             onClick={(e) => rate(e, "down")}
             style={{ padding: "7px 9px", color: fb === "down" ? "var(--bad)" : undefined }}
           >
-            ðŸ‘Ž
+            Schlecht
           </button>
         </div>
       </div>

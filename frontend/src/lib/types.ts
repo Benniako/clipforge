@@ -1,6 +1,6 @@
 // Shapes mirroring the backend domain models (app/models.py).
 
-export type ProjectStatus = "created" | "queued" | "processing" | "ready" | "failed";
+export type ProjectStatus = "created" | "queued" | "processing" | "paused" | "ready" | "failed";
 export type ClipStatus = "pending" | "rendering" | "ready" | "failed";
 export type Platform = "tiktok" | "reels" | "shorts" | "generic";
 export type PowerMode = "balanced" | "max_gpu" | "quality";
@@ -91,7 +91,7 @@ export interface Clip {
 export interface StageView {
   name: string;
   label: string;
-  status: "pending" | "active" | "done";
+  status: "pending" | "active" | "paused" | "done";
   pct: number;
 }
 

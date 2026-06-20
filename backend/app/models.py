@@ -29,6 +29,7 @@ class ProjectStatus(str, Enum):
     created = "created"          # source accepted, not yet queued
     queued = "queued"
     processing = "processing"
+    paused = "paused"
     ready = "ready"             # clips available
     failed = "failed"
 

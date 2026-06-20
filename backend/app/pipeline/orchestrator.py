@@ -12,14 +12,15 @@ import logging
 import queue
 import threading
 import traceback
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 
 from .. import feedback, store
 from ..config import get_settings
 from ..media import ffmpeg
 from ..media.ffmpeg import MediaInfo
 from ..models import (ASPECTS, Clip, ClipStatus, ContentType, JobProgress,
-                      LayoutType, ProjectStatus, Reframe, ReframeKeyframe)
+                      LayoutType, ProjectStatus, Reframe, ReframeKeyframe,
+                      now)
 from ..providers import detect as detect_mod
 from ..providers import detect_gameplay as gameplay_mod
 from ..providers import hashtags as hashtags_mod
@@ -93,6 +94,10 @@ class Engine:
         # Entries are tiny and bounded by clips-per-session; never pruned.
         self._clip_locks: dict[tuple[str, str], threading.Lock] = {}
         self._clip_locks_guard = threading.Lock()
+        self._pause_condition = threading.Condition()
+        self._pause_requested: set[str] = set()
+        self._queued_projects: set[str] = set()
+        self._active_projects: set[str] = set()
 
     def _clip_lock(self, project_id: str, clip_id: str) -> threading.Lock:
         with self._clip_locks_guard:
@@ -116,7 +121,44 @@ class Engine:
             p.progress = JobProgress(stage="queued", total_stages=len(STAGES),
                                      message="Waiting to start",
                                      stages=self._stage_view(-1, 0.0))
+        with self._pause_condition:
+            self._queued_projects.add(project_id)
         self._q.put(project_id)
+
+    def pause(self, project_id: str) -> None:
+        with self._pause_condition:
+            self._pause_requested.add(project_id)
+            self._pause_condition.notify_all()
+        self._mark_paused(project_id)
+
+    def resume(self, project_id: str) -> None:
+        with self._pause_condition:
+            active = project_id in self._active_projects
+            queued = project_id in self._queued_projects
+            self._pause_requested.discard(project_id)
+            self._pause_condition.notify_all()
+        if active:
+            with store.mutate(project_id) as p:
+                if p.status == ProjectStatus.paused:
+                    p.status = ProjectStatus.processing
+                    p.progress.message = "Resuming..."
+                    p.progress.updated_at = now()
+            return
+        if queued:
+            with store.mutate(project_id) as p:
+                if p.status == ProjectStatus.paused:
+                    p.status = ProjectStatus.queued
+                    p.progress.message = "Waiting to resume"
+                    p.progress.updated_at = now()
+            return
+        p = store.get(project_id)
+        if p and p.status == ProjectStatus.paused and p.source is not None:
+            self.enqueue(project_id)
+        elif p and p.status == ProjectStatus.paused:
+            with store.mutate(project_id) as project:
+                project.status = ProjectStatus.created
+                project.progress.message = "Paused project reset"
+                project.progress.updated_at = now()
 
     def resume_incomplete(self) -> int:
         """Requeue projects stranded mid-run by a restart or dead worker."""
@@ -141,6 +183,9 @@ class Engine:
     def _loop(self) -> None:
         while True:
             project_id = self._q.get()
+            with self._pause_condition:
+                self._queued_projects.discard(project_id)
+                self._active_projects.add(project_id)
             try:
                 self._process(project_id)
             except BaseException as e:  # never let the worker die
@@ -154,6 +199,8 @@ class Engine:
                 except Exception:
                     pass
             finally:
+                with self._pause_condition:
+                    self._active_projects.discard(project_id)
                 self._q.task_done()
 
     # -- progress helpers -------------------------------------------------
@@ -172,6 +219,7 @@ class Engine:
 
     def _advance(self, project_id: str, stage_idx: int, message: str,
                  frac: float = 0.0) -> None:
+        self._wait_if_paused(project_id)
         overall = (stage_idx + max(min(frac, 1.0), 0.0)) / len(STAGES) * 100.0
         with store.mutate(project_id) as p:
             p.status = ProjectStatus.processing
@@ -181,11 +229,52 @@ class Engine:
                 pct=round(overall, 1), stages=self._stage_view(stage_idx, frac),
             )
 
+    def _paused_stage_view(self, p) -> list[dict]:
+        stages = [dict(s) for s in (p.progress.stages or self._stage_view(p.progress.stage_index, 0.0))]
+        for stage in stages:
+            if stage.get("name") == p.progress.stage:
+                stage["status"] = "paused"
+                break
+        return stages
+
+    def _mark_paused(self, project_id: str) -> None:
+        try:
+            with store.mutate(project_id) as p:
+                if p.status in (ProjectStatus.ready, ProjectStatus.failed):
+                    return
+                p.status = ProjectStatus.paused
+                if p.progress.stage == "render":
+                    p.progress.message = "Paused - current encodes finish, then rendering waits"
+                else:
+                    p.progress.message = "Paused - waiting to resume"
+                p.progress.stages = self._paused_stage_view(p)
+                p.progress.updated_at = now()
+        except Exception:
+            pass
+
+    def _wait_if_paused(self, project_id: str) -> None:
+        announced = False
+        while True:
+            p = store.get(project_id)
+            if p is None:
+                return
+            with self._pause_condition:
+                requested = project_id in self._pause_requested
+            paused = bool(p and p.status == ProjectStatus.paused)
+            if not requested and not paused:
+                return
+            if not announced:
+                self._mark_paused(project_id)
+                announced = True
+            with self._pause_condition:
+                self._pause_condition.wait(timeout=0.5)
+
     # -- the pipeline -----------------------------------------------------
     def _process(self, project_id: str) -> None:
         project = store.get(project_id)
         if project is None or project.source is None:
             raise RuntimeError("project or source media missing")
+        self._wait_if_paused(project_id)
         settings = get_settings()
         src_path = str(settings.media_dir / project.source.path)
         info = ffmpeg.probe(src_path)
@@ -604,14 +693,33 @@ class Engine:
         done = 0
         total = len(clips)
         n = max(1, min(settings.render_workers_for(power_mode), total))
+        clip_iter = iter(clips)
         with ThreadPoolExecutor(max_workers=n) as ex:
-            futs = {ex.submit(self._render_one, project_id, c, src_path, info,
-                              out_w, out_h, burn_captions, motion): c for c in clips}
-            for fut in as_completed(futs):
-                done += 1
-                fut.result()  # surface unexpected (non-per-clip) errors
-                self._advance(project_id, 5,
-                              f"Rendered {done}/{total} clips", done / total)
+            futs = {}
+
+            def submit_next() -> bool:
+                self._wait_if_paused(project_id)
+                try:
+                    clip = next(clip_iter)
+                except StopIteration:
+                    return False
+                futs[ex.submit(self._render_one, project_id, clip, src_path, info,
+                               out_w, out_h, burn_captions, motion)] = clip
+                return True
+
+            for _ in range(n):
+                if not submit_next():
+                    break
+            while futs:
+                completed, _pending = wait(futs, return_when=FIRST_COMPLETED)
+                for fut in completed:
+                    futs.pop(fut, None)
+                    done += 1
+                    fut.result()  # surface unexpected (non-per-clip) errors
+                    self._advance(project_id, 5,
+                                  f"Rendered {done}/{total} clips", done / total)
+                while len(futs) < n and submit_next():
+                    pass
 
     def _render_one(self, project_id: str, clip: Clip, src_path: str,
                     info: MediaInfo, out_w: int, out_h: int,
@@ -627,6 +735,10 @@ class Engine:
         thumb = pdir / "clips" / f"{clip.id}.jpg"
         style = get_style(clip.captions.style_id)
         try:
+            with store.mutate(project_id) as p:
+                c = p.clip(clip.id)
+                if c and c.status != ClipStatus.ready:
+                    c.status = ClipStatus.rendering
             with self._clip_lock(project_id, clip.id):
                 self._render_one_locked(project_id, clip, src_path, info,
                                         out_w, out_h, burn_captions, motion,

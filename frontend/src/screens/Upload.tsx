@@ -16,8 +16,8 @@ const PLATFORMS = [
 
 const POWER_MODES = [
   { id: "balanced", label: "Ausgewogen", hint: "Schneller Standardmodus und dein PC bleibt reaktionsfreudig" },
-  { id: "max_gpu", label: "Max GPU", hint: "Nutzt groessere Batches, mehr Render-Worker und mehr Budget fuer KI-Bildanalyse" },
-  { id: "quality", label: "Qualitaet", hint: "Langsamer, aber mit mehr visuellem Kontext fuer die KI-Bewertung" },
+  { id: "max_gpu", label: "Max GPU", hint: "Nutzt größere Batches, mehr Render-Worker und mehr Budget für KI-Bildanalyse" },
+  { id: "quality", label: "Qualität", hint: "Langsamer, aber mit mehr visuellem Kontext für die KI-Bewertung" },
 ];
 
 const LENGTHS = [
@@ -100,7 +100,7 @@ export default function Upload({ health }: { health: Health | null }) {
 
   const submit = async () => {
     if (!file && !url.trim()) {
-      setErr("Fuege zuerst eine Videodatei hinzu oder fuege einen Link ein.");
+      setErr("Füge zuerst eine Videodatei hinzu oder füge einen Link ein.");
       return;
     }
     setErr(null);
@@ -168,16 +168,16 @@ export default function Upload({ health }: { health: Health | null }) {
   const caps = health?.capabilities;
   const status = {
     captions: caps?.transcription && caps.transcription !== "synthetic" ? caps.transcription : "synthetic",
-    cleanVoice: caps?.denoise ? "Bereit" : "Nicht verfuegbar",
-    ocr: caps?.ocr ? String(caps.ocr) : "Nicht verfuegbar",
-    vlm: caps?.vlm ? caps.vlm_model ?? "Bereit" : "Nicht verfuegbar",
+    cleanVoice: caps?.denoise ? "Bereit" : "Nicht verfügbar",
+    ocr: caps?.ocr ? String(caps.ocr) : "Nicht verfügbar",
+    vlm: caps?.vlm ? caps.vlm_model ?? "Bereit" : "Nicht verfügbar",
     audio: caps?.audio_events
       ? caps.clap_audio
         ? "CLAP"
         : caps.panns_audio
           ? "PANNs"
           : "Bereit"
-      : "Nicht verfuegbar",
+      : "Nicht verfügbar",
     cues: "Bereit",
   };
 
@@ -187,7 +187,7 @@ export default function Upload({ health }: { health: Health | null }) {
         <h1>Ein langes Video rein. Eine Woche Short-Clips raus.</h1>
         <p>
           Lade einen Podcast, ein Interview oder Gameplay hoch. ClipForge findet die
-          staerksten Momente, setzt sie vertikal um, fuegt Untertitel hinzu und sortiert
+          stärksten Momente, setzt sie vertikal um, fügt Untertitel hinzu und sortiert
           sie nach erwartetem Potenzial.
         </p>
       </div>
@@ -208,7 +208,7 @@ export default function Upload({ health }: { health: Health | null }) {
               {(file.size / 1024 / 1024).toFixed(1)} MB - bereit zur Verarbeitung
             </div>
             <button className="btn ghost sm" onClick={() => setFile(null)}>
-              Andere Datei waehlen
+              Andere Datei wählen
             </button>
           </div>
         ) : (
@@ -219,16 +219,16 @@ export default function Upload({ health }: { health: Health | null }) {
             </div>
             <div style={{ marginTop: 16 }}>
               <button className="btn" onClick={() => fileRef.current?.click()}>
-                Dateien auswaehlen
+                Dateien auswählen
               </button>
             </div>
-            <div className="or">- oder Link einfuegen -</div>
+            <div className="or">- oder Link einfügen -</div>
             <div className="url-row">
               <input
                 className="input"
                 placeholder={
                   urlDisabled
-                    ? "URL-Import ist in dieser Umgebung nicht verfuegbar"
+                    ? "URL-Import ist in dieser Umgebung nicht verfügbar"
                     : "https://youtube.com/watch?v=..."
                 }
                 value={url}
@@ -286,7 +286,7 @@ export default function Upload({ health }: { health: Health | null }) {
                 onClick={() => setContentType(c.id)}
                 title={
                   c.id === "gameplay"
-                    ? "Findet starke Momente wie Kills und Tore ueber Audio- und Spielszenen-Signale"
+                    ? "Findet starke Momente wie Kills und Tore über Audio- und Spielszenen-Signale"
                     : c.id === "talking"
                       ? "Findet die besten gesprochenen Momente aus dem Transkript"
                       : "Erkennt automatisch, ob es um Sprache oder Gameplay geht"
@@ -309,7 +309,7 @@ export default function Upload({ health }: { health: Health | null }) {
         <div className="field">
           <label>Spielprofil <span className="muted tiny">(nur Gameplay)</span></label>
           <select className="input" value={gameProfile} onChange={(e) => setGameProfile(e.target.value)}
-            title="Passt die Highlight-Erkennung fuer Gameplay an und funktioniert auch fuer andere Spiele">
+            title="Passt die Highlight-Erkennung für Gameplay an und funktioniert auch für andere Spiele">
             <option value="auto">Auto / Beliebiges Spiel</option>
             <option value="valorant">Valorant</option>
             <option value="cs2">CS2</option>
@@ -318,7 +318,7 @@ export default function Upload({ health }: { health: Health | null }) {
             <option value="horror">Horror</option>
           </select>
           {cues && cues[gameProfile] && (
-            <span className="muted tiny" title="Optional: Fuege exakte Spielsounds hinzu. OCR und Audio-Erkennung funktionieren auch ohne sie.">
+            <span className="muted tiny" title="Optional: Füge exakte Spielsounds hinzu. OCR und Audio-Erkennung funktionieren auch ohne sie.">
               {cues[gameProfile].configured}/{cues[gameProfile].total} Cues -{" "}
               {cues[gameProfile].configured === 0 ? "nur OCR/Audio" : "eigene Sounds aktiv"}
             </span>
@@ -329,7 +329,7 @@ export default function Upload({ health }: { health: Health | null }) {
             <label>Facecam <span className="muted tiny">(nur Gameplay)</span></label>
             <select className="input" value={facecamLayout}
               onChange={(e) => setFacecamLayout(e.target.value)}
-              title="Wenn eine Streamer-Cam erkannt wird: ueber dem Gameplay stapeln, als Overlay zeigen oder ignorieren">
+              title="Wenn eine Streamer-Cam erkannt wird: über dem Gameplay stapeln, als Overlay zeigen oder ignorieren">
               <option value="auto">Auto (bei Erkennung stapeln)</option>
               <option value="split">Gestapelt (Cam oben)</option>
               <option value="framed">Overlay (PiP-Cam)</option>
@@ -352,7 +352,7 @@ export default function Upload({ health }: { health: Health | null }) {
             <button
               className={"toggle" + (useVlm ? " on" : "")}
               onClick={() => setUseVlm((v) => !v)}
-              title="Nutzt das lokale Vision-Modell fuer Action, Ausdruck, Klarheit und langweilige Frames"
+              title="Nutzt das lokale Vision-Modell für Action, Ausdruck, Klarheit und langweilige Frames"
             >
               <span>KI-Bildanalyse</span>
               <small>{status.vlm}</small>
@@ -370,7 +370,7 @@ export default function Upload({ health }: { health: Health | null }) {
             <button
               className={"toggle" + (cueLearning ? " on" : "")}
               onClick={() => setCueLearning((v) => !v)}
-              title="Lernt neue wiederverwendbare Audio-Cues aus OCR-Treffern und behaelt deine Cue-Pakete"
+              title="Lernt neue wiederverwendbare Audio-Cues aus OCR-Treffern und behält deine Cue-Pakete"
             >
               <span>Cue-Lernen</span>
               <small>{status.cues}</small>
@@ -389,7 +389,7 @@ export default function Upload({ health }: { health: Health | null }) {
             <small>{status.captions}</small>
             <i>{burnCaptions ? "An" : "Aus"}</i>
           </button>
-          <span className="muted tiny">Aus = saubere Clips fuer Premiere oder Resolve</span>
+          <span className="muted tiny">Aus = saubere Clips für Premiere oder Resolve</span>
         </div>
         <div className="field">
           <label>Rhythmus & Stil</label>
@@ -405,7 +405,7 @@ export default function Upload({ health }: { health: Health | null }) {
             <button
               className={"toggle" + (motion === "push" ? " on" : "")}
               onClick={() => setMotion((v) => (v === "push" ? "none" : "push"))}
-              title="Langsamer Push-in ueber den ganzen Clip"
+              title="Langsamer Push-in über den ganzen Clip"
             >
               <span>Langsamer Push-in</span>
               <i>{motion === "push" ? "An" : "Aus"}</i>
@@ -422,7 +422,7 @@ export default function Upload({ health }: { health: Health | null }) {
           </div>
         </div>
         <div className="field">
-          <label>Optimieren fuer</label>
+          <label>Optimieren für</label>
           <div className="seg">
             {PLATFORMS.map((p) => (
               <button
@@ -449,14 +449,14 @@ export default function Upload({ health }: { health: Health | null }) {
           </select>
         </div>
         <div className="field">
-          <label>Clip-Laenge</label>
+          <label>Clip-Länge</label>
           <button
             className={"toggle" + (autoLength ? " on" : "")}
             onClick={() => setAutoLength((v) => !v)}
-            title="Laesst ClipForge die passende Clip-Laenge fuer Plattform und Inhalt waehlen"
+            title="Lässt ClipForge die passende Clip-Länge für Plattform und Inhalt wählen"
             style={{ marginBottom: 8 }}
           >
-            <span>Auto-Laenge</span>
+            <span>Auto-Länge</span>
             <i>{autoLength ? "An" : "Aus"}</i>
           </button>
           <select
@@ -478,7 +478,7 @@ export default function Upload({ health }: { health: Health | null }) {
             <button
               className={"toggle" + (!manualContext ? " on" : "")}
               onClick={() => setManualContext((v) => !v)}
-              title="Automatisch nutzt die beste Vorlauf- und Nachlaufzeit fuer den erkannten Moment"
+              title="Automatisch nutzt die beste Vorlauf- und Nachlaufzeit für den erkannten Moment"
               style={{ marginBottom: 8 }}
             >
               <span>Automatischer Kontext</span>
@@ -560,7 +560,7 @@ export default function Upload({ health }: { health: Health | null }) {
               onToggle={setUseCues}
             />
           )}
-          {/* Spieluebergreifende Sounds (Airhorn, Hype, Lacher ...) - werden fuer jedes Spielprofil genutzt. */}
+          {/* Spielübergreifende Sounds (Airhorn, Hype, Lacher ...) - werden für jedes Spielprofil genutzt. */}
           <CueManager
             game="common"
             cues={cues}
@@ -612,7 +612,7 @@ export default function Upload({ health }: { health: Health | null }) {
                 </div>
                 <StatusPill status={p.status} pct={p.progress?.pct ?? 0} />
                 <button className="btn sm danger" onClick={(e) => del(p.id, e)}>
-                  Loeschen
+                  Löschen
                 </button>
               </div>
             ))}
@@ -626,6 +626,7 @@ export default function Upload({ health }: { health: Health | null }) {
 function StatusPill({ status, pct }: { status: string; pct: number }) {
   if (status === "ready") return <span className="pill" style={{ color: "var(--good)" }}>Bereit</span>;
   if (status === "failed") return <span className="pill" style={{ color: "var(--bad)" }}>Fehlgeschlagen</span>;
+  if (status === "paused") return <span className="pill" style={{ color: "var(--warn)" }}>Pausiert</span>;
   if (status === "processing")
     return <span className="pill" style={{ color: "var(--warn)" }}>{Math.round(pct)}%</span>;
   return <span className="pill">Warteschlange</span>;

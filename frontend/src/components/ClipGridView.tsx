@@ -5,6 +5,7 @@ import type { Project } from "../lib/types";
 import { fmtClock, fmtDuration, scoreColor } from "../lib/format";
 import ClipCard from "./ClipCard";
 import CueModal from "./CueModal";
+import VisualCueCalibration from "./VisualCueCalibration";
 
 interface Learning {
   total_ratings: number;
@@ -38,6 +39,7 @@ export default function ClipGridView({
   const [rerenderingSelected, setRerenderingSelected] = useState(false);
   const [montageErr, setMontageErr] = useState<string | null>(null);
   const [showCues, setShowCues] = useState(false);
+  const [scanTab, setScanTab] = useState<"events" | "visual">("events");
   const [selectedPreviewMode, setSelectedPreviewMode] = useState<"rendered" | "original">("rendered");
   const [renderDraft, setRenderDraft] = useState({
     power_mode: project.settings.power_mode,
@@ -107,7 +109,7 @@ export default function ClipGridView({
       await api.createMontage(project.id, selected);
       // poll until the new montage finishes rendering
       for (let i = 0; i < 90; i++) {
-        if (!alive.current) return; // user navigated away â€” stop polling
+        if (!alive.current) return; // user navigated away - stop polling
         const p = await api.getProject(project.id);
         if (!alive.current) return;
         onChange(p);
@@ -192,7 +194,7 @@ export default function ClipGridView({
   const learnTitle = learn
     ? Object.values(learn.learned_top_features)
         .flatMap((m) => Object.entries(m).map(([k, v]) => `${k} ${Math.round(v * 100)}%`))
-        .join(", ") || "Rate clips ðŸ‘/ðŸ‘Ž to personalize"
+        .join(", ") || "Bewerte Clips mit Gut/Schlecht, um die Auswahl zu personalisieren"
     : "";
 
   const resetLearning = async () => {
@@ -251,7 +253,7 @@ export default function ClipGridView({
             <h2>{project.name}</h2>
             {project.content_type && (
               <span className="pill" style={{ color: project.content_type === "gameplay" ? "#ff9f43" : "var(--accent)" }}>
-                {project.content_type === "gameplay" ? "ðŸŽ® Gameplay" : "ðŸŽ™ Talking"}
+                {project.content_type === "gameplay" ? "Gameplay" : "Sprache"}
               </span>
             )}
           </div>
@@ -269,22 +271,22 @@ export default function ClipGridView({
               onClick={resetLearning}
               style={{ cursor: "pointer", color: "var(--good)" }}
             >
-              ðŸ§  Personalizing - {learn.likes}ðŸ‘ {learn.dislikes}ðŸ‘Ž
-              {learn.trims > 0 ? ` - ${learn.trims}âœ‚` : ""}
+              Personalisiert - {learn.likes} gut {learn.dislikes} schlecht
+              {learn.trims > 0 ? ` - ${learn.trims} Schnitte` : ""}
             </span>
           )}
           {project.content_type === "gameplay" && (
             <button className="btn ghost sm" onClick={() => setShowCues(true)}
               title="Add and test game sounds or OCR phrases, then re-run detection">
-              ðŸŽ¯ Game cues
+              Spiel-Cues
             </button>
           )}
           <button className="btn ghost sm" onClick={rerun}
-            title="Re-run on the same video â€” applies your ðŸ‘/ðŸ‘Ž, new cues, and settings">
+            title="Neu auf demselben Video berechnen - nutzt Bewertungen, neue Cues und Einstellungen">
             Neu berechnen
           </button>
           <Link className="btn ghost sm" to="/">
-            Zurueck - Neues Projekt
+            Zurück - Neues Projekt
           </Link>
           <a className="btn primary sm" href={api.exportBatchUrl(project.id)}>
             Alle exportieren ({ready})
@@ -306,22 +308,49 @@ export default function ClipGridView({
         </div>
       )}
 
-      {project.events?.length > 0 && (
+      {(project.events?.length > 0 || (project.content_type === "gameplay" && project.source)) && (
         <div className="panel section" style={{ marginTop: 16 }}>
-          <span className="muted tiny">
-            Verwendete Ereignisse ({project.events.length}) - uebernommene Cues und Bildschirmtreffer in den finalen Clips
-          </span>
-          <div className="row" style={{ flexWrap: "wrap", gap: 6, marginTop: 8 }}>
-            {project.events.slice(0, 30).map((e, i) => (
-              <span key={i} className="pill"
-                title={`${e.detail || e.label} - ${Math.round(e.confidence * 100)}% match`}>
-                {e.source === "ocr" ? "OCR" : "Audio"} {e.label} - {fmtClock(e.t)}
+          <div className="row" style={{ justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
+            <div className="col">
+              <h3>Scan-Kontrolle</h3>
+              <span className="muted tiny">
+                Ereignisse prüfen, visuelle Cues kalibrieren und falsche Treffer entfernen.
               </span>
-            ))}
-            {project.events.length > 30 && (
-              <span className="muted tiny">+{project.events.length - 30} weitere</span>
+            </div>
+            {project.content_type === "gameplay" && project.source && (
+              <div className="seg scan-tabs">
+                <button className={scanTab === "events" ? "on" : ""} onClick={() => setScanTab("events")}>
+                  Ereignisse
+                </button>
+                <button className={scanTab === "visual" ? "on" : ""} onClick={() => setScanTab("visual")}>
+                  Visuelle Kalibrierung
+                </button>
+              </div>
             )}
           </div>
+          {scanTab === "events" || project.content_type !== "gameplay" || !project.source ? (
+            <>
+              <span className="muted tiny">
+                Verwendete Ereignisse ({project.events.length}) - übernommene Cues und Bildschirmtreffer in den finalen Clips
+              </span>
+              <div className="row" style={{ flexWrap: "wrap", gap: 6, marginTop: 8 }}>
+                {project.events.slice(0, 30).map((e, i) => (
+                  <span key={i} className="pill"
+                    title={`${e.detail || e.label} - ${Math.round(e.confidence * 100)}% match`}>
+                    {e.source === "ocr" ? "OCR" : "Audio"} {e.label} - {fmtClock(e.t)}
+                  </span>
+                ))}
+                {project.events.length > 30 && (
+                  <span className="muted tiny">+{project.events.length - 30} weitere</span>
+                )}
+                {project.events.length === 0 && (
+                  <span className="muted tiny">Noch keine Ereignisse gefunden.</span>
+                )}
+              </div>
+            </>
+          ) : (
+            <VisualCueCalibration project={project} />
+          )}
         </div>
       )}
 
@@ -347,7 +376,7 @@ export default function ClipGridView({
             >
               <option value="balanced">Ausgewogen</option>
               <option value="max_gpu">Max GPU</option>
-              <option value="quality">Qualitaet</option>
+              <option value="quality">Qualität</option>
             </select>
           </div>
           <div className="field">
@@ -523,7 +552,7 @@ export default function ClipGridView({
           className="input"
           style={{ width: "auto", padding: "7px 10px" }}
           value={project.settings.aspect}
-          title="Change the output format now â€” re-renders every clip; moments, scores and captions stay the same"
+          title="Ausgabeformat jetzt ändern - rendert alle Clips neu; Momente, Scores und Untertitel bleiben gleich"
           onChange={async (e) => {
             try {
               await api.setAspect(project.id, e.target.value);
@@ -550,7 +579,7 @@ export default function ClipGridView({
           style={{ width: 160 }}
         />
         <button className="btn ghost sm" onClick={refresh} title="Refresh">
-          â†»
+          Neu
         </button>
       </div>
 
@@ -646,8 +675,8 @@ export default function ClipGridView({
       <div className="row" style={{ marginTop: 22, gap: 12, flexWrap: "wrap" }}>
         <span className="muted tiny">
           {selected.length === 0
-            ? "Tip: tick clips (âœ“ on the thumbnail) to combine them into a montage."
-            : `${selected.length} selected â€” they'll play in the order you ticked them.`}
+            ? "Tipp: Wähle Clips aus, um sie zu einer Montage zu verbinden."
+            : `${selected.length} ausgewählt - sie spielen in deiner Auswahl-Reihenfolge.`}
         </span>
         <div className="spacer" style={{ flex: 1 }} />
         {selected.length > 0 && (
@@ -660,7 +689,7 @@ export default function ClipGridView({
           onClick={makeMontage}
           disabled={selected.length < 2 || montaging}
         >
-          {montaging ? <><span className="spinner" /> Buildingâ€¦</> : `ðŸŽ¬ Create montage (${selected.length})`}
+          {montaging ? <><span className="spinner" /> Montage wird gebaut…</> : `Montage erstellen (${selected.length})`}
         </button>
       </div>
 
@@ -683,7 +712,7 @@ export default function ClipGridView({
                 >
                   {m.status !== "ready" && (
                     <span className="status-chip" style={{ color: m.status === "failed" ? "var(--bad)" : "var(--warn)" }}>
-                      {m.status === "failed" ? "Fehlgeschlagen" : "Renderingâ€¦"}
+                      {m.status === "failed" ? "Fehlgeschlagen" : "Rendering…"}
                     </span>
                   )}
                   {m.status === "ready" && <span className="dur">{fmtDuration(m.duration)}</span>}
@@ -704,7 +733,7 @@ export default function ClipGridView({
                   {m.status === "ready" && m.export_url && (
                     <div className="card-actions">
                       <a className="btn sm" href={api.downloadMontageUrl(project.id, m.id)} download>
-                        â¬‡ Download
+                        Download
                       </a>
                     </div>
                   )}

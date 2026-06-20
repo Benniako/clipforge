@@ -111,5 +111,5 @@ export default function ProjectView() {
   if (status.status === "ready" && project)
     return <ClipGridView project={project} onChange={setProject} />;
 
-  return <ProcessingView status={status} projectId={projectId!} />;
+  return <ProcessingView status={status} projectId={projectId!} onStatus={setStatus} />;
 }
