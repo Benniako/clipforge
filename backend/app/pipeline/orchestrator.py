@@ -57,7 +57,8 @@ def _speech_intervals(transcript, start: float, end: float
 
 def _score_visual_reads(src_path: str, clips: list[Clip], *,
                         power_mode: str | None = None,
-                        lang: str | None = None) -> dict[int, tuple[float, str]]:
+                        lang: str | None = None,
+                        cues: list[str] | None = None) -> dict[int, tuple[float, str]]:
     """Optional VLM reads for clip spans, isolated so this contract stays tested."""
     from ..providers import vlm as vlm_mod
 
@@ -69,7 +70,7 @@ def _score_visual_reads(src_path: str, clips: list[Clip], *,
                                  max_workers=int(opts["max_workers"]),
                                  n_frames=int(opts["n_frames"]),
                                  timeout=float(opts["timeout"]),
-                                 lang=lang or "en")
+                                 lang=lang or "en", cues=cues)
 
 
 STAGES = ["transcribe", "detect", "score", "reframe", "caption", "render"]
@@ -524,9 +525,11 @@ class Engine:
             from ..providers import vlm as vlm_mod
             if project.settings.use_vlm and vlm_mod.available():
                 self._advance(project_id, 2, "AI watching the clips…")
+                gcfg = getattr(project.settings, "game_config", None)
+                vlm_cues = getattr(gcfg, "vlm_visual_prompts", None) if gcfg else None
                 reads = _score_visual_reads(
                     src_path, clips, power_mode=project.settings.power_mode.value,
-                    lang=transcript.language)
+                    lang=transcript.language, cues=vlm_cues)
                 for i, (viral, reason) in reads.items():
                     clips[i].score, clips[i].factors = score_mod.apply_viral_boost(
                         clips[i].score, clips[i].factors, viral,

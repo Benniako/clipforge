@@ -140,8 +140,14 @@ _PROMPTS = {
 }
 
 
-def _prompt_for(lang: str | None) -> str:
-    return _PROMPTS.get((lang or "en")[:2].lower(), _PROMPTS["en"])
+def _prompt_for(lang: str | None, cues: list[str] | None = None) -> str:
+    base = _PROMPTS.get((lang or "en")[:2].lower(), _PROMPTS["en"])
+    hints = [c.strip() for c in (cues or []) if c and c.strip()]
+    if hints:
+        # Steer the read toward the project's own visual cues (kill feed,
+        # victory screen, …) without overriding the scoring rubric.
+        base += "\nWatch especially for: " + ", ".join(hints[:8]) + "."
+    return base
 
 
 def _parse(text: str) -> tuple[float, str] | None:
@@ -163,7 +169,8 @@ def _parse(text: str) -> tuple[float, str] | None:
 
 def score_visual(src_path: str, start: float, end: float, *,
                  n_frames: int = 3, timeout: float = 30.0,
-                 lang: str = "en") -> tuple[float, str] | None:
+                 lang: str = "en",
+                 cues: list[str] | None = None) -> tuple[float, str] | None:
     """Ask the local VLM how viral a clip *looks*. (0..1, reason) or None."""
     if not available():
         return None
@@ -171,7 +178,7 @@ def score_visual(src_path: str, start: float, end: float, *,
     images = _grab_frames_b64(src_path, start, end, n_frames)
     if not model or not images:
         return None
-    prompt = _prompt_for(lang)
+    prompt = _prompt_for(lang, cues)
     body = {"model": model, "prompt": prompt, "images": images, "stream": False,
             "think": False, "options": {"temperature": 0.4, "num_predict": 60}}
     for payload in (body, {k: v for k, v in body.items() if k != "think"}):
@@ -196,7 +203,7 @@ def score_visual(src_path: str, start: float, end: float, *,
 def score_visuals(src_path: str, spans: list[tuple[float, float]], *,
                   budget: float = 45.0, max_workers: int = 2,
                   n_frames: int = 3, timeout: float = 30.0,
-                  lang: str = "en"
+                  lang: str = "en", cues: list[str] | None = None
                   ) -> dict[int, tuple[float, str]]:
     """Concurrent VLM reads for many clip spans, capped by a time budget.
 
@@ -209,7 +216,7 @@ def score_visuals(src_path: str, spans: list[tuple[float, float]], *,
     out: dict[int, tuple[float, str]] = {}
     ex = cf.ThreadPoolExecutor(max_workers=max(1, max_workers))
     futs = {ex.submit(score_visual, src_path, a, b,
-                      n_frames=n_frames, timeout=timeout, lang=lang): i
+                      n_frames=n_frames, timeout=timeout, lang=lang, cues=cues): i
             for i, (a, b) in enumerate(spans)}
     done, _ = cf.wait(futs, timeout=budget)
     for f in done:

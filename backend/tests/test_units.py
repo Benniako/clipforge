@@ -98,6 +98,39 @@ def test_premiere_edl_uses_source_timecodes():
     assert "* SOURCE FILE: D:/clips/source.mp4" in edl
 
 
+def test_premiere_edl_record_and_source_durations_match_to_the_frame():
+    """Fractional-second boundaries must not drift the record timeline against
+    the source frames — every event's src and rec spans must be frame-equal."""
+    from app.pipeline.nle_export import build_cmx3600
+
+    fps = 30
+    # Boundaries chosen so naive float accumulation would round differently
+    # for the record timeline than for the source in/out frames.
+    p = Project(
+        name="Drift",
+        source=SourceMedia(filename="s.mp4", path="proj/s.mp4", fps=fps),
+        clips=[
+            Clip(start=0.017, end=2.034, title="A", score=80, export_url="/media/a.mp4"),
+            Clip(start=5.051, end=7.069, title="B", score=70, export_url="/media/b.mp4"),
+            Clip(start=9.083, end=10.099, title="C", score=60, export_url="/media/c.mp4"),
+        ],
+    )
+    edl = build_cmx3600(p)
+
+    def tc_to_frames(tc: str) -> int:
+        hh, mm, ss, ff = (int(x) for x in tc.split(":"))
+        return ((hh * 60 + mm) * 60 + ss) * fps + ff
+
+    prev_rec_out = 0
+    for line in edl.splitlines():
+        parts = line.split()
+        if len(parts) >= 8 and parts[0].isdigit() and parts[2] == "V":
+            si, so, ri, ro = (tc_to_frames(t) for t in parts[-4:])
+            assert so - si == ro - ri          # src span == rec span (no drift)
+            assert ri == prev_rec_out          # record timeline is gapless
+            prev_rec_out = ro
+
+
 def test_spa_fallback_serves_index_for_client_routes(tmp_path=None):
     import tempfile
     from pathlib import Path
@@ -1923,21 +1956,29 @@ def test_orchestrator_passes_source_path_to_vlm_scorer():
     calls = []
 
     def fake_score_visuals(src_path, spans, *, budget=45.0, max_workers=2,
-                           n_frames=3, timeout=30.0, lang="en"):
-        calls.append((src_path, spans, budget, max_workers, n_frames, timeout, lang))
+                           n_frames=3, timeout=30.0, lang="en", cues=None):
+        calls.append((src_path, spans, budget, max_workers, n_frames, timeout, lang, cues))
         return {0: (0.8, "strong frames")}
 
     try:
         vlm.available = lambda: True
         vlm.score_visuals = fake_score_visuals
         out = O._score_visual_reads("source.mp4", [Clip(start=1.0, end=2.5)],
-                                    lang="de")
+                                    lang="de", cues=["kill feed"])
     finally:
         vlm.available = old_available
         vlm.score_visuals = old_score_visuals
 
     assert out == {0: (0.8, "strong frames")}
-    assert calls == [("source.mp4", [(1.0, 2.5)], 45.0, 1, 2, 30.0, "de")]
+    assert calls == [("source.mp4", [(1.0, 2.5)], 45.0, 1, 2, 30.0, "de", ["kill feed"])]
+
+
+def test_vlm_prompt_includes_project_visual_cues():
+    from app.providers import vlm
+    p = vlm._prompt_for("en", ["victory screen", "kill feed"])
+    assert "victory screen" in p and "kill feed" in p
+    # No cues → base rubric unchanged (no dangling "Watch especially").
+    assert "Watch especially" not in vlm._prompt_for("en", [])
 
 
 if __name__ == "__main__":

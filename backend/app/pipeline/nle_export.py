@@ -13,9 +13,9 @@ def _fps(project: Project) -> int:
     return max(1, min(int(round(fps)), 120))
 
 
-def timecode(seconds: float, fps: int) -> str:
-    """Non-drop-frame HH:MM:SS:FF timecode."""
-    total_frames = max(0, int(round(float(seconds) * fps)))
+def _frames_to_tc(total_frames: int, fps: int) -> str:
+    """Non-drop-frame HH:MM:SS:FF timecode from a whole frame count."""
+    total_frames = max(0, int(total_frames))
     frames = total_frames % fps
     total_seconds = total_frames // fps
     ss = total_seconds % 60
@@ -23,6 +23,11 @@ def timecode(seconds: float, fps: int) -> str:
     mm = total_minutes % 60
     hh = total_minutes // 60
     return f"{hh:02d}:{mm:02d}:{ss:02d}:{frames:02d}"
+
+
+def timecode(seconds: float, fps: int) -> str:
+    """Non-drop-frame HH:MM:SS:FF timecode from seconds."""
+    return _frames_to_tc(int(round(float(seconds) * fps)), fps)
 
 
 def ready_clips_for_edl(project: Project) -> list[Clip]:
@@ -45,18 +50,22 @@ def build_cmx3600(project: Project, *, source_file: Path | str | None = None,
         "FCM: NON-DROP FRAME",
         "",
     ]
-    record_t = 0.0
+    # Work in whole frames so each event's record duration equals its source
+    # duration exactly — NLEs reject an EDL where the two drift by a frame.
+    record_f = 0
     for idx, clip in enumerate(selected, 1):
-        dur = max(0.0, float(clip.end) - float(clip.start))
-        src_in = timecode(clip.start, fps)
-        src_out = timecode(clip.end, fps)
-        rec_in = timecode(record_t, fps)
-        rec_out = timecode(record_t + dur, fps)
+        src_in_f = max(0, int(round(float(clip.start) * fps)))
+        src_out_f = max(src_in_f, int(round(float(clip.end) * fps)))
+        dur_f = src_out_f - src_in_f
+        src_in = _frames_to_tc(src_in_f, fps)
+        src_out = _frames_to_tc(src_out_f, fps)
+        rec_in = _frames_to_tc(record_f, fps)
+        rec_out = _frames_to_tc(record_f + dur_f, fps)
         lines.append(
             f"{idx:03d}  AX       V     C        {src_in} {src_out} {rec_in} {rec_out}")
         lines.append(f"* FROM CLIP NAME: {source_name}")
         lines.append(f"* SOURCE FILE: {source_path}")
         lines.append(f"* COMMENT: {clip.score:02d} - {clip.title[:120]}")
         lines.append("")
-        record_t += dur
+        record_f += dur_f
     return "\n".join(lines).rstrip() + "\n"
