@@ -623,7 +623,8 @@ def _cue_dir(profile_name: str) -> str:
 
 
 def _cue_events(wav_path: str, settings: ImportSettings) -> list:
-    """Match reference game sounds from <data>/game_cues/<profile>/ (+ /common)."""
+    """Match reference game sounds from <data>/game_cues/<profile>/ (+ /common),
+    plus any per-project reference_audio_files named in the game config."""
     if not getattr(settings, "use_cues", True):
         return []
     base = get_settings().data_dir / "game_cues"
@@ -633,7 +634,45 @@ def _cue_events(wav_path: str, settings: ImportSettings) -> list:
             events += detect_cues.find_events(wav_path, base / sub)
         except Exception as e:
             log.warning("cue matching failed for %s: %s", sub, e)
+    extra = _reference_cue_files(settings, base)
+    if extra:
+        try:
+            events += detect_cues.match_templates(wav_path, extra)
+        except Exception as e:
+            log.warning("reference-audio cue matching failed: %s", e)
     return events
+
+
+def _reference_cue_files(settings: ImportSettings, base) -> list:
+    """Resolve game_config.reference_audio_files to on-disk cue templates.
+
+    Entries may be a bare filename, a "<profile>/<file>" path under the cue
+    store, or an absolute/relative path. Missing files are skipped (safe no-op).
+    """
+    from pathlib import Path
+    cfg = getattr(settings, "game_config", None)
+    names = getattr(cfg, "reference_audio_files", None) if cfg else None
+    if not names:
+        return []
+    prof_dir = _cue_dir(settings.game_profile)
+    out: list = []
+    seen: set = set()
+    for name in names:
+        name = (name or "").strip()
+        if not name:
+            continue
+        for cand in (Path(name), base / name, base / prof_dir / name,
+                     base / "common" / name):
+            try:
+                if cand.is_file():
+                    key = str(cand.resolve())
+                    if key not in seen:
+                        seen.add(key)
+                        out.append(cand)
+                    break
+            except OSError:
+                continue
+    return out
 
 
 def _audio_events(wav_path: str, duration: float, settings: ImportSettings,

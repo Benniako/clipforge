@@ -1066,6 +1066,38 @@ def test_corroboration_requires_same_moment_cluster():
     assert soft.features["supporting_audio"] == 1.0
 
 
+def test_dedupe_events_keeps_highest_confidence_on_ties():
+    """When the same label fires at the same instant from a ROI crop (0.9) and
+    the full frame (0.8), the survivor must be the stronger detection."""
+    from app.providers.detect_ocr import OcrEvent, dedupe_events
+
+    out = dedupe_events([
+        OcrEvent(t=10.0, label="kill", text="full", confidence=0.8),
+        OcrEvent(t=10.0, label="kill", text="roi", confidence=0.9),
+    ])
+    assert len(out) == 1
+    assert out[0].confidence == 0.9 and out[0].text == "roi"
+
+
+def test_reference_audio_files_resolve_to_existing_cue_templates(tmp_path=None):
+    """game_config.reference_audio_files must resolve to on-disk templates
+    (so the field is actually consumed), and silently skip missing ones."""
+    import tempfile
+    from pathlib import Path
+    from app.models import ImportSettings, GameProfileConfig
+    from app.providers.detect_gameplay import _reference_cue_files
+
+    base = Path(tempfile.mkdtemp()) / "game_cues"
+    (base / "valorant").mkdir(parents=True)
+    (base / "valorant" / "ace.wav").write_bytes(b"RIFF")  # exists
+    st = ImportSettings(game_profile="valorant", game_config=GameProfileConfig(
+        reference_audio_files=["ace.wav", "missing.wav", "notes.txt"]))
+    out = _reference_cue_files(st, base)
+    assert [p.name for p in out] == ["ace.wav"]  # missing + non-cue skipped
+    # No config / empty list → no templates.
+    assert _reference_cue_files(ImportSettings(), base) == []
+
+
 def test_only_accepted_events_are_shown_for_final_clips():
     from app.providers.detect_gameplay import GameplayClip, accepted_events_for_clips
 

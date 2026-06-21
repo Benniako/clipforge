@@ -247,7 +247,9 @@ def scene_frame_times(src_path: str, duration: float, *,
 def dedupe_events(events: list[OcrEvent], *, min_gap: float = 4.0) -> list[OcrEvent]:
     """Collapse repeats of the same label that persist across sampled frames
     (a banner shows for several seconds → one event at its first sighting)."""
-    events = sorted(events, key=lambda e: (e.t, e.label))
+    # Strongest-first within a tie so a high-confidence ROI crop survives over a
+    # weaker full-frame hit at the same instant; then by time for the gap walk.
+    events = sorted(events, key=lambda e: (e.t, e.label, -e.confidence))
     kept: list[OcrEvent] = []
     last: dict[str, float] = {}
     for e in events:
