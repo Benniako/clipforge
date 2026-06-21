@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { api } from "../lib/api";
 import type { Project } from "../lib/types";
 import { fmtDuration, scoreColor } from "../lib/format";
+import { orderReviewClips } from "../lib/reviewOrder";
 
 export default function SwipeReviewScreen({
   project,
@@ -13,16 +14,7 @@ export default function SwipeReviewScreen({
   onChange: (p: Project) => void;
   onExit: () => void;
 }) {
-  const clips = useMemo(
-    () =>
-      project.clips
-        .filter((c) => c.export_url)
-        // Tiebreak by id so equal scores keep a deterministic order across
-        // project refreshes — otherwise a refresh after rating could reorder
-        // the list under the fixed index and jump to a different card.
-        .sort((a, b) => b.score - a.score || a.id.localeCompare(b.id)),
-    [project.clips],
-  );
+  const clips = useMemo(() => orderReviewClips(project.clips), [project.clips]);
   const [idx, setIdx] = useState(0);
   const [dragY, setDragY] = useState(0);
   const [busy, setBusy] = useState(false);
