@@ -1,10 +1,12 @@
 import { useEffect, useState } from "react";
 import { api } from "../lib/api";
 import type { CuesStatus } from "../lib/api";
+import { useT, LanguageToggle } from "../lib/i18n";
 import CueLab from "./CueLab";
 import CueManager from "./CueManager";
 
 export default function CueModal({ onClose }: { onClose: () => void }) {
+  const { t } = useT();
   const [cues, setCues] = useState<CuesStatus | null>(null);
   const [game, setGame] = useState<string>("");
 
@@ -35,14 +37,16 @@ export default function CueModal({ onClose }: { onClose: () => void }) {
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal cue-modal" onClick={(e) => e.stopPropagation()}>
         <div className="row" style={{ justifyContent: "space-between", marginBottom: 8 }}>
-          <h3>Spiel-Cues</h3>
-          <button className="btn ghost sm" onClick={onClose}>
-            Schließen
-          </button>
+          <h3>{t("cues.title")}</h3>
+          <div className="row" style={{ gap: 8 }}>
+            <LanguageToggle />
+            <button className="btn ghost sm" onClick={onClose}>
+              {t("cues.close")}
+            </button>
+          </div>
         </div>
         <p className="muted tiny" style={{ marginTop: 0 }}>
-          Teste hier Sounds und Texterkennung im Bild und speichere nützliche Cues für spätere
-          Renderings. Visuelle Cues sind OCR-Begriffe. Audio-Cues sind saubere Referenzsounds.
+          {t("cues.intro")}
         </p>
         {cues ? (
           <>
