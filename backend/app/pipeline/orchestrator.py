@@ -57,7 +57,8 @@ def _speech_intervals(transcript, start: float, end: float
 
 def _score_visual_reads(src_path: str, clips: list[Clip], *,
                         power_mode: str | None = None,
-                        lang: str | None = None) -> dict[int, tuple[float, str]]:
+                        lang: str | None = None,
+                        cues: list[str] | None = None) -> dict[int, tuple[float, str]]:
     """Optional VLM reads for clip spans, isolated so this contract stays tested."""
     from ..providers import vlm as vlm_mod
 
@@ -69,7 +70,7 @@ def _score_visual_reads(src_path: str, clips: list[Clip], *,
                                  max_workers=int(opts["max_workers"]),
                                  n_frames=int(opts["n_frames"]),
                                  timeout=float(opts["timeout"]),
-                                 lang=lang or "en")
+                                 lang=lang or "en", cues=cues)
 
 
 STAGES = ["transcribe", "detect", "score", "reframe", "caption", "render"]
@@ -331,12 +332,9 @@ class Engine:
             kind, _metrics = classify.detect_content_type(src_path, info, transcript)
         else:
             kind = forced.value
-        warnings: list[str] = []
-        # Only a problem for talking content — gameplay legitimately has no speech.
-        if kind == "talking" and info.has_audio and transcript.provider == "synthetic":
-            warnings.append(
-                "Speech recognition didn't run, so captions are placeholder text. "
-                "Install the VC++ Redistributable (and a Whisper model), then re-process.")
+        synthetic_caption_warning = (
+            kind == "talking" and info.has_audio
+            and transcript.provider == "synthetic")
         # Gameplay with a streamer cam: find the overlay once for the whole
         # source — it drives the split/framed layouts and reaction scoring.
         cam_rect = None
@@ -349,7 +347,14 @@ class Engine:
         with store.mutate(project_id) as p:
             p.content_type = kind
             p.facecam = cam_rect
-            p.warnings = warnings
+            p.warnings = []
+            # Placeholder captions are a real degradation — flag as error.
+            if synthetic_caption_warning:
+                p.add_warning(
+                    "Speech recognition didn't run, so captions are placeholder "
+                    "text. Install the VC++ Redistributable (and a Whisper "
+                    "model), then re-process.", severity="error",
+                    code="synthetic_transcript")
 
         # 2. detect + 3. score (branch on content type) -------------------
         plat = project.settings.platform.value
@@ -359,9 +364,15 @@ class Engine:
             gweights = feedback.learned_weights(
                 feedback.score_scope("gameplay", prof), gameplay_mod.audio_weights(prof))
             detected: list = []
+            detect_warnings: list[str] = []
             gcs = gameplay_mod.detect_gameplay(src_path, info, project.settings,
                                                weights=gweights, wav_path=wav_path,
-                                               events_out=detected)
+                                               events_out=detected,
+                                               warnings_out=detect_warnings)
+            if detect_warnings:
+                with store.mutate(project_id) as p:
+                    for msg in detect_warnings:
+                        p.add_warning(msg, severity="warn", code="detector")
             if not gcs:
                 raise RuntimeError("no highlights found in this footage")
             # Learn reusable AUDIO cues from the on-screen (OCR) events: snip the
@@ -489,6 +500,9 @@ class Engine:
         if project.settings.use_audio_events and ae_mod.available() and wav_path:
             try:
                 self._advance(project_id, 2, "Listening for crowd / hype…")
+                aecfg = getattr(project.settings, "game_config", None)
+                ae_pos = getattr(aecfg, "audio_prompts", None) if aecfg else None
+                ae_neg = getattr(aecfg, "audio_negative_prompts", None) if aecfg else None
                 for clip in clips:
                     # Skip clips born from an audio event already — they carry
                     # the CLAP signal in their baseline score, so a second
@@ -498,7 +512,8 @@ class Engine:
                     res = ae_mod.event_score(
                         wav_path, clip.start, clip.end,
                         profile=project.settings.game_profile,
-                        language=project.settings.language)
+                        language=project.settings.language,
+                        positive_prompts=ae_pos, negative_prompts=ae_neg)
                     if res is not None:
                         hype, reason = res
                         clip.score, clip.factors = ae_mod.apply_event_bonus(
@@ -517,9 +532,11 @@ class Engine:
             from ..providers import vlm as vlm_mod
             if project.settings.use_vlm and vlm_mod.available():
                 self._advance(project_id, 2, "AI watching the clips…")
+                gcfg = getattr(project.settings, "game_config", None)
+                vlm_cues = getattr(gcfg, "vlm_visual_prompts", None) if gcfg else None
                 reads = _score_visual_reads(
                     src_path, clips, power_mode=project.settings.power_mode.value,
-                    lang=transcript.language)
+                    lang=transcript.language, cues=vlm_cues)
                 for i, (viral, reason) in reads.items():
                     clips[i].score, clips[i].factors = score_mod.apply_viral_boost(
                         clips[i].score, clips[i].factors, viral,
@@ -792,9 +809,8 @@ class Engine:
                     pct=100.0, stages=self._stage_view(5, 1.0))
                 return
             if failed:
-                msg = f"{failed} clip(s) failed to render."
-                if msg not in p.warnings:
-                    p.warnings.append(msg)
+                p.add_warning(f"{failed} clip(s) failed to render.",
+                              severity="warn", code="render_failed")
             p.status = ProjectStatus.ready
             p.error = None
             p.progress = JobProgress(

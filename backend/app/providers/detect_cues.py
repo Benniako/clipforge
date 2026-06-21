@@ -136,6 +136,16 @@ def find_events(audio_path: str, cues_dir: Path, *,
     if not cues_dir.is_dir():
         return []
     templates = [p for p in sorted(cues_dir.iterdir()) if p.suffix.lower() in CUE_EXTS]
+    return match_templates(audio_path, templates, threshold=threshold,
+                           min_gap=min_gap,
+                           max_events_per_template=max_events_per_template)
+
+
+def match_templates(audio_path: str, templates: list[Path], *,
+                    threshold: float = 0.84, min_gap: float = 6.0,
+                    max_events_per_template: int = 24) -> list[CueEvent]:
+    """Match an explicit list of reference cue files against the audio."""
+    templates = [p for p in templates if p.suffix.lower() in CUE_EXTS and p.is_file()]
     if not templates:
         return []
     try:
