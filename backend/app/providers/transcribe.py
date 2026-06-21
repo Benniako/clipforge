@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import logging
 import os
-import threading
 from pathlib import Path
 
 from ..config import get_settings
@@ -26,8 +25,10 @@ from ..models import Transcript, Word
 log = logging.getLogger("clipforge.transcribe")
 
 # Whisper models aren't guaranteed thread-safe and saturate the device anyway —
-# serialize transcriptions so multiple pipeline workers can't overlap them.
-_asr_lock = threading.Lock()
+# serialize transcriptions so multiple pipeline workers can't overlap them. This
+# is the shared torch-load lock, so an ASR torch.load can't race the CLAP loader's
+# temporary torch.load monkey-patch.
+from .torch_guard import TORCH_LOAD_LOCK as _asr_lock
 
 _model = None       # lazily-loaded faster-whisper WhisperModel
 _wx_model = None    # lazily-loaded whisperX ASR model

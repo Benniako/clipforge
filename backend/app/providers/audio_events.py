@@ -212,26 +212,33 @@ def _load_clap():
     global _clap
     if _clap is not None:
         return _clap or None
-    try:
-        old_argv = sys.argv[:]
+    from .torch_guard import TORCH_LOAD_LOCK
+    # Serialize against the ASR loader: _load_clap_checkpoint may temporarily
+    # patch torch.load, and holding this shared lock keeps that window from
+    # racing any other thread's torch.load.
+    with TORCH_LOAD_LOCK:
+        if _clap is not None:  # another thread loaded while we waited
+            return _clap or None
         try:
-            # laion_clap imports training argparse helpers; hide uvicorn args.
-            sys.argv = [old_argv[0] if old_argv else "clipforge"]
-            import laion_clap
+            old_argv = sys.argv[:]
+            try:
+                # laion_clap imports training argparse helpers; hide uvicorn args.
+                sys.argv = [old_argv[0] if old_argv else "clipforge"]
+                import laion_clap
 
-            device = "cuda" if get_settings().device == "cuda" else "cpu"
-            model = laion_clap.CLAP_Module(enable_fusion=False, device=device)
-            _load_clap_checkpoint(model)
-            _clap = model
-            log.info("LAION-CLAP audio tagging loaded")
-        finally:
-            sys.argv = old_argv
-    except Exception as e:
-        # Catch only Exception, not BaseException, so KeyboardInterrupt/SystemExit
-        # during an interactive shutdown still propagate instead of silently
-        # disabling CLAP.
-        log.info("CLAP audio tagging unavailable (%s)", e)
-        _clap = False
+                device = "cuda" if get_settings().device == "cuda" else "cpu"
+                model = laion_clap.CLAP_Module(enable_fusion=False, device=device)
+                _load_clap_checkpoint(model)
+                _clap = model
+                log.info("LAION-CLAP audio tagging loaded")
+            finally:
+                sys.argv = old_argv
+        except Exception as e:
+            # Catch only Exception, not BaseException, so KeyboardInterrupt/
+            # SystemExit during an interactive shutdown still propagate instead
+            # of silently disabling CLAP.
+            log.info("CLAP audio tagging unavailable (%s)", e)
+            _clap = False
     return _clap or None
 
 

@@ -520,6 +520,53 @@ def test_game_profile_config_defaults_and_roi_clamp():
     assert 0.0 <= roi.y <= 1.0 and roi.y + roi.h <= 1.0
 
 
+def test_detection_mode_manual_skips_zero_shot_audio_events():
+    """detection_mode='manual' must disable the zero-shot CLAP sweep, while
+    'zero_shot'/'hybrid' still run it. Guards against the field being dead code."""
+    from app.providers import detect_gameplay as G
+    from app.models import ImportSettings, GameProfileConfig
+
+    calls = []
+    orig = G.audio_events_mod.find_events
+    G.audio_events_mod.find_events = lambda *a, **k: calls.append(1) or []
+    try:
+        manual = ImportSettings(use_audio_events=True,
+                                game_config=GameProfileConfig(detection_mode="manual"))
+        assert G._audio_events("a.wav", 30.0, manual) == []
+        assert calls == []  # zero-shot sweep was skipped
+
+        auto = ImportSettings(use_audio_events=True,
+                              game_config=GameProfileConfig(detection_mode="zero_shot"))
+        G._audio_events("a.wav", 30.0, auto)
+        assert calls == [1]  # zero-shot sweep ran
+    finally:
+        G.audio_events_mod.find_events = orig
+
+
+def test_detector_failures_surface_warnings():
+    """A crashing CLAP/OCR detector must record a UI warning instead of silently
+    returning [] with no explanation."""
+    from app.providers import detect_gameplay as G
+    from app.models import ImportSettings, GameProfileConfig
+
+    def _boom(*a, **k):
+        raise RuntimeError("model missing")
+
+    warnings: list[str] = []
+    orig = G.audio_events_mod.find_events
+    G.audio_events_mod.find_events = _boom
+    try:
+        st = ImportSettings(use_audio_events=True,
+                            game_config=GameProfileConfig(detection_mode="zero_shot"))
+        assert G._audio_events("a.wav", 30.0, st, warnings_out=warnings) == []
+        assert any("CLAP" in w for w in warnings)
+        # deduped: a second failure does not append a duplicate
+        G._audio_events("a.wav", 30.0, st, warnings_out=warnings)
+        assert len(warnings) == 1
+    finally:
+        G.audio_events_mod.find_events = orig
+
+
 def test_hashtags_talking_vs_gameplay():
     from app.providers import hashtags
     talk = hashtags.suggest_hashtags("consistency discipline mindset success habits",

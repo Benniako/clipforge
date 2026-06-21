@@ -359,9 +359,16 @@ class Engine:
             gweights = feedback.learned_weights(
                 feedback.score_scope("gameplay", prof), gameplay_mod.audio_weights(prof))
             detected: list = []
+            detect_warnings: list[str] = []
             gcs = gameplay_mod.detect_gameplay(src_path, info, project.settings,
                                                weights=gweights, wav_path=wav_path,
-                                               events_out=detected)
+                                               events_out=detected,
+                                               warnings_out=detect_warnings)
+            if detect_warnings:
+                with store.mutate(project_id) as p:
+                    for msg in detect_warnings:
+                        if msg not in p.warnings:
+                            p.warnings.append(msg)
             if not gcs:
                 raise RuntimeError("no highlights found in this footage")
             # Learn reusable AUDIO cues from the on-screen (OCR) events: snip the

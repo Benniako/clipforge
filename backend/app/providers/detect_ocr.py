@@ -493,7 +493,7 @@ def _ocr_frame_images(frame: Path, tmpd: Path, idx: int,
             out.append((roi, p))
         return out
     except Exception as e:
-        log.debug("ocr ROI crop failed for %s: %s", frame, e)
+        log.warning("ocr ROI crop failed for %s: %s", frame, e)
         return [("full", frame)]
 
 
@@ -566,8 +566,10 @@ def find_text_events(src_path: str, info: MediaInfo,
                                                text=_ocr_evidence(matched, text),
                                                confidence=conf))
     except Exception as e:
+        # Re-raise so the caller (_find_ocr_events) records a UI warning instead
+        # of silently degrading to zero on-screen events.
         log.warning("ocr detection aborted: %s", e)
-        return []
+        raise
     events = dedupe_events(events)
     log.info("ocr: %d on-screen events via %s", len(events), engine)
     return events
