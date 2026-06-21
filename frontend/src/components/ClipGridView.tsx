@@ -306,16 +306,29 @@ export default function ClipGridView({
       </div>
 
       {project.warnings?.length > 0 && (
-        <div
-          style={{
-            marginTop: 16, padding: "12px 16px", borderRadius: 10,
-            border: "1px solid #5a4a2b", background: "#2a2414", color: "#f5d98a",
-            fontSize: 13,
-          }}
-        >
-          {project.warnings.map((w, i) => (
-            <div key={i}>Hinweis: {w}</div>
-          ))}
+        <div style={{ marginTop: 16, display: "grid", gap: 8 }}>
+          {project.warnings.map((w, i) => {
+            const sev = typeof w === "string" ? "warn" : w.severity;
+            const message = typeof w === "string" ? w : w.message;
+            const palette =
+              sev === "error"
+                ? { border: "#6b2f2f", background: "#2a1414", color: "#f5a8a8", tag: "Fehler" }
+                : sev === "info"
+                ? { border: "#2b4a5a", background: "#142028", color: "#8ad0f5", tag: "Info" }
+                : { border: "#5a4a2b", background: "#2a2414", color: "#f5d98a", tag: "Hinweis" };
+            return (
+              <div
+                key={i}
+                style={{
+                  padding: "12px 16px", borderRadius: 10, fontSize: 13,
+                  border: `1px solid ${palette.border}`, background: palette.background,
+                  color: palette.color,
+                }}
+              >
+                <strong>{palette.tag}:</strong> {message}
+              </div>
+            );
+          })}
         </div>
       )}
 

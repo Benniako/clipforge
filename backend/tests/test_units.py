@@ -576,6 +576,28 @@ def test_detection_mode_manual_skips_zero_shot_audio_events():
         G.audio_events_mod.find_events = orig
 
 
+def test_hybrid_detection_mode_raises_clap_threshold():
+    """'hybrid' runs the auto sweep but more conservatively than 'zero_shot',
+    so it isn't a silent alias — the threshold passed to find_events is higher."""
+    from app.providers import detect_gameplay as G
+    from app.models import ImportSettings, GameProfileConfig
+
+    seen = {}
+    orig = G.audio_events_mod.find_events
+    G.audio_events_mod.find_events = lambda *a, **k: seen.update(k) or []
+    try:
+        zs = ImportSettings(use_audio_events=True,
+                            game_config=GameProfileConfig(detection_mode="zero_shot"))
+        G._audio_events("a.wav", 30.0, zs)
+        zs_thr = seen["threshold"]
+        hy = ImportSettings(use_audio_events=True,
+                            game_config=GameProfileConfig(detection_mode="hybrid"))
+        G._audio_events("a.wav", 30.0, hy)
+        assert seen["threshold"] > zs_thr
+    finally:
+        G.audio_events_mod.find_events = orig
+
+
 def test_detector_failures_surface_warnings():
     """A crashing CLAP/OCR detector must record a UI warning instead of silently
     returning [] with no explanation."""
@@ -598,6 +620,26 @@ def test_detector_failures_surface_warnings():
         assert len(warnings) == 1
     finally:
         G.audio_events_mod.find_events = orig
+
+
+def test_project_warnings_are_structured_and_back_compatible():
+    """Notices carry a severity for the UI; legacy/raw strings (stored JSON,
+    older code) are coerced to warn-level so nothing breaks."""
+    from app.models import Project, Notice
+
+    p = Project(name="W")
+    p.add_warning("render failed", severity="warn", code="render_failed")
+    p.add_warning("render failed")  # duplicate message → ignored
+    p.add_warning("no speech", severity="error", code="synthetic_transcript")
+    assert [n.message for n in p.warnings] == ["render failed", "no speech"]
+    assert p.warnings[0].severity == "warn" and p.warnings[1].severity == "error"
+    assert all(isinstance(n, Notice) for n in p.warnings)
+
+    # Legacy plain-string list (e.g. an old stored project) is coerced.
+    legacy = Project.model_validate({"name": "L", "warnings": ["old string warning"]})
+    assert isinstance(legacy.warnings[0], Notice)
+    assert legacy.warnings[0].message == "old string warning"
+    assert legacy.warnings[0].severity == "warn"
 
 
 def test_hashtags_talking_vs_gameplay():
@@ -1361,6 +1403,46 @@ def test_paddle_text_accepts_ocr_result_objects():
     assert "Sieg" in text and "Kopfschuss" in text and "Bombe gelegt" in text
 
 
+def test_ocr_reads_real_recognition_confidence():
+    """_*_read returns the engine's mean confidence; find_text_events should use
+    it instead of a fabricated constant when the backend reports scores."""
+    from app.providers import detect_ocr as O
+
+    # Paddle 3.x parallel rec_texts / rec_scores.
+    class P3:
+        def predict(self, _p):
+            return [{"rec_texts": ["VICTORY"], "rec_scores": [0.6]}]
+    text, conf = O._paddle_read(P3(), "f.png")
+    assert text == "VICTORY" and abs(conf - 0.6) < 1e-6
+
+    # Paddle 2.x [box,(text,conf)] tuples → mean of scores.
+    class P2:
+        def predict(self, _p):
+            raise AttributeError
+        def ocr(self, _p, cls=False):
+            return [[[[0, 0], ("ACE", 0.8)], [[0, 1], ("KILL", 0.4)]]]
+    _t, c2 = O._paddle_read(P2(), "f.png")
+    assert abs(c2 - 0.6) < 1e-6
+
+    # EasyOCR detail=1 rows carry confidence at index 2.
+    class E:
+        def readtext(self, _p, detail=1, paragraph=False):
+            return [([[0, 0]], "Spike", 0.9), ([[0, 1]], "Plant", 0.5)]
+    _te, ce = O._easyocr_read(E(), "f.png")
+    assert abs(ce - 0.7) < 1e-6
+
+    # Unknown confidence (tesseract / detail=0) → 0.0 so the ROI prior kicks in.
+    class E0:
+        def readtext(self, _p, detail=1, paragraph=False):
+            raise RuntimeError("no detail")
+        # falls through to detail=0
+    # (detail=1 raises → detail=0 path returns 0.0)
+    class E0b:
+        def readtext(self, _p, detail=0, paragraph=False):
+            return ["plain"]
+    assert O._easyocr_read(E0b(), "f.png") == ("plain", 0.0)
+
+
 def test_ocr_reader_falls_back_to_easyocr_when_paddle_fails():
     from app.providers import detect_ocr as O
 
@@ -1804,6 +1886,37 @@ def test_audio_event_reduce_and_bonus():
         {"crowd cheering": 0.34}, {"lobby music": 0.31}) is None
     gated = AE.reduce_clap_window({"crowd cheering": 0.42}, {"lobby music": 0.24})
     assert gated is not None and gated[1] == "crowd cheering"
+
+
+def test_clap_reduce_threshold_boundaries():
+    """Lock each magic threshold in the CLAP reducers so a typo that floods or
+    starves audio events is caught. Boundaries: pos floor 0.20 / range 0.28,
+    neg floor 0.22 / range 0.28, pos-neg margin 0.06, risk gate max(0.45,…)."""
+    from app.providers import audio_events as AE
+
+    # Positive floor: just below 0.20 → no signal; at 0.20 → hype 0.0.
+    assert AE.reduce_clap_similarities({"cheer": 0.199}) is None
+    at_floor = AE.reduce_clap_similarities({"cheer": 0.20})
+    assert at_floor is not None and abs(at_floor[0]) < 1e-9
+    # Full range: 0.20 + 0.28 = 0.48 → hype clamps to 1.0.
+    assert abs(AE.reduce_clap_similarities({"cheer": 0.48})[0] - 1.0) < 1e-9
+
+    # Negative floor 0.22 / range 0.28.
+    assert AE.reduce_negative_similarities({"menu": 0.219}) is None
+    assert abs(AE.reduce_negative_similarities({"menu": 0.22})[0]) < 1e-9
+    assert abs(AE.reduce_negative_similarities({"menu": 0.50})[0] - 1.0) < 1e-9
+
+    # Pos/neg margin gate (0.06): pos 0.42 vs neg 0.37 → margin 0.05 < 0.06 → reject.
+    assert AE.reduce_clap_window({"cheer": 0.42}, {"menu": 0.37}) is None
+    # margin exactly 0.06 passes the margin gate.
+    assert AE.reduce_clap_window({"cheer": 0.43}, {"menu": 0.37}) is not None
+
+    # Risk gate: margin passes (0.74-0.68=0.06) but the negative risk saturates
+    # to ≥ max(0.45, hype*0.85), so the window is still rejected.
+    assert AE.reduce_clap_window({"cheer": 0.74}, {"menu": 0.68}) is None
+    # No negatives at all → positive passes through unchanged.
+    pure = AE.reduce_clap_window({"cheer": 0.40}, {})
+    assert pure is not None and pure[1] == "cheer"
 
 
 def test_event_score_forwards_custom_audio_prompts_to_clap():

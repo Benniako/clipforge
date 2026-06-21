@@ -332,12 +332,9 @@ class Engine:
             kind, _metrics = classify.detect_content_type(src_path, info, transcript)
         else:
             kind = forced.value
-        warnings: list[str] = []
-        # Only a problem for talking content — gameplay legitimately has no speech.
-        if kind == "talking" and info.has_audio and transcript.provider == "synthetic":
-            warnings.append(
-                "Speech recognition didn't run, so captions are placeholder text. "
-                "Install the VC++ Redistributable (and a Whisper model), then re-process.")
+        synthetic_caption_warning = (
+            kind == "talking" and info.has_audio
+            and transcript.provider == "synthetic")
         # Gameplay with a streamer cam: find the overlay once for the whole
         # source — it drives the split/framed layouts and reaction scoring.
         cam_rect = None
@@ -350,7 +347,14 @@ class Engine:
         with store.mutate(project_id) as p:
             p.content_type = kind
             p.facecam = cam_rect
-            p.warnings = warnings
+            p.warnings = []
+            # Placeholder captions are a real degradation — flag as error.
+            if synthetic_caption_warning:
+                p.add_warning(
+                    "Speech recognition didn't run, so captions are placeholder "
+                    "text. Install the VC++ Redistributable (and a Whisper "
+                    "model), then re-process.", severity="error",
+                    code="synthetic_transcript")
 
         # 2. detect + 3. score (branch on content type) -------------------
         plat = project.settings.platform.value
@@ -368,8 +372,7 @@ class Engine:
             if detect_warnings:
                 with store.mutate(project_id) as p:
                     for msg in detect_warnings:
-                        if msg not in p.warnings:
-                            p.warnings.append(msg)
+                        p.add_warning(msg, severity="warn", code="detector")
             if not gcs:
                 raise RuntimeError("no highlights found in this footage")
             # Learn reusable AUDIO cues from the on-screen (OCR) events: snip the
@@ -806,9 +809,8 @@ class Engine:
                     pct=100.0, stages=self._stage_view(5, 1.0))
                 return
             if failed:
-                msg = f"{failed} clip(s) failed to render."
-                if msg not in p.warnings:
-                    p.warnings.append(msg)
+                p.add_warning(f"{failed} clip(s) failed to render.",
+                              severity="warn", code="render_failed")
             p.status = ProjectStatus.ready
             p.error = None
             p.progress = JobProgress(

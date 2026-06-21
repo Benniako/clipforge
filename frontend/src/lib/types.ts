@@ -30,6 +30,12 @@ export interface DetectedEvent {
   confidence: number;
 }
 
+export interface Notice {
+  message: string;
+  severity: "info" | "warn" | "error" | string;
+  code?: string | null;
+}
+
 export interface CaptionSet {
   id: string;
   words: CaptionWord[];
@@ -179,7 +185,7 @@ export interface Project {
   content_type: string | null;
   facecam: Rect | null;
   events: DetectedEvent[];
-  warnings: string[];
+  warnings: Notice[];
   error: string | null;
   created_at: number;
   updated_at: number;
@@ -201,7 +207,7 @@ export interface StatusPayload {
   id: string;
   status: ProjectStatus;
   error: string | null;
-  warnings: string[];
+  warnings: Notice[];
   content_type: string | null;
   settings: Pick<ImportSettings, "power_mode" | "aspect">;
   system?: {

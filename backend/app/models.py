@@ -11,7 +11,7 @@ import uuid
 import os
 from enum import Enum
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 def _id(prefix: str) -> str:
@@ -127,6 +127,15 @@ class CaptionSet(BaseModel):
 # --------------------------------------------------------------------------- #
 # Detected events (audio cues + on-screen OCR) — saved per project
 # --------------------------------------------------------------------------- #
+class Notice(BaseModel):
+    """A non-fatal issue surfaced to the UI, with a severity so the front-end
+    can style it (and an optional code for targeted handling). Plain strings
+    coming from storage or older code are coerced to ``severity="warn"``."""
+    message: str
+    severity: str = "warn"      # "info" | "warn" | "error"
+    code: str | None = None
+
+
 class DetectedEvent(BaseModel):
     """A pinpointed moment found in the source: a matched audio cue or a piece
     of viral on-screen text (OCR). Persisted on the project so the user can see
@@ -400,10 +409,32 @@ class Project(BaseModel):
     # Accepted audio-cue/OCR/audio events tied to final clips, sorted by time.
     # Raw detector candidates stay internal so the UI does not overstate proof.
     events: list[DetectedEvent] = Field(default_factory=list)
-    warnings: list[str] = Field(default_factory=list)  # non-fatal issues for the UI
+    warnings: list[Notice] = Field(default_factory=list)  # non-fatal issues for the UI
     error: str | None = None
     created_at: float = Field(default_factory=now)
     updated_at: float = Field(default_factory=now)
+
+    @field_validator("warnings", mode="before")
+    @classmethod
+    def _coerce_warnings(cls, v):
+        """Accept legacy/raw strings (from stored JSON or string-appending code)
+        and lift them to Notice objects so the field has one shape."""
+        if not isinstance(v, list):
+            return v
+        out = []
+        for item in v:
+            if isinstance(item, str):
+                out.append({"message": item, "severity": "warn"})
+            else:
+                out.append(item)
+        return out
+
+    def add_warning(self, message: str, *, severity: str = "warn",
+                    code: str | None = None) -> None:
+        """Append a notice, de-duplicating by message."""
+        if any(n.message == message for n in self.warnings):
+            return
+        self.warnings.append(Notice(message=message, severity=severity, code=code))
 
     def clip(self, clip_id: str) -> Clip | None:
         return next((c for c in self.clips if c.id == clip_id), None)

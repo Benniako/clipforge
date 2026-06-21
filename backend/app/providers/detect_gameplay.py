@@ -690,6 +690,11 @@ def _audio_events(wav_path: str, duration: float, settings: ImportSettings,
         hop = 4.0 if mode in ("max_gpu", "quality") else 5.0
         window = 5.0 if mode == "max_gpu" else 6.0
         threshold = 0.55 if mode == "quality" else 0.58
+        # "hybrid" pairs the user's own cues with the auto sweep, so it only
+        # wants the strong auto-hits — raise the bar to cut false positives the
+        # manual cues would otherwise have to compete with.
+        if detection_mode == "hybrid":
+            threshold += 0.04
         return audio_events_mod.find_events(
             wav_path, duration, window=window, hop=hop, threshold=threshold,
             limit=max(settings.target_clips, 6), profile=settings.game_profile,

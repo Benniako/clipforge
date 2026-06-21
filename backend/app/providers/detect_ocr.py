@@ -341,12 +341,12 @@ def _get_reader(engine: str):
     return _reader
 
 
-def _paddle_text(reader, path: str) -> str:
-    """Read all text from one image, parsing both PaddleOCR 2.x and 3.x output.
+def _paddle_read(reader, path: str) -> tuple[str, float]:
+    """Read text + a mean recognition confidence from one image.
 
-    2.x ``.ocr()`` returns ``[[ [box, (text, conf)], ... ]]``; 3.x returns a list
-    of dict-like ``OCRResult`` objects exposing a ``rec_texts`` list. We accept
-    either so an upgrade doesn't quietly blind on-screen detection.
+    Parses both PaddleOCR 2.x (``[[ [box, (text, conf)], ... ]]``) and 3.x
+    (``OCRResult`` with ``rec_texts``/``rec_scores``). Confidence is the mean of
+    the recognized lines' scores, or 0.0 when the backend doesn't report any.
     """
     # 3.x prefers .predict(); .ocr() still exists but warns. Use whichever runs.
     res = None
@@ -358,74 +358,112 @@ def _paddle_text(reader, path: str) -> str:
         except TypeError:
             res = reader.ocr(path)  # 3.x .ocr() dropped the cls kwarg
     if not res:
-        return ""
+        return "", 0.0
     lines: list[str] = []
+    scores: list[float] = []
     for page in res:
-        # 3.x: dict-like result with a list of recognized strings.
+        # 3.x: dict-like result with parallel rec_texts / rec_scores lists.
         rec_texts = None
+        rec_scores = None
         if isinstance(page, dict):
             rec_texts = page.get("rec_texts")
+            rec_scores = page.get("rec_scores")
         else:
             rec_texts = getattr(page, "rec_texts", None)
+            rec_scores = getattr(page, "rec_scores", None)
             if rec_texts is None:
                 try:
                     rec_texts = page["rec_texts"]
+                    rec_scores = page["rec_scores"]
                 except (TypeError, KeyError, IndexError):
                     rec_texts = None
         if rec_texts:
-            lines.extend(t for t in rec_texts if t)
+            for i, t in enumerate(rec_texts):
+                if not t:
+                    continue
+                lines.append(t)
+                try:
+                    scores.append(float(rec_scores[i]))
+                except (TypeError, IndexError, ValueError):
+                    pass
             continue
         # 2.x: list of [box, (text, conf)] entries.
         for entry in (page or []):
             try:
                 txt = entry[1][0]
+                conf = entry[1][1]
             except (TypeError, IndexError, KeyError):
-                txt = ""
+                txt, conf = "", None
             if txt:
                 lines.append(txt)
-    return " ".join(lines)
+                try:
+                    scores.append(float(conf))
+                except (TypeError, ValueError):
+                    pass
+    mean = sum(scores) / len(scores) if scores else 0.0
+    return " ".join(lines), max(0.0, min(1.0, mean))
+
+
+def _paddle_text(reader, path: str) -> str:
+    return _paddle_read(reader, path)[0]
 
 
 def _ocr_image(path: str, engine: str) -> str:
     """Read all text from one image with the active backend → one string."""
+    return _ocr_image_conf(path, engine)[0]
+
+
+def _ocr_image_conf(path: str, engine: str) -> tuple[str, float]:
+    """Read text and a 0..1 recognition confidence (0.0 when unknown)."""
     kind, reader = _get_reader(engine)
     try:
         if kind == "paddleocr":
-            return _paddle_text(reader, path)
+            return _paddle_read(reader, path)
         if kind == "easyocr":
-            return _easyocr_text(reader, path)
+            return _easyocr_read(reader, path)
         if kind == "tesseract":
             import pytesseract
             from PIL import Image
 
-            return pytesseract.image_to_string(Image.open(path))
+            return pytesseract.image_to_string(Image.open(path)), 0.0
     except Exception as e:  # one bad frame mustn't sink detection
         log.warning("ocr read failed for %s: %s", path, e)
-    return ""
+    return "", 0.0
 
 
 def _easyocr_text(reader, path: str) -> str:
-    """Read EasyOCR output without assuming a single return shape."""
+    return _easyocr_read(reader, path)[0]
+
+
+def _easyocr_read(reader, path: str) -> tuple[str, float]:
+    """Read EasyOCR output + mean confidence without assuming one return shape."""
     try:
         rows = reader.readtext(path, detail=1, paragraph=False) or []
         lines: list[str] = []
+        scores: list[float] = []
         for row in rows:
             txt = ""
             if isinstance(row, str):
                 txt = row
             elif isinstance(row, (list, tuple)) and len(row) >= 2:
                 txt = row[1][0] if isinstance(row[1], (list, tuple)) else row[1]
+                if len(row) >= 3:
+                    try:
+                        scores.append(float(row[2]))
+                    except (TypeError, ValueError):
+                        pass
             if txt:
                 lines.append(str(txt))
         if lines:
-            return " ".join(lines)
+            mean = sum(scores) / len(scores) if scores else 0.0
+            return " ".join(lines), max(0.0, min(1.0, mean))
     except Exception as e:
         log.debug("easyocr detail read failed for %s: %s", path, e)
     try:
         rows = reader.readtext(path, detail=0, paragraph=False) or []
     except TypeError:
         rows = reader.readtext(path, detail=0) or []
-    return " ".join(str(x) for x in rows if x)
+    return " ".join(str(x) for x in rows if x), 0.0
 
 
 def _ocr_frame_images(frame: Path, tmpd: Path, idx: int,
@@ -435,6 +473,12 @@ def _ocr_frame_images(frame: Path, tmpd: Path, idx: int,
     """Return full frame plus game-specific ROIs that carry useful text."""
     name = _ALIAS.get((profile or "generic").lower().replace(" ", ""),
                       (profile or "generic").lower().replace(" ", ""))
+    # Skip the PIL decode entirely when this profile can't produce any ROI crop
+    # (e.g. "generic" with no saved/manual regions) — on a long VOD that avoids
+    # hundreds of full-frame decodes whose result is just the frame path again.
+    saved_regions = visual_cues.regions_extra(name)
+    if name not in {"valorant", "cs2"} and not saved_regions and not extra_regions:
+        return [("full", frame)]
     try:
         from PIL import Image, ImageOps
 
@@ -448,7 +492,7 @@ def _ocr_frame_images(frame: Path, tmpd: Path, idx: int,
                 ("center_banner", (int(w * 0.16), int(h * 0.22),
                                    int(w * 0.84), int(h * 0.72))),
             ])
-        for label, regions in visual_cues.regions_extra(name).items():
+        for label, regions in saved_regions.items():
             for r_i, region in enumerate(regions):
                 try:
                     x0 = int(float(region.get("x", 0.0)) * w)
@@ -556,11 +600,18 @@ def find_text_events(src_path: str, info: MediaInfo,
                 roi_texts = []
                 for roi, img in _ocr_frame_images(
                         frame, tmpd, i, profile, extra_regions=extra_regions):
-                    text = _ocr_image(str(img), engine)
+                    text, rconf = _ocr_image_conf(str(img), engine)
                     if text:
-                        roi_texts.append((roi, text))
-                for roi, text in roi_texts:
-                    conf = 0.9 if roi != "full" else 0.8
+                        roi_texts.append((roi, text, rconf))
+                for roi, text, rconf in roi_texts:
+                    # Prefer the engine's real recognition confidence; fall back
+                    # to a ROI prior only when the backend doesn't report one
+                    # (e.g. tesseract). ROI crops read a tight banner, so they
+                    # keep a small reliability edge over a full-frame sweep.
+                    if rconf > 0.0:
+                        conf = round(min(1.0, rconf * (1.0 if roi != "full" else 0.97)), 4)
+                    else:
+                        conf = 0.9 if roi != "full" else 0.8
                     matches = match_keywords(text, profile)
                     matches.extend(_manual_matches(text, manual_cues))
                     for label, matched in matches:
