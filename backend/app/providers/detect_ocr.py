@@ -61,6 +61,11 @@ _GENERIC: dict[str, tuple[str, ...]] = {
     "clutch": ("clutch", "1v5", "1v4", "1v3"),
     "record": ("new record", "personal best", "high score", "level up",
                "neuer rekord", "persoenlicher rekord", "level aufstieg"),
+    "menu": ("settings", "inventory", "main menu", "menu", "lobby",
+             "store", "shop", "collection", "loadout", "agent select",
+             "matchmaking", "einstellungen", "inventar", "hauptmenu",
+             "hauptmenue", "hauptmenü", "menue", "menü", "laden",
+             "sammlung", "ausruestung", "ausrüstung", "agenten"),
 }
 
 # Per-profile extra markers, merged over the generic set.
@@ -217,6 +222,26 @@ def focused_frame_times(duration: float, focus_times: list[float] | None, *,
         step = len(out) / max_frames
         out = [out[int(i * step)] for i in range(max_frames)]
     return out
+
+
+def scene_frame_times(src_path: str, duration: float, *,
+                      max_frames: int = 120) -> list[float]:
+    """Frames just after hard cuts, so OCR reads stable new shots."""
+    if duration <= 0 or not get_settings().has_scenedetect:
+        return []
+    try:
+        from . import scenes
+
+        cuts = scenes.scene_cuts(src_path, 0.0, duration)
+    except Exception as e:
+        log.debug("scene OCR keyframes unavailable: %s", e)
+        return []
+    times = [min(max(c + 0.15, 0.25), max(duration - 0.25, 0.25))
+             for c in cuts if 0.0 <= c <= duration]
+    if len(times) > max_frames:
+        step = len(times) / max_frames
+        times = [times[int(i * step)] for i in range(max_frames)]
+    return [round(t, 3) for t in times]
 
 
 def dedupe_events(events: list[OcrEvent], *, min_gap: float = 4.0) -> list[OcrEvent]:
@@ -402,7 +427,9 @@ def _easyocr_text(reader, path: str) -> str:
 
 
 def _ocr_frame_images(frame: Path, tmpd: Path, idx: int,
-                      profile: str | None) -> list[tuple[str, Path]]:
+                      profile: str | None,
+                      extra_regions: list | tuple | None = None
+                      ) -> list[tuple[str, Path]]:
     """Return full frame plus game-specific ROIs that carry useful text."""
     name = _ALIAS.get((profile or "generic").lower().replace(" ", ""),
                       (profile or "generic").lower().replace(" ", ""))
@@ -433,6 +460,21 @@ def _ocr_frame_images(frame: Path, tmpd: Path, idx: int,
                 x1 = max(x0 + 1, min(w, x1))
                 y1 = max(y0 + 1, min(h, y1))
                 specs.append((f"saved_{label}_{r_i}", (x0, y0, x1, y1)))
+        for r_i, region in enumerate(extra_regions or []):
+            try:
+                if hasattr(region, "model_dump"):
+                    region = region.model_dump()
+                x0 = int(float(region.get("x", 0.0)) * w)
+                y0 = int(float(region.get("y", 0.0)) * h)
+                x1 = int((float(region.get("x", 0.0)) + float(region.get("w", 1.0))) * w)
+                y1 = int((float(region.get("y", 0.0)) + float(region.get("h", 1.0))) * h)
+            except (AttributeError, TypeError, ValueError):
+                continue
+            x0 = max(0, min(w - 1, x0))
+            y0 = max(0, min(h - 1, y0))
+            x1 = max(x0 + 1, min(w, x1))
+            y1 = max(y0 + 1, min(h, y1))
+            specs.append((f"manual_roi_{r_i}", (x0, y0, x1, y1)))
         out: list[tuple[str, Path]] = []
         if idx % 5 == 0:
             out.append(("full", frame))
@@ -464,6 +506,20 @@ def _ocr_evidence(matched: str, raw_text: str) -> str:
     return f"{matched} | {text}"
 
 
+def _manual_matches(text: str, cues: list[str] | tuple[str, ...] | None
+                    ) -> list[tuple[str, str]]:
+    norm = _norm(text)
+    if not norm:
+        return []
+    padded = f" {norm} "
+    out: list[tuple[str, str]] = []
+    for cue in cues or ():
+        p = _norm(cue)
+        if p and f" {p} " in padded:
+            out.append(("manual_visual", p))
+    return out
+
+
 def find_text_events(src_path: str, info: MediaInfo,
                      settings, *, every: float = 2.0,
                      focus_times: list[float] | None = None) -> list[OcrEvent]:
@@ -472,11 +528,16 @@ def find_text_events(src_path: str, info: MediaInfo,
     s = get_settings()
     if not s.has_ocr or not info.has_video or info.duration <= 0:
         return []
-    times = focused_frame_times(info.duration, focus_times, every=every)
+    cfg = getattr(settings, "game_config", None)
+    scene_times = scene_frame_times(src_path, info.duration)
+    focused = list(focus_times or []) + scene_times
+    times = focused_frame_times(info.duration, focused or None, every=every)
     if not times:
         return []
     engine = s.ocr_engine
     profile = getattr(settings, "game_profile", "generic")
+    extra_regions = getattr(cfg, "visual_rois", []) if cfg is not None else []
+    manual_cues = getattr(cfg, "visual_text_cues", []) if cfg is not None else []
     events: list[OcrEvent] = []
     try:
         with tempfile.TemporaryDirectory() as tmp:
@@ -491,13 +552,16 @@ def find_text_events(src_path: str, info: MediaInfo,
                     log.warning("ocr frame grab failed at %.1fs: %s", t, e)
                     continue
                 roi_texts = []
-                for roi, img in _ocr_frame_images(frame, tmpd, i, profile):
+                for roi, img in _ocr_frame_images(
+                        frame, tmpd, i, profile, extra_regions=extra_regions):
                     text = _ocr_image(str(img), engine)
                     if text:
                         roi_texts.append((roi, text))
                 for roi, text in roi_texts:
                     conf = 0.9 if roi != "full" else 0.8
-                    for label, matched in match_keywords(text, profile):
+                    matches = match_keywords(text, profile)
+                    matches.extend(_manual_matches(text, manual_cues))
+                    for label, matched in matches:
                         events.append(OcrEvent(t=round(t, 3), label=label,
                                                text=_ocr_evidence(matched, text),
                                                confidence=conf))
