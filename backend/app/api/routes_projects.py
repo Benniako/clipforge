@@ -12,6 +12,7 @@ import zipfile
 from pathlib import Path
 
 import asyncio
+import json
 import threading
 
 from fastapi import (APIRouter, File, Form, HTTPException, UploadFile,
@@ -24,10 +25,12 @@ from starlette.background import BackgroundTask
 
 from .. import store
 from ..config import get_settings
-from ..models import (ASPECTS, ContentType, ImportSettings, Platform, PowerMode,
-                      Project, ProjectStatus, ProjectSummary)
+from ..models import (ASPECTS, ContentType, GameProfileConfig, ImportSettings,
+                      Platform, PowerMode, Project, ProjectStatus,
+                      ProjectSummary)
 from ..pipeline import ingest
 from ..pipeline.captions import build_srt
+from ..pipeline.nle_export import build_cmx3600, ready_clips_for_edl
 from ..pipeline.orchestrator import engine
 from ..providers.detect_gameplay import KNOWN_PROFILES
 
@@ -63,6 +66,74 @@ def _clamp_pad(v: float | None) -> float | None:
     if not math.isfinite(value):
         return None
     return round(max(0.0, min(value, 60.0)), 3)
+
+
+def _split_values(text: str | None) -> list[str]:
+    raw = (text or "").replace("\r", "\n")
+    if not raw.strip():
+        return []
+    chunks: list[str] = []
+    for part in raw.replace(";", "\n").split("\n"):
+        if "," in part and len(part) < 160:
+            chunks.extend(part.split(","))
+        else:
+            chunks.append(part)
+    out: list[str] = []
+    seen: set[str] = set()
+    for chunk in chunks:
+        value = " ".join(chunk.split())
+        key = value.lower()
+        if value and key not in seen:
+            seen.add(key)
+            out.append(value)
+    return out[:80]
+
+
+def _parse_roi_json(text: str | None) -> list[dict]:
+    if not text or not text.strip():
+        return []
+    try:
+        raw = json.loads(text)
+    except Exception:
+        return []
+    if not isinstance(raw, list):
+        return []
+    out: list[dict] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        try:
+            out.append({
+                "x": float(item.get("x", 0.0)),
+                "y": float(item.get("y", 0.0)),
+                "w": float(item.get("w", 1.0)),
+                "h": float(item.get("h", 1.0)),
+            })
+        except (TypeError, ValueError):
+            continue
+    return out[:40]
+
+
+def _game_config_from_form(*, detection_mode: str, visual_rois_json: str,
+                           visual_text_cues: str, reference_audio_files: str,
+                           vlm_visual_prompts: str, audio_prompts: str,
+                           audio_negative_prompts: str) -> GameProfileConfig:
+    mode = detection_mode if detection_mode in {"zero_shot", "manual", "hybrid"} else "zero_shot"
+    data = {
+        "detection_mode": mode,
+        "visual_rois": _parse_roi_json(visual_rois_json),
+        "visual_text_cues": _split_values(visual_text_cues),
+        "reference_audio_files": _split_values(reference_audio_files),
+        "vlm_visual_prompts": _split_values(vlm_visual_prompts) or GameProfileConfig().vlm_visual_prompts,
+        "audio_prompts": _split_values(audio_prompts),
+        "audio_negative_prompts": (
+            _split_values(audio_negative_prompts)
+            or GameProfileConfig().audio_negative_prompts
+        ),
+    }
+    cfg = GameProfileConfig.model_validate(data)
+    cfg.visual_rois = [r.clamped() for r in cfg.visual_rois]
+    return cfg
 
 
 def _system_usage() -> dict:
@@ -139,6 +210,13 @@ async def create_project(
     auto_length: bool = Form(False),
     lead_seconds: float | None = Form(None),
     tail_seconds: float | None = Form(None),
+    detection_mode: str = Form("zero_shot"),
+    visual_rois_json: str = Form(""),
+    visual_text_cues: str = Form(""),
+    reference_audio_files: str = Form(""),
+    vlm_visual_prompts: str = Form(""),
+    audio_prompts: str = Form(""),
+    audio_negative_prompts: str = Form(""),
     file: UploadFile | None = File(None),
 ) -> Project:
     if not file and not url:
@@ -184,6 +262,15 @@ async def create_project(
         auto_length=auto_length,
         lead_seconds=_clamp_pad(lead_seconds),
         tail_seconds=_clamp_pad(tail_seconds),
+        game_config=_game_config_from_form(
+            detection_mode=detection_mode,
+            visual_rois_json=visual_rois_json,
+            visual_text_cues=visual_text_cues,
+            reference_audio_files=reference_audio_files,
+            vlm_visual_prompts=vlm_visual_prompts,
+            audio_prompts=audio_prompts,
+            audio_negative_prompts=audio_negative_prompts,
+        ),
     )
     project = Project(name=name or "Untitled", settings=settings,
                       status=ProjectStatus.created)
@@ -374,6 +461,7 @@ class Reprocess(BaseModel):
     auto_length: bool | None = None
     lead_seconds: float | None = None
     tail_seconds: float | None = None
+    game_config: GameProfileConfig | None = None
 
 
 @router.post("/{project_id}/reprocess", response_model=Project)
@@ -438,6 +526,9 @@ def reprocess(project_id: str, body: Reprocess | None = None) -> Project:
             s.lead_seconds = _clamp_pad(body.lead_seconds)
         if "tail_seconds" in body.model_fields_set:
             s.tail_seconds = _clamp_pad(body.tail_seconds)
+        if body.game_config is not None:
+            body.game_config.visual_rois = [r.clamped() for r in body.game_config.visual_rois]
+            s.game_config = body.game_config
         if body.min_len is not None and body.max_len is not None:
             s.min_len, s.max_len = _clamp_lengths(body.min_len, body.max_len)
         if body.target_clips is not None:
@@ -512,5 +603,34 @@ def export_batch(project_id: str):
                 if c.captions.words:
                     z.writestr(f"{stem}.srt", build_srt(c.captions))
     fname = f"{_safe_name(p.name)}_clips.zip"
+    return FileResponse(tmp_zip, media_type="application/zip", filename=fname,
+                        background=BackgroundTask(lambda: tmp_zip.unlink(missing_ok=True)))
+
+
+@router.get("/{project_id}/export/premiere")
+def export_premiere(project_id: str):
+    """Zip a source-based CMX 3600 EDL plus SRT sidecars for desktop editing."""
+    p = store.get(project_id)
+    if not p:
+        raise HTTPException(404, "project not found")
+    if not p.source:
+        raise HTTPException(409, "project source is missing")
+    ready = ready_clips_for_edl(p)
+    if not ready:
+        raise HTTPException(409, "no rendered clips to export yet")
+
+    settings = get_settings()
+    source_file = settings.media_dir / p.source.path
+    fd, zip_name = tempfile.mkstemp(suffix=".zip")
+    os.close(fd)
+    tmp_zip = Path(zip_name)
+    edl_name = f"{_safe_name(p.name)}.edl"
+    with zipfile.ZipFile(tmp_zip, "w", zipfile.ZIP_STORED) as z:
+        z.writestr(edl_name, build_cmx3600(p, source_file=source_file, clips=ready))
+        for i, c in enumerate(ready, 1):
+            if c.captions.words:
+                stem = f"{i:02d}_{c.score:02d}_{_safe_name(c.title)}"
+                z.writestr(f"captions/{stem}.srt", build_srt(c.captions))
+    fname = f"{_safe_name(p.name)}_premiere_edl.zip"
     return FileResponse(tmp_zip, media_type="application/zip", filename=fname,
                         background=BackgroundTask(lambda: tmp_zip.unlink(missing_ok=True)))

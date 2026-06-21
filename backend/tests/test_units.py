@@ -18,8 +18,8 @@ from pathlib import Path
 # Isolate the learning DB before anything imports settings.
 os.environ.setdefault("CLIPFORGE_DATA_DIR", tempfile.mkdtemp(prefix="clipforge-test-"))
 
-from app.models import (Clip, ClipStatus, DetectedEvent, ImportSettings,
-                        Platform, Project, ProjectStatus, Reframe,
+from app.models import (Clip, ClipStatus, DetectedEvent, GameProfileConfig,
+                        ImportSettings, Platform, Project, ProjectStatus, Reframe,
                         ReframeKeyframe, SourceMedia, Transcript, Word)
 from app.pipeline import captionize, render
 from app.pipeline import captions as C
@@ -79,6 +79,56 @@ def test_srt_output_format():
     assert srt.startswith("1\n00:00:00,000 --> 00:00:00,900\nHallo Welt")
     assert _srt_ts(1.9996) == "00:00:02,000"
     assert _srt_ts(59.9996) == "00:01:00,000"
+
+
+def test_premiere_edl_uses_source_timecodes():
+    from app.pipeline.nle_export import build_cmx3600, timecode
+
+    p = Project(
+        name="EDL Test",
+        source=SourceMedia(filename="source.mp4", path="proj/source.mp4", fps=30),
+        clips=[
+            Clip(start=10.0, end=15.0, title="First", score=91, export_url="/media/a.mp4"),
+            Clip(start=30.0, end=33.0, title="Second", score=72, export_url="/media/b.mp4"),
+        ],
+    )
+    edl = build_cmx3600(p, source_file="D:/clips/source.mp4")
+    assert timecode(10.0, 30) == "00:00:10:00"
+    assert "00:00:10:00 00:00:15:00 00:00:00:00 00:00:05:00" in edl
+    assert "* SOURCE FILE: D:/clips/source.mp4" in edl
+
+
+def test_premiere_edl_record_and_source_durations_match_to_the_frame():
+    """Fractional-second boundaries must not drift the record timeline against
+    the source frames — every event's src and rec spans must be frame-equal."""
+    from app.pipeline.nle_export import build_cmx3600
+
+    fps = 30
+    # Boundaries chosen so naive float accumulation would round differently
+    # for the record timeline than for the source in/out frames.
+    p = Project(
+        name="Drift",
+        source=SourceMedia(filename="s.mp4", path="proj/s.mp4", fps=fps),
+        clips=[
+            Clip(start=0.017, end=2.034, title="A", score=80, export_url="/media/a.mp4"),
+            Clip(start=5.051, end=7.069, title="B", score=70, export_url="/media/b.mp4"),
+            Clip(start=9.083, end=10.099, title="C", score=60, export_url="/media/c.mp4"),
+        ],
+    )
+    edl = build_cmx3600(p)
+
+    def tc_to_frames(tc: str) -> int:
+        hh, mm, ss, ff = (int(x) for x in tc.split(":"))
+        return ((hh * 60 + mm) * 60 + ss) * fps + ff
+
+    prev_rec_out = 0
+    for line in edl.splitlines():
+        parts = line.split()
+        if len(parts) >= 8 and parts[0].isdigit() and parts[2] == "V":
+            si, so, ri, ro = (tc_to_frames(t) for t in parts[-4:])
+            assert so - si == ro - ri          # src span == rec span (no drift)
+            assert ri == prev_rec_out          # record timeline is gapless
+            prev_rec_out = ro
 
 
 def test_spa_fallback_serves_index_for_client_routes(tmp_path=None):
@@ -398,6 +448,34 @@ def test_whisperx_diarization_constructor_supports_new_and_old_token_api():
             sys.modules["whisperx.diarize"] = old_child
 
 
+def test_german_transcription_prompt_is_optional_and_backward_compatible():
+    from app.providers import transcribe as T
+
+    old_get = T.get_settings
+    T.get_settings = lambda: _settings(german_gaming_prompt="Deutsch Gaming Prompt")
+
+    class OldEngine:
+        def __init__(self):
+            self.calls = []
+
+        def transcribe(self, audio, **kwargs):
+            self.calls.append(kwargs)
+            if "initial_prompt" in kwargs:
+                raise TypeError("unexpected keyword initial_prompt")
+            return "segments", "info"
+
+    try:
+        assert T._initial_prompt("de") == "Deutsch Gaming Prompt"
+        assert T._initial_prompt("en") is None
+        engine = OldEngine()
+        assert T._transcribe_with_prompt(engine, "audio.wav", language="de",
+                                         initial_prompt="Prompt") == ("segments", "info")
+        assert "initial_prompt" in engine.calls[0]
+        assert "initial_prompt" not in engine.calls[-1]
+    finally:
+        T.get_settings = old_get
+
+
 # --------------------------------------------------------------------------- #
 # GPU encoding gating — never try NVENC without a real GPU
 # --------------------------------------------------------------------------- #
@@ -464,6 +542,137 @@ def test_aspect_dims():
     assert ImportSettings(aspect="1:1").dims() == (1080, 1080)
     assert ImportSettings(aspect="4:5").dims() == (1080, 1350)
     assert ImportSettings(aspect="bogus").dims() == (1080, 1920)  # safe default
+
+
+def test_game_config_form_parser_matches_ui_payload():
+    """The Upload screen sends detection_mode + newline/comma-joined cue lists;
+    the form parser must turn them into a valid GameProfileConfig (and clamp
+    ROIs), defaulting the lists the UI leaves blank."""
+    from app.api.routes_projects import _game_config_from_form
+
+    cfg = _game_config_from_form(
+        detection_mode="hybrid",
+        visual_rois_json='[{"x": -0.5, "y": 0.1, "w": 2, "h": 0.2}]',
+        visual_text_cues="VICTORY\nELIMINATED",
+        reference_audio_files="",
+        vlm_visual_prompts="kill feed, victory screen",
+        audio_prompts="ace celebration, crowd hype",
+        audio_negative_prompts="",
+    )
+    assert cfg.detection_mode == "hybrid"
+    assert cfg.audio_prompts == ["ace celebration", "crowd hype"]
+    assert cfg.visual_text_cues == ["VICTORY", "ELIMINATED"]
+    assert cfg.vlm_visual_prompts == ["kill feed", "victory screen"]
+    # Blank negatives fall back to the built-in defaults, not an empty list.
+    assert cfg.audio_negative_prompts
+    # ROI is clamped into 0..1.
+    roi = cfg.visual_rois[0]
+    assert roi.x == 0.0 and 0.0 <= roi.w <= 1.0
+
+    # Unknown mode is coerced to the safe default.
+    bad = _game_config_from_form(
+        detection_mode="bogus", visual_rois_json="", visual_text_cues="",
+        reference_audio_files="", vlm_visual_prompts="", audio_prompts="",
+        audio_negative_prompts="")
+    assert bad.detection_mode == "zero_shot"
+
+
+def test_game_profile_config_defaults_and_roi_clamp():
+    cfg = GameProfileConfig(visual_rois=[{"x": -1, "y": 0.9, "w": 2, "h": 0.5}])
+    roi = cfg.visual_rois[0].clamped()
+    assert cfg.audio_negative_prompts
+    assert "kill feed" in cfg.vlm_visual_prompts
+    assert roi.x == 0.0 and roi.w == 1.0
+    assert 0.0 <= roi.y <= 1.0 and roi.y + roi.h <= 1.0
+
+
+def test_detection_mode_manual_skips_zero_shot_audio_events():
+    """detection_mode='manual' must disable the zero-shot CLAP sweep, while
+    'zero_shot'/'hybrid' still run it. Guards against the field being dead code."""
+    from app.providers import detect_gameplay as G
+    from app.models import ImportSettings, GameProfileConfig
+
+    calls = []
+    orig = G.audio_events_mod.find_events
+    G.audio_events_mod.find_events = lambda *a, **k: calls.append(1) or []
+    try:
+        manual = ImportSettings(use_audio_events=True,
+                                game_config=GameProfileConfig(detection_mode="manual"))
+        assert G._audio_events("a.wav", 30.0, manual) == []
+        assert calls == []  # zero-shot sweep was skipped
+
+        auto = ImportSettings(use_audio_events=True,
+                              game_config=GameProfileConfig(detection_mode="zero_shot"))
+        G._audio_events("a.wav", 30.0, auto)
+        assert calls == [1]  # zero-shot sweep ran
+    finally:
+        G.audio_events_mod.find_events = orig
+
+
+def test_hybrid_detection_mode_raises_clap_threshold():
+    """'hybrid' runs the auto sweep but more conservatively than 'zero_shot',
+    so it isn't a silent alias — the threshold passed to find_events is higher."""
+    from app.providers import detect_gameplay as G
+    from app.models import ImportSettings, GameProfileConfig
+
+    seen = {}
+    orig = G.audio_events_mod.find_events
+    G.audio_events_mod.find_events = lambda *a, **k: seen.update(k) or []
+    try:
+        zs = ImportSettings(use_audio_events=True,
+                            game_config=GameProfileConfig(detection_mode="zero_shot"))
+        G._audio_events("a.wav", 30.0, zs)
+        zs_thr = seen["threshold"]
+        hy = ImportSettings(use_audio_events=True,
+                            game_config=GameProfileConfig(detection_mode="hybrid"))
+        G._audio_events("a.wav", 30.0, hy)
+        assert seen["threshold"] > zs_thr
+    finally:
+        G.audio_events_mod.find_events = orig
+
+
+def test_detector_failures_surface_warnings():
+    """A crashing CLAP/OCR detector must record a UI warning instead of silently
+    returning [] with no explanation."""
+    from app.providers import detect_gameplay as G
+    from app.models import ImportSettings, GameProfileConfig
+
+    def _boom(*a, **k):
+        raise RuntimeError("model missing")
+
+    warnings: list[str] = []
+    orig = G.audio_events_mod.find_events
+    G.audio_events_mod.find_events = _boom
+    try:
+        st = ImportSettings(use_audio_events=True,
+                            game_config=GameProfileConfig(detection_mode="zero_shot"))
+        assert G._audio_events("a.wav", 30.0, st, warnings_out=warnings) == []
+        assert any("CLAP" in w for w in warnings)
+        # deduped: a second failure does not append a duplicate
+        G._audio_events("a.wav", 30.0, st, warnings_out=warnings)
+        assert len(warnings) == 1
+    finally:
+        G.audio_events_mod.find_events = orig
+
+
+def test_project_warnings_are_structured_and_back_compatible():
+    """Notices carry a severity for the UI; legacy/raw strings (stored JSON,
+    older code) are coerced to warn-level so nothing breaks."""
+    from app.models import Project, Notice
+
+    p = Project(name="W")
+    p.add_warning("render failed", severity="warn", code="render_failed")
+    p.add_warning("render failed")  # duplicate message → ignored
+    p.add_warning("no speech", severity="error", code="synthetic_transcript")
+    assert [n.message for n in p.warnings] == ["render failed", "no speech"]
+    assert p.warnings[0].severity == "warn" and p.warnings[1].severity == "error"
+    assert all(isinstance(n, Notice) for n in p.warnings)
+
+    # Legacy plain-string list (e.g. an old stored project) is coerced.
+    legacy = Project.model_validate({"name": "L", "warnings": ["old string warning"]})
+    assert isinstance(legacy.warnings[0], Notice)
+    assert legacy.warnings[0].message == "old string warning"
+    assert legacy.warnings[0].severity == "warn"
 
 
 def test_hashtags_talking_vs_gameplay():
@@ -759,6 +968,50 @@ def test_status_ws_reports_missing_project():
         assert ws.receive_json() == {"error": "project not found"}
 
 
+def test_export_premiere_endpoint_zips_edl_and_srts():
+    """Integration: the premiere export returns a zip carrying a CMX 3600 EDL
+    and per-clip SRT sidecars built from the project's ready clips."""
+    import io
+    import zipfile
+    from starlette.testclient import TestClient
+    from app import store
+    from app.main import create_app
+    from app.models import CaptionSet, CaptionWord
+
+    store.init_db()
+    caps = CaptionSet(words=[CaptionWord(t=0.0, d=1.0, text="Hello"),
+                            CaptionWord(t=1.0, d=1.0, text="world")])
+    p = Project(
+        id="proj_edl",
+        status=ProjectStatus.ready,
+        source=SourceMedia(filename="src.mp4", path="proj_edl/src.mp4", fps=30),
+        clips=[
+            Clip(start=10.0, end=15.0, title="First", score=91,
+                 export_url="/media/proj_edl/a.mp4", captions=caps),
+            Clip(start=30.0, end=33.0, title="Second", score=72,
+                 export_url="/media/proj_edl/b.mp4", captions=caps),
+        ],
+    )
+    store.save(p)
+    c = TestClient(create_app(), raise_server_exceptions=False)
+
+    r = c.get(f"/api/projects/{p.id}/export/premiere")
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "application/zip"
+    zf = zipfile.ZipFile(io.BytesIO(r.content))
+    names = zf.namelist()
+    edl = next(n for n in names if n.endswith(".edl"))
+    assert "TITLE:" in zf.read(edl).decode()
+    assert "00:00:10:00 00:00:15:00 00:00:00:00 00:00:05:00" in zf.read(edl).decode()
+    assert sum(1 for n in names if n.startswith("captions/") and n.endswith(".srt")) == 2
+
+    # A project with no rendered clips is a 409, not a broken zip.
+    empty = Project(id="proj_edl_empty", status=ProjectStatus.ready,
+                    source=SourceMedia(filename="s.mp4", path="proj_edl_empty/s.mp4"))
+    store.save(empty)
+    assert c.get(f"/api/projects/{empty.id}/export/premiere").status_code == 409
+
+
 def test_pause_resume_project_endpoint():
     from starlette.testclient import TestClient
     from app import store
@@ -932,6 +1185,38 @@ def test_corroboration_requires_same_moment_cluster():
     assert soft.features["supporting_audio"] == 1.0
 
 
+def test_dedupe_events_keeps_highest_confidence_on_ties():
+    """When the same label fires at the same instant from a ROI crop (0.9) and
+    the full frame (0.8), the survivor must be the stronger detection."""
+    from app.providers.detect_ocr import OcrEvent, dedupe_events
+
+    out = dedupe_events([
+        OcrEvent(t=10.0, label="kill", text="full", confidence=0.8),
+        OcrEvent(t=10.0, label="kill", text="roi", confidence=0.9),
+    ])
+    assert len(out) == 1
+    assert out[0].confidence == 0.9 and out[0].text == "roi"
+
+
+def test_reference_audio_files_resolve_to_existing_cue_templates(tmp_path=None):
+    """game_config.reference_audio_files must resolve to on-disk templates
+    (so the field is actually consumed), and silently skip missing ones."""
+    import tempfile
+    from pathlib import Path
+    from app.models import ImportSettings, GameProfileConfig
+    from app.providers.detect_gameplay import _reference_cue_files
+
+    base = Path(tempfile.mkdtemp()) / "game_cues"
+    (base / "valorant").mkdir(parents=True)
+    (base / "valorant" / "ace.wav").write_bytes(b"RIFF")  # exists
+    st = ImportSettings(game_profile="valorant", game_config=GameProfileConfig(
+        reference_audio_files=["ace.wav", "missing.wav", "notes.txt"]))
+    out = _reference_cue_files(st, base)
+    assert [p.name for p in out] == ["ace.wav"]  # missing + non-cue skipped
+    # No config / empty list → no templates.
+    assert _reference_cue_files(ImportSettings(), base) == []
+
+
 def test_only_accepted_events_are_shown_for_final_clips():
     from app.providers.detect_gameplay import GameplayClip, accepted_events_for_clips
 
@@ -1099,6 +1384,22 @@ def test_ocr_keyword_matching_finds_viral_markers():
     assert O.match_keywords("the quick brown fox", "generic", fuzzy=False) == []
 
 
+def test_ocr_menu_context_is_detected_but_not_highlighted():
+    from app.media.ffmpeg import MediaInfo
+    from app.providers import detect_gameplay as DG
+    from app.providers import detect_ocr as O
+    from app.providers.detect_ocr import OcrEvent
+
+    assert any(l == "menu" for l, _ in O.match_keywords("MAIN MENU SETTINGS", "generic"))
+    menu = OcrEvent(t=10.0, label="menu", text="main menu settings", confidence=0.9)
+    audio = [types.SimpleNamespace(t=12.0, label="excited_shouting", confidence=0.8, detail="CLAP")]
+    assert DG._suppress_audio_events_near_menu(audio, [menu]) == []
+
+    info = MediaInfo(duration=120, width=1920, height=1080, fps=30,
+                     has_audio=True, has_video=True, codec=None)
+    assert DG._ocr_clips([menu], info, ImportSettings(min_len=8, max_len=20)) == []
+
+
 def test_saved_visual_cues_extend_ocr_lexicon():
     from app import visual_cues
     from app.providers import detect_ocr as O
@@ -1177,6 +1478,46 @@ def test_paddle_text_accepts_ocr_result_objects():
 
     text = O._paddle_text(Reader(), "frame.png")
     assert "Sieg" in text and "Kopfschuss" in text and "Bombe gelegt" in text
+
+
+def test_ocr_reads_real_recognition_confidence():
+    """_*_read returns the engine's mean confidence; find_text_events should use
+    it instead of a fabricated constant when the backend reports scores."""
+    from app.providers import detect_ocr as O
+
+    # Paddle 3.x parallel rec_texts / rec_scores.
+    class P3:
+        def predict(self, _p):
+            return [{"rec_texts": ["VICTORY"], "rec_scores": [0.6]}]
+    text, conf = O._paddle_read(P3(), "f.png")
+    assert text == "VICTORY" and abs(conf - 0.6) < 1e-6
+
+    # Paddle 2.x [box,(text,conf)] tuples → mean of scores.
+    class P2:
+        def predict(self, _p):
+            raise AttributeError
+        def ocr(self, _p, cls=False):
+            return [[[[0, 0], ("ACE", 0.8)], [[0, 1], ("KILL", 0.4)]]]
+    _t, c2 = O._paddle_read(P2(), "f.png")
+    assert abs(c2 - 0.6) < 1e-6
+
+    # EasyOCR detail=1 rows carry confidence at index 2.
+    class E:
+        def readtext(self, _p, detail=1, paragraph=False):
+            return [([[0, 0]], "Spike", 0.9), ([[0, 1]], "Plant", 0.5)]
+    _te, ce = O._easyocr_read(E(), "f.png")
+    assert abs(ce - 0.7) < 1e-6
+
+    # Unknown confidence (tesseract / detail=0) → 0.0 so the ROI prior kicks in.
+    class E0:
+        def readtext(self, _p, detail=1, paragraph=False):
+            raise RuntimeError("no detail")
+        # falls through to detail=0
+    # (detail=1 raises → detail=0 path returns 0.0)
+    class E0b:
+        def readtext(self, _p, detail=0, paragraph=False):
+            return ["plain"]
+    assert O._easyocr_read(E0b(), "f.png") == ("plain", 0.0)
 
 
 def test_ocr_reader_falls_back_to_easyocr_when_paddle_fails():
@@ -1624,6 +1965,80 @@ def test_audio_event_reduce_and_bonus():
     assert gated is not None and gated[1] == "crowd cheering"
 
 
+def test_clap_reduce_threshold_boundaries():
+    """Lock each magic threshold in the CLAP reducers so a typo that floods or
+    starves audio events is caught. Boundaries: pos floor 0.20 / range 0.28,
+    neg floor 0.22 / range 0.28, pos-neg margin 0.06, risk gate max(0.45,…)."""
+    from app.providers import audio_events as AE
+
+    # Positive floor: just below 0.20 → no signal; at 0.20 → hype 0.0.
+    assert AE.reduce_clap_similarities({"cheer": 0.199}) is None
+    at_floor = AE.reduce_clap_similarities({"cheer": 0.20})
+    assert at_floor is not None and abs(at_floor[0]) < 1e-9
+    # Full range: 0.20 + 0.28 = 0.48 → hype clamps to 1.0.
+    assert abs(AE.reduce_clap_similarities({"cheer": 0.48})[0] - 1.0) < 1e-9
+
+    # Negative floor 0.22 / range 0.28.
+    assert AE.reduce_negative_similarities({"menu": 0.219}) is None
+    assert abs(AE.reduce_negative_similarities({"menu": 0.22})[0]) < 1e-9
+    assert abs(AE.reduce_negative_similarities({"menu": 0.50})[0] - 1.0) < 1e-9
+
+    # Pos/neg margin gate (0.06): pos 0.42 vs neg 0.37 → margin 0.05 < 0.06 → reject.
+    assert AE.reduce_clap_window({"cheer": 0.42}, {"menu": 0.37}) is None
+    # margin exactly 0.06 passes the margin gate.
+    assert AE.reduce_clap_window({"cheer": 0.43}, {"menu": 0.37}) is not None
+
+    # Risk gate: margin passes (0.74-0.68=0.06) but the negative risk saturates
+    # to ≥ max(0.45, hype*0.85), so the window is still rejected.
+    assert AE.reduce_clap_window({"cheer": 0.74}, {"menu": 0.68}) is None
+    # No negatives at all → positive passes through unchanged.
+    pure = AE.reduce_clap_window({"cheer": 0.40}, {})
+    assert pure is not None and pure[1] == "cheer"
+
+
+def test_event_score_forwards_custom_audio_prompts_to_clap():
+    """The per-clip CLAP bonus must honour a project's custom audio_prompts,
+    not just the discovery pass — otherwise the config is a no-op on scoring."""
+    from app.providers import audio_events as AE
+
+    seen = {}
+
+    def fake_clap_score(seg_path, *, profile=None, language=None,
+                        positive_prompts=None, negative_prompts=None):
+        seen["pos"] = positive_prompts
+        seen["neg"] = negative_prompts
+        return (0.7, "custom cue")
+
+    old_avail = AE.available
+    old_clap_score = AE._clap_score
+    old_settings = AE.get_settings
+    old_load = AE._load
+    AE.available = lambda: True
+    AE._clap_score = fake_clap_score
+    AE._load = lambda: None  # skip PANNs so we reach the CLAP branch
+    AE.get_settings = lambda: _settings(has_audio_events=False, has_clap=True)
+    try:
+        from app.media import ffmpeg
+        old_run = ffmpeg.run
+        ffmpeg.run = lambda *a, **k: None
+        try:
+            res = AE.event_score("a.wav", 1.0, 3.0, profile="valorant",
+                                 language="en",
+                                 positive_prompts=["German ace celebration"],
+                                 negative_prompts=["inventory click loop"])
+        finally:
+            ffmpeg.run = old_run
+    finally:
+        AE.available = old_avail
+        AE._clap_score = old_clap_score
+        AE._load = old_load
+        AE.get_settings = old_settings
+
+    assert res == (0.7, "custom cue")
+    assert seen["pos"] == ["German ace celebration"]
+    assert seen["neg"] == ["inventory click loop"]
+
+
 def test_clap_prompts_include_game_and_german_context():
     from app.providers import audio_events as AE
 
@@ -1633,6 +2048,14 @@ def test_clap_prompts_include_game_and_german_context():
     assert "valorant" in joined_pos and "spike" in joined_pos
     assert "german streamer" in joined_pos
     assert "lobby" in joined_neg and "menu" in joined_neg
+
+    pos2, neg2 = AE._prompt_sets(
+        "generic", "de",
+        positive_prompts=["German ace celebration"],
+        negative_prompts=["inventory click loop"],
+    )
+    assert "German ace celebration" in pos2["custom cue"]
+    assert "inventory click loop" in neg2["custom non-highlight"]
 
 
 def test_clap_loader_hides_server_args_and_restores_argv():
@@ -1798,21 +2221,29 @@ def test_orchestrator_passes_source_path_to_vlm_scorer():
     calls = []
 
     def fake_score_visuals(src_path, spans, *, budget=45.0, max_workers=2,
-                           n_frames=3, timeout=30.0, lang="en"):
-        calls.append((src_path, spans, budget, max_workers, n_frames, timeout, lang))
+                           n_frames=3, timeout=30.0, lang="en", cues=None):
+        calls.append((src_path, spans, budget, max_workers, n_frames, timeout, lang, cues))
         return {0: (0.8, "strong frames")}
 
     try:
         vlm.available = lambda: True
         vlm.score_visuals = fake_score_visuals
         out = O._score_visual_reads("source.mp4", [Clip(start=1.0, end=2.5)],
-                                    lang="de")
+                                    lang="de", cues=["kill feed"])
     finally:
         vlm.available = old_available
         vlm.score_visuals = old_score_visuals
 
     assert out == {0: (0.8, "strong frames")}
-    assert calls == [("source.mp4", [(1.0, 2.5)], 45.0, 1, 2, 30.0, "de")]
+    assert calls == [("source.mp4", [(1.0, 2.5)], 45.0, 1, 2, 30.0, "de", ["kill feed"])]
+
+
+def test_vlm_prompt_includes_project_visual_cues():
+    from app.providers import vlm
+    p = vlm._prompt_for("en", ["victory screen", "kill feed"])
+    assert "victory screen" in p and "kill feed" in p
+    # No cues → base rubric unchanged (no dangling "Watch especially").
+    assert "Watch especially" not in vlm._prompt_for("en", [])
 
 
 if __name__ == "__main__":

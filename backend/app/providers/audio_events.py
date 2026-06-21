@@ -212,26 +212,33 @@ def _load_clap():
     global _clap
     if _clap is not None:
         return _clap or None
-    try:
-        old_argv = sys.argv[:]
+    from .torch_guard import TORCH_LOAD_LOCK
+    # Serialize against the ASR loader: _load_clap_checkpoint may temporarily
+    # patch torch.load, and holding this shared lock keeps that window from
+    # racing any other thread's torch.load.
+    with TORCH_LOAD_LOCK:
+        if _clap is not None:  # another thread loaded while we waited
+            return _clap or None
         try:
-            # laion_clap imports training argparse helpers; hide uvicorn args.
-            sys.argv = [old_argv[0] if old_argv else "clipforge"]
-            import laion_clap
+            old_argv = sys.argv[:]
+            try:
+                # laion_clap imports training argparse helpers; hide uvicorn args.
+                sys.argv = [old_argv[0] if old_argv else "clipforge"]
+                import laion_clap
 
-            device = "cuda" if get_settings().device == "cuda" else "cpu"
-            model = laion_clap.CLAP_Module(enable_fusion=False, device=device)
-            _load_clap_checkpoint(model)
-            _clap = model
-            log.info("LAION-CLAP audio tagging loaded")
-        finally:
-            sys.argv = old_argv
-    except Exception as e:
-        # Catch only Exception, not BaseException, so KeyboardInterrupt/SystemExit
-        # during an interactive shutdown still propagate instead of silently
-        # disabling CLAP.
-        log.info("CLAP audio tagging unavailable (%s)", e)
-        _clap = False
+                device = "cuda" if get_settings().device == "cuda" else "cpu"
+                model = laion_clap.CLAP_Module(enable_fusion=False, device=device)
+                _load_clap_checkpoint(model)
+                _clap = model
+                log.info("LAION-CLAP audio tagging loaded")
+            finally:
+                sys.argv = old_argv
+        except Exception as e:
+            # Catch only Exception, not BaseException, so KeyboardInterrupt/
+            # SystemExit during an interactive shutdown still propagate instead
+            # of silently disabling CLAP.
+            log.info("CLAP audio tagging unavailable (%s)", e)
+            _clap = False
     return _clap or None
 
 
@@ -372,9 +379,12 @@ def _normalize_profile(profile: str | None) -> str:
     return _PROFILE_ALIAS.get(name, name)
 
 
-def _prompt_sets(profile: str | None = None, language: str | None = None
+def _prompt_sets(profile: str | None = None, language: str | None = None,
+                 positive_prompts: list[str] | tuple[str, ...] | None = None,
+                 negative_prompts: list[str] | tuple[str, ...] | None = None,
                  ) -> tuple[dict[str, tuple[str, ...]], dict[str, tuple[str, ...]]]:
     pos = {label: tuple(prompts) for label, prompts in CLAP_PROMPTS.items()}
+    neg = {label: tuple(prompts) for label, prompts in NEGATIVE_CLAP_PROMPTS.items()}
     name = _normalize_profile(profile)
     for label, prompts in GAME_CLAP_PROMPTS.get(name, {}).items():
         pos[label] = tuple(dict.fromkeys(pos.get(label, ()) + prompts))
@@ -390,7 +400,14 @@ def _prompt_sets(profile: str | None = None, language: str | None = None
                 "German streamer gasps in surprise",
                 "German voice shocked by a gameplay moment",
             )))
-    return pos, NEGATIVE_CLAP_PROMPTS
+    custom_pos = tuple(p.strip() for p in positive_prompts or () if p and p.strip())
+    custom_neg = tuple(p.strip() for p in negative_prompts or () if p and p.strip())
+    if custom_pos:
+        pos["custom cue"] = tuple(dict.fromkeys(pos.get("custom cue", ()) + custom_pos))
+    if custom_neg:
+        neg["custom non-highlight"] = tuple(
+            dict.fromkeys(neg.get("custom non-highlight", ()) + custom_neg))
+    return pos, neg
 
 
 def _flatten_prompts(groups: dict[str, tuple[str, ...]]) -> tuple[list[str], list[str]]:
@@ -411,7 +428,9 @@ def _group_prompt_scores(labels: list[str], values) -> dict[str, float]:
 
 
 def _clap_similarity_rows(paths: list[str], *, profile: str | None = None,
-                          language: str | None = None
+                          language: str | None = None,
+                          positive_prompts: list[str] | tuple[str, ...] | None = None,
+                          negative_prompts: list[str] | tuple[str, ...] | None = None,
                           ) -> list[tuple[dict[str, float], dict[str, float]]]:
     if not paths:
         return []
@@ -421,7 +440,9 @@ def _clap_similarity_rows(paths: list[str], *, profile: str | None = None,
     try:
         import numpy as np
 
-        pos_prompts, neg_prompts = _prompt_sets(profile, language)
+        pos_prompts, neg_prompts = _prompt_sets(
+            profile, language, positive_prompts=positive_prompts,
+            negative_prompts=negative_prompts)
         pos_labels, pos_texts = _flatten_prompts(pos_prompts)
         neg_labels, neg_texts = _flatten_prompts(neg_prompts)
         all_prompts = [*pos_texts, *neg_texts]
@@ -461,8 +482,13 @@ def _embedding_array(fn, values):
 
 
 def _clap_score(seg_path: str, *, profile: str | None = None,
-                language: str | None = None) -> tuple[float, str] | None:
-    rows = _clap_similarity_rows([seg_path], profile=profile, language=language)
+                language: str | None = None,
+                positive_prompts: list[str] | tuple[str, ...] | None = None,
+                negative_prompts: list[str] | tuple[str, ...] | None = None
+                ) -> tuple[float, str] | None:
+    rows = _clap_similarity_rows(
+        [seg_path], profile=profile, language=language,
+        positive_prompts=positive_prompts, negative_prompts=negative_prompts)
     if not rows:
         return None
     return reduce_clap_window(*rows[0])
@@ -471,7 +497,10 @@ def _clap_score(seg_path: str, *, profile: str | None = None,
 def find_events(wav_path: str, duration: float, *, window: float = 6.0,
                 hop: float = 3.0, threshold: float = 0.35,
                 limit: int = 20, profile: str | None = None,
-                language: str | None = None) -> list[AudioEvent]:
+                language: str | None = None,
+                positive_prompts: list[str] | tuple[str, ...] | None = None,
+                negative_prompts: list[str] | tuple[str, ...] | None = None
+                ) -> list[AudioEvent]:
     """Zero-shot CLAP search over audio windows.
 
     Returns highlight-like audio events (cheer/laugh/action/etc.) while filtering
@@ -515,7 +544,9 @@ def find_events(wav_path: str, duration: float, *, window: float = 6.0,
                 except Exception as e:
                     log.debug("CLAP window extract failed at %.1fs: %s", start, e)
             rows = _clap_similarity_rows([p for _, p in pairs],
-                                         profile=profile, language=language)
+                                         profile=profile, language=language,
+                                         positive_prompts=positive_prompts,
+                                         negative_prompts=negative_prompts)
 
         events: list[AudioEvent] = []
         for (t_mid, _path), row in zip(pairs, rows):
@@ -545,7 +576,10 @@ def find_events(wav_path: str, duration: float, *, window: float = 6.0,
 
 def event_score(wav_path: str, start: float, end: float, *,
                 profile: str | None = None,
-                language: str | None = None) -> tuple[float, str] | None:
+                language: str | None = None,
+                positive_prompts: list[str] | tuple[str, ...] | None = None,
+                negative_prompts: list[str] | tuple[str, ...] | None = None
+                ) -> tuple[float, str] | None:
     """(hype 0..1, reason) for a clip's audio span, or None.
 
     Uses PANNs when available, then CLAP as a zero-shot fallback. Reads only the
@@ -582,7 +616,9 @@ def event_score(wav_path: str, start: float, end: float, *,
                     if pann is not None:
                         return pann
             if get_settings().has_clap:
-                return _clap_score(str(seg), profile=profile, language=language)
+                return _clap_score(str(seg), profile=profile, language=language,
+                                   positive_prompts=positive_prompts,
+                                   negative_prompts=negative_prompts)
             return None
     except Exception as e:
         log.warning("audio-event scoring failed (%s)", e)

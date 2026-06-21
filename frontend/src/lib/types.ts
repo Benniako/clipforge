@@ -30,6 +30,12 @@ export interface DetectedEvent {
   confidence: number;
 }
 
+export interface Notice {
+  message: string;
+  severity: "info" | "warn" | "error" | string;
+  code?: string | null;
+}
+
 export interface CaptionSet {
   id: string;
   words: CaptionWord[];
@@ -50,6 +56,16 @@ export interface Rect {
   y: number;
   w: number;
   h: number;
+}
+
+export interface GameProfileConfig {
+  detection_mode: "zero_shot" | "manual" | "hybrid" | string;
+  visual_rois?: Rect[];
+  visual_text_cues?: string[];
+  reference_audio_files?: string[];
+  vlm_visual_prompts?: string[];
+  audio_prompts?: string[];
+  audio_negative_prompts?: string[];
 }
 
 export type Layout = "fill" | "center" | "split" | "framed";
@@ -140,6 +156,7 @@ export interface ImportSettings {
   auto_length: boolean;
   lead_seconds: number | null;
   tail_seconds: number | null;
+  game_config: GameProfileConfig;
 }
 
 export interface Montage {
@@ -168,7 +185,7 @@ export interface Project {
   content_type: string | null;
   facecam: Rect | null;
   events: DetectedEvent[];
-  warnings: string[];
+  warnings: Notice[];
   error: string | null;
   created_at: number;
   updated_at: number;
@@ -190,7 +207,7 @@ export interface StatusPayload {
   id: string;
   status: ProjectStatus;
   error: string | null;
-  warnings: string[];
+  warnings: Notice[];
   content_type: string | null;
   settings: Pick<ImportSettings, "power_mode" | "aspect">;
   system?: {

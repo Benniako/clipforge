@@ -82,6 +82,14 @@ _GW_FACTOR = {
 # (creator-platform data, 2026) — the reaction IS the content.
 REACTION_WEIGHT = 0.2
 CONFIRM_WINDOW = 3.0
+MENU_CONTEXT_WINDOW = 5.0
+MENU_OCR_LABELS = {"menu"}
+MENU_OCR_WORDS = {
+    "settings", "inventory", "main menu", "menu", "lobby", "store", "shop",
+    "collection", "loadout", "agent select", "matchmaking", "einstellungen",
+    "inventar", "hauptmenu", "hauptmenue", "hauptmenü", "menue", "menü",
+    "laden", "sammlung", "ausruestung", "ausrüstung", "agenten",
+}
 
 
 def _label_family(label: str | None) -> str:
@@ -227,7 +235,8 @@ def _timing_window(settings: ImportSettings, profile: dict) -> tuple[float, floa
 
 
 def _find_ocr_events(src_path: str, info: MediaInfo, settings: ImportSettings,
-                     *, focus_times: list[float] | None = None) -> list:
+                     *, focus_times: list[float] | None = None,
+                     warnings_out: list | None = None) -> list:
     if not settings.use_ocr:
         return []
     try:
@@ -235,13 +244,23 @@ def _find_ocr_events(src_path: str, info: MediaInfo, settings: ImportSettings,
             src_path, info, settings, focus_times=focus_times)
     except Exception as e:
         log.warning("ocr detection failed: %s", e)
+        _add_warning(warnings_out,
+                     "On-screen text detection (OCR) crashed, so no on-screen "
+                     "events were found. Check the OCR backend install.")
         return []
+
+
+def _add_warning(warnings_out: list | None, msg: str) -> None:
+    """Record a non-fatal detector failure for the UI (deduped)."""
+    if warnings_out is not None and msg not in warnings_out:
+        warnings_out.append(msg)
 
 
 def detect_gameplay(src_path: str, info: MediaInfo, settings: ImportSettings,
                     *, weights: dict[str, float] | None = None,
                     wav_path: str | None = None,
-                    events_out: list | None = None) -> list[GameplayClip]:
+                    events_out: list | None = None,
+                    warnings_out: list | None = None) -> list[GameplayClip]:
     """Return intensity-ranked highlight clips for gameplay footage.
 
     ``weights`` lets the caller pass personalised audio-feature weights (from the
@@ -262,7 +281,8 @@ def detect_gameplay(src_path: str, info: MediaInfo, settings: ImportSettings,
     ocr_events: list = []
     defer_ocr = bool(settings.use_ocr and info.has_audio)
     if settings.use_ocr and not defer_ocr:
-        ocr_events = _find_ocr_events(src_path, info, settings)
+        ocr_events = _find_ocr_events(src_path, info, settings,
+                                      warnings_out=warnings_out)
 
     if not info.has_audio:
         clips = _uniform_fallback(info, settings)
@@ -275,7 +295,8 @@ def detect_gameplay(src_path: str, info: MediaInfo, settings: ImportSettings,
     if wav_path is not None:
         times, rms = _load_rms(wav_path)
         cue_events = _cue_events(wav_path, settings)
-        audio_window_events = _audio_events(wav_path, info.duration, settings)
+        audio_window_events = _audio_events(wav_path, info.duration, settings,
+                                            warnings_out=warnings_out)
     else:
         with tempfile.TemporaryDirectory() as tmp:
             wav = Path(tmp) / "a.wav"
@@ -286,7 +307,8 @@ def detect_gameplay(src_path: str, info: MediaInfo, settings: ImportSettings,
                 return _uniform_fallback(info, settings)
             times, rms = _load_rms(str(wav))
             cue_events = _cue_events(str(wav), settings)
-            audio_window_events = _audio_events(str(wav), info.duration, settings)
+            audio_window_events = _audio_events(str(wav), info.duration, settings,
+                                                warnings_out=warnings_out)
 
     profile = get_profile(settings.game_profile)
     if defer_ocr:
@@ -300,8 +322,11 @@ def detect_gameplay(src_path: str, info: MediaInfo, settings: ImportSettings,
             except Exception as e:
                 log.warning("ocr focus peaks failed: %s", e)
         ocr_events = _find_ocr_events(src_path, info, settings,
-                                      focus_times=focus_times)
+                                      focus_times=focus_times,
+                                      warnings_out=warnings_out)
 
+    audio_window_events = _suppress_audio_events_near_menu(
+        audio_window_events, ocr_events)
     _record_events(events_out, cue_events, ocr_events, audio_window_events)
 
     if times is None:
@@ -497,6 +522,33 @@ def _record_events(events_out: list | None, cue_events: list,
     events_out.sort(key=lambda e: e.t)
 
 
+def _is_menu_ocr_event(event) -> bool:
+    label = str(getattr(event, "label", "") or "").lower()
+    if label in MENU_OCR_LABELS:
+        return True
+    detail = str(getattr(event, "text", "") or getattr(event, "detail", "") or "").lower()
+    return any(word in detail for word in MENU_OCR_WORDS)
+
+
+def _suppress_audio_events_near_menu(audio_events: list, ocr_events: list,
+                                     *, window: float = MENU_CONTEXT_WINDOW) -> list:
+    """Drop generic CLAP hits when OCR says the player is in menus/lobbies."""
+    if not audio_events or not ocr_events:
+        return audio_events
+    menu_times = [float(e.t) for e in ocr_events if _is_menu_ocr_event(e)]
+    if not menu_times:
+        return audio_events
+    kept = []
+    for e in audio_events:
+        t = float(e.t)
+        if any(abs(t - mt) <= window for mt in menu_times):
+            log.info("suppressed CLAP event %s at %.1fs near menu OCR",
+                     getattr(e, "label", "unknown"), t)
+            continue
+        kept.append(e)
+    return kept
+
+
 # On-screen markers that mean the moment already happened — open a little before
 # so the play that earned the banner is in-frame, with less tail.
 def _ocr_clips(events: list, info: MediaInfo, settings: ImportSettings, *,
@@ -510,6 +562,8 @@ def _ocr_clips(events: list, info: MediaInfo, settings: ImportSettings, *,
         tail = max(target - lead, 2.0)
     out: list[GameplayClip] = []
     for e in events:
+        if _is_menu_ocr_event(e):
+            continue
         start = max(0.0, e.t - lead)
         end = min(info.duration, e.t + tail)
         if end - start < settings.min_len:
@@ -569,7 +623,8 @@ def _cue_dir(profile_name: str) -> str:
 
 
 def _cue_events(wav_path: str, settings: ImportSettings) -> list:
-    """Match reference game sounds from <data>/game_cues/<profile>/ (+ /common)."""
+    """Match reference game sounds from <data>/game_cues/<profile>/ (+ /common),
+    plus any per-project reference_audio_files named in the game config."""
     if not getattr(settings, "use_cues", True):
         return []
     base = get_settings().data_dir / "game_cues"
@@ -579,23 +634,78 @@ def _cue_events(wav_path: str, settings: ImportSettings) -> list:
             events += detect_cues.find_events(wav_path, base / sub)
         except Exception as e:
             log.warning("cue matching failed for %s: %s", sub, e)
+    extra = _reference_cue_files(settings, base)
+    if extra:
+        try:
+            events += detect_cues.match_templates(wav_path, extra)
+        except Exception as e:
+            log.warning("reference-audio cue matching failed: %s", e)
     return events
 
 
-def _audio_events(wav_path: str, duration: float, settings: ImportSettings) -> list:
+def _reference_cue_files(settings: ImportSettings, base) -> list:
+    """Resolve game_config.reference_audio_files to on-disk cue templates.
+
+    Entries may be a bare filename, a "<profile>/<file>" path under the cue
+    store, or an absolute/relative path. Missing files are skipped (safe no-op).
+    """
+    from pathlib import Path
+    cfg = getattr(settings, "game_config", None)
+    names = getattr(cfg, "reference_audio_files", None) if cfg else None
+    if not names:
+        return []
+    prof_dir = _cue_dir(settings.game_profile)
+    out: list = []
+    seen: set = set()
+    for name in names:
+        name = (name or "").strip()
+        if not name:
+            continue
+        for cand in (Path(name), base / name, base / prof_dir / name,
+                     base / "common" / name):
+            try:
+                if cand.is_file():
+                    key = str(cand.resolve())
+                    if key not in seen:
+                        seen.add(key)
+                        out.append(cand)
+                    break
+            except OSError:
+                continue
+    return out
+
+
+def _audio_events(wav_path: str, duration: float, settings: ImportSettings,
+                  *, warnings_out: list | None = None) -> list:
     if not settings.use_audio_events:
+        return []
+    cfg = getattr(settings, "game_config", None)
+    # "manual" detection relies solely on the user's own cues (reference audio
+    # + on-screen text), so the zero-shot CLAP sweep is intentionally skipped.
+    detection_mode = getattr(cfg, "detection_mode", "zero_shot")
+    if detection_mode == "manual":
         return []
     try:
         mode = getattr(settings.power_mode, "value", str(settings.power_mode))
         hop = 4.0 if mode in ("max_gpu", "quality") else 5.0
         window = 5.0 if mode == "max_gpu" else 6.0
         threshold = 0.55 if mode == "quality" else 0.58
+        # "hybrid" pairs the user's own cues with the auto sweep, so it only
+        # wants the strong auto-hits — raise the bar to cut false positives the
+        # manual cues would otherwise have to compete with.
+        if detection_mode == "hybrid":
+            threshold += 0.04
         return audio_events_mod.find_events(
             wav_path, duration, window=window, hop=hop, threshold=threshold,
             limit=max(settings.target_clips, 6), profile=settings.game_profile,
-            language=settings.language)
+            language=settings.language,
+            positive_prompts=getattr(cfg, "audio_prompts", None),
+            negative_prompts=getattr(cfg, "audio_negative_prompts", None))
     except Exception as e:
         log.warning("CLAP audio event search failed: %s", e)
+        _add_warning(warnings_out,
+                     "Audio-event detection (CLAP) crashed, so no audio "
+                     "highlights were found. Check the audio model install.")
         return []
 
 

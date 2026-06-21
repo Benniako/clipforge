@@ -214,6 +214,139 @@ h3 {
   color: var(--muted);
 }
 
+.view-switch {
+  padding-bottom: 0;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.swipe-review {
+  min-height: calc(100vh - 72px);
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-rows: auto 1fr auto;
+  gap: 16px;
+  padding: 18px 24px 24px;
+  align-items: center;
+}
+
+.swipe-topbar {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}
+
+.swipe-card {
+  justify-self: center;
+  align-self: center;
+  width: min(50vh, 420px);
+  max-width: calc(100vw - 148px);
+  aspect-ratio: 9 / 16;
+  border-radius: 8px;
+  overflow: hidden;
+  position: relative;
+  background: #05070b;
+  border: 1px solid var(--border-2);
+  box-shadow: 0 22px 70px rgba(0, 0, 0, 0.45);
+  touch-action: none;
+  transition: transform 0.12s ease;
+}
+
+.swipe-card video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.swipe-gradient {
+  position: absolute;
+  inset: 45% 0 0;
+  background: linear-gradient(transparent, rgba(0, 0, 0, 0.84));
+  pointer-events: none;
+}
+
+.swipe-overlay {
+  position: absolute;
+  left: 18px;
+  right: 18px;
+  bottom: 18px;
+  display: flex;
+  gap: 12px;
+  align-items: flex-end;
+  pointer-events: none;
+}
+
+.swipe-overlay h2 {
+  font-size: 20px;
+  line-height: 1.14;
+  letter-spacing: 0;
+  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.65);
+}
+
+.swipe-overlay p {
+  margin: 6px 0 8px;
+  color: #d9deea;
+  font-size: 13px;
+}
+
+.swipe-score {
+  min-width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  background: rgba(5, 7, 11, 0.74);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  display: grid;
+  place-items: center;
+  font-weight: 900;
+  font-size: 22px;
+}
+
+.swipe-reasons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.swipe-actions {
+  grid-row: 2 / 3;
+  grid-column: 2 / 3;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 132px;
+}
+
+.preload-video {
+  display: none;
+}
+
+@media (max-width: 760px) {
+  .swipe-review {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto 1fr auto;
+    padding: 12px;
+  }
+  .swipe-card {
+    width: min(72vh, calc(100vw - 24px));
+    max-width: calc(100vw - 24px);
+  }
+  .swipe-actions {
+    grid-column: 1 / -1;
+    grid-row: 3 / 4;
+    width: 100%;
+    flex-direction: row;
+    overflow-x: auto;
+    justify-content: flex-start;
+    padding-bottom: 2px;
+  }
+  .swipe-actions .btn {
+    white-space: nowrap;
+  }
+}
+
 /* ---- upload screen ---- */
 .hero {
   text-align: center;

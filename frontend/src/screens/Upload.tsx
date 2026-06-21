@@ -4,6 +4,7 @@ import { api } from "../lib/api";
 import type { CuesStatus } from "../lib/api";
 import type { Health, ProjectSummary, StyleTemplate } from "../lib/types";
 import { fmtDuration, timeAgo } from "../lib/format";
+import { useT } from "../lib/i18n";
 import CueLab from "../components/CueLab";
 import CueManager from "../components/CueManager";
 
@@ -28,6 +29,7 @@ const LENGTHS = [
 ];
 
 export default function Upload({ health }: { health: Health | null }) {
+  const { t } = useT();
   const nav = useNavigate();
   const fileRef = useRef<HTMLInputElement>(null);
   const [drag, setDrag] = useState(false);
@@ -43,6 +45,10 @@ export default function Upload({ health }: { health: Health | null }) {
   const [aspect, setAspect] = useState("9:16");
   const [burnCaptions, setBurnCaptions] = useState(true);
   const [gameProfile, setGameProfile] = useState("auto");
+  const [detectionMode, setDetectionMode] = useState("zero_shot");
+  const [audioCues, setAudioCues] = useState("");
+  const [visualTextCues, setVisualTextCues] = useState("");
+  const [vlmCues, setVlmCues] = useState("");
   const [tighten, setTighten] = useState(false);
   const [denoise, setDenoise] = useState(false);
   const [motion, setMotion] = useState("none");
@@ -108,6 +114,25 @@ export default function Upload({ health }: { health: Health | null }) {
     setPct(0);
     try {
       const len = LENGTHS[lenIdx];
+      const splitCues = (s: string) =>
+        s.split(/[\n,]+/).map((x) => x.trim()).filter(Boolean);
+      const audioPrompts = splitCues(audioCues);
+      const visualCues = splitCues(visualTextCues);
+      const vlmPrompts = splitCues(vlmCues);
+      // Only send a game_config when the user changed something, so default
+      // runs stay byte-identical to before this control existed.
+      const gameConfig =
+        detectionMode !== "zero_shot" ||
+        audioPrompts.length ||
+        visualCues.length ||
+        vlmPrompts.length
+          ? {
+              detection_mode: detectionMode,
+              audio_prompts: audioPrompts,
+              visual_text_cues: visualCues,
+              vlm_visual_prompts: vlmPrompts,
+            }
+          : undefined;
       const project = await api.createProject({
         file: file ?? undefined,
         url: url.trim() || undefined,
@@ -134,6 +159,7 @@ export default function Upload({ health }: { health: Health | null }) {
         auto_length: autoLength,
         lead_seconds: manualContext ? leadSeconds : null,
         tail_seconds: manualContext ? tailSeconds : null,
+        game_config: gameConfig,
         onProgress: setPct,
       });
       nav(`/p/${project.id}`);
@@ -324,6 +350,55 @@ export default function Upload({ health }: { health: Health | null }) {
             </span>
           )}
         </div>
+        {contentType !== "talking" && (
+          <div className="field wide">
+            <label>
+              {t("gc.section")} <span className="muted tiny">{t("gc.sectionHint")}</span>
+            </label>
+            <select
+              className="input"
+              value={detectionMode}
+              onChange={(e) => setDetectionMode(e.target.value)}
+              title={t("gc.detectionMode")}
+            >
+              <option value="zero_shot">{t("gc.modeAuto")}</option>
+              <option value="hybrid">{t("gc.modeHybrid")}</option>
+              <option value="manual">{t("gc.modeManual")}</option>
+            </select>
+            <div className="row" style={{ gap: 8, marginTop: 8, flexWrap: "wrap" }}>
+              <div className="col" style={{ flex: "1 1 220px", gap: 4 }}>
+                <label className="muted tiny">{t("gc.audioCues")}</label>
+                <input
+                  className="input"
+                  value={audioCues}
+                  onChange={(e) => setAudioCues(e.target.value)}
+                  placeholder={t("gc.placeholder")}
+                  title={t("gc.audioCuesHint")}
+                />
+              </div>
+              <div className="col" style={{ flex: "1 1 220px", gap: 4 }}>
+                <label className="muted tiny">{t("gc.visualCues")}</label>
+                <input
+                  className="input"
+                  value={visualTextCues}
+                  onChange={(e) => setVisualTextCues(e.target.value)}
+                  placeholder={t("gc.placeholder")}
+                  title={t("gc.visualCuesHint")}
+                />
+              </div>
+              <div className="col" style={{ flex: "1 1 220px", gap: 4 }}>
+                <label className="muted tiny">{t("gc.vlmCues")}</label>
+                <input
+                  className="input"
+                  value={vlmCues}
+                  onChange={(e) => setVlmCues(e.target.value)}
+                  placeholder={t("gc.placeholder")}
+                  title={t("gc.vlmCuesHint")}
+                />
+              </div>
+            </div>
+          </div>
+        )}
         {contentType !== "talking" && (
           <div className="field">
             <label>Facecam <span className="muted tiny">(nur Gameplay)</span></label>
@@ -560,14 +635,6 @@ export default function Upload({ health }: { health: Health | null }) {
               onToggle={setUseCues}
             />
           )}
-          {/* Spielübergreifende Sounds (Airhorn, Hype, Lacher ...) - werden für jedes Spielprofil genutzt. */}
-          <CueManager
-            game="common"
-            cues={cues}
-            onChange={setCues}
-            enabled={useCues}
-            onToggle={setUseCues}
-          />
         </>
       )}
 

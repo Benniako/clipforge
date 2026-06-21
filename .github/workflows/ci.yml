@@ -15,7 +15,9 @@ jobs:
           python-version: "3.12"
           cache: pip
       - name: Install dependencies
-        run: pip install -r backend/requirements.txt httpx ruff
+        # Pillow lets the OCR ROI-crop tests run in CI instead of skipping;
+        # httpx powers the FastAPI TestClient integration tests.
+        run: pip install -r backend/requirements.txt httpx ruff pillow
       - name: Lint
         run: ruff check backend
       - name: Unit tests
@@ -37,6 +39,9 @@ jobs:
       - name: Type-check
         working-directory: frontend
         run: npm run typecheck
+      - name: Unit tests
+        working-directory: frontend
+        run: npm test
       - name: Build
         working-directory: frontend
         run: npm run build

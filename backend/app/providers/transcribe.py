@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import logging
 import os
-import threading
 from pathlib import Path
 
 from ..config import get_settings
@@ -26,8 +25,10 @@ from ..models import Transcript, Word
 log = logging.getLogger("clipforge.transcribe")
 
 # Whisper models aren't guaranteed thread-safe and saturate the device anyway —
-# serialize transcriptions so multiple pipeline workers can't overlap them.
-_asr_lock = threading.Lock()
+# serialize transcriptions so multiple pipeline workers can't overlap them. This
+# is the shared torch-load lock, so an ASR torch.load can't race the CLAP loader's
+# temporary torch.load monkey-patch.
+from .torch_guard import TORCH_LOAD_LOCK as _asr_lock
 
 _model = None       # lazily-loaded faster-whisper WhisperModel
 _wx_model = None    # lazily-loaded whisperX ASR model
@@ -120,6 +121,25 @@ def _batched_pipeline(model, batch_size: int | None = None):
     return _batched or None
 
 
+def _initial_prompt(language: str | None) -> str | None:
+    if not (language or "").lower().startswith("de"):
+        return None
+    prompt = (get_settings().german_gaming_prompt or "").strip()
+    return prompt or None
+
+
+def _transcribe_with_prompt(engine, audio, *, initial_prompt: str | None = None,
+                            **kwargs):
+    if not initial_prompt:
+        return engine.transcribe(audio, **kwargs)
+    try:
+        return engine.transcribe(audio, initial_prompt=initial_prompt, **kwargs)
+    except TypeError as e:
+        if "initial_prompt" not in str(e):
+            raise
+        return engine.transcribe(audio, **kwargs)
+
+
 def transcribe(audio_path: str, *, language: str | None = None,
                progress=None, power_mode: str | None = None) -> Transcript:
     """Transcribe ``audio_path`` to a word-timed :class:`Transcript`."""
@@ -197,7 +217,9 @@ def _whisperx_transcribe(audio_path, language, progress, batch_size: int) -> Tra
     audio = whisperx.load_audio(audio_path)
 
     model = _load_whisperx_model()
-    result = model.transcribe(audio, batch_size=max(batch_size, 1), language=language)
+    result = _transcribe_with_prompt(
+        model, audio, batch_size=max(batch_size, 1), language=language,
+        initial_prompt=_initial_prompt(language))
     lang = result.get("language", language or "en") or "en"
     if progress:
         progress(0.5)
@@ -250,21 +272,22 @@ def _whisperx_transcribe(audio_path, language, progress, batch_size: int) -> Tra
 def _whisper_transcribe(audio_path, language, progress, batch_size: int) -> Transcript:
     model = _load_whisper()
     batched = _batched_pipeline(model, batch_size)
+    prompt = _initial_prompt(language)
     if batched is not None:
         try:
-            segments, info = batched.transcribe(
-                audio_path, language=language, word_timestamps=True,
-                vad_filter=True, batch_size=max(batch_size, 1))
+            segments, info = _transcribe_with_prompt(
+                batched, audio_path, language=language, word_timestamps=True,
+                vad_filter=True, batch_size=max(batch_size, 1),
+                initial_prompt=prompt)
         except Exception as e:  # any batched-path issue -> sequential, never fail
             log.warning("batched transcribe failed (%s); sequential", e)
-            segments, info = model.transcribe(
-                audio_path, language=language, word_timestamps=True,
-                vad_filter=True, beam_size=1)
+            segments, info = _transcribe_with_prompt(
+                model, audio_path, language=language, word_timestamps=True,
+                vad_filter=True, beam_size=1, initial_prompt=prompt)
     else:
-        segments, info = model.transcribe(
-            audio_path, language=language, word_timestamps=True,
-            vad_filter=True, beam_size=1,
-        )
+        segments, info = _transcribe_with_prompt(
+            model, audio_path, language=language, word_timestamps=True,
+            vad_filter=True, beam_size=1, initial_prompt=prompt)
     total = max(getattr(info, "duration", 0.0), 0.001)
     words: list[Word] = []
     for seg in segments:

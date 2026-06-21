@@ -4,6 +4,7 @@ import { api } from "../lib/api";
 import type { ImportSettings, PowerMode, Project } from "../lib/types";
 import { fmtClock, fmtDuration, scoreColor } from "../lib/format";
 import { mediaTimeUrl } from "../lib/media";
+import { useT } from "../lib/i18n";
 import ClipCard from "./ClipCard";
 import CueModal from "./CueModal";
 import VisualCueCalibration from "./VisualCueCalibration";
@@ -39,6 +40,7 @@ export default function ClipGridView({
   project: Project;
   onChange: (p: Project) => void;
 }) {
+  const { t } = useT();
   const [sort, setSort] = useState<Sort>("score");
   const [minScore, setMinScore] = useState(0);
   const [selected, setSelected] = useState<string[]>([]); // selection order = montage order
@@ -299,20 +301,36 @@ export default function ClipGridView({
           <a className="btn primary sm" href={api.exportBatchUrl(project.id)}>
             Alle exportieren ({ready})
           </a>
+          <a className="btn ghost sm" href={api.exportPremiereUrl(project.id)}>
+            Premiere EDL
+          </a>
         </div>
       </div>
 
       {project.warnings?.length > 0 && (
-        <div
-          style={{
-            marginTop: 16, padding: "12px 16px", borderRadius: 10,
-            border: "1px solid #5a4a2b", background: "#2a2414", color: "#f5d98a",
-            fontSize: 13,
-          }}
-        >
-          {project.warnings.map((w, i) => (
-            <div key={i}>Hinweis: {w}</div>
-          ))}
+        <div style={{ marginTop: 16, display: "grid", gap: 8 }}>
+          {project.warnings.map((w, i) => {
+            const sev = typeof w === "string" ? "warn" : w.severity;
+            const message = typeof w === "string" ? w : w.message;
+            const palette =
+              sev === "error"
+                ? { border: "#6b2f2f", background: "#2a1414", color: "#f5a8a8", tag: t("notice.error") }
+                : sev === "info"
+                ? { border: "#2b4a5a", background: "#142028", color: "#8ad0f5", tag: t("notice.info") }
+                : { border: "#5a4a2b", background: "#2a2414", color: "#f5d98a", tag: t("notice.warn") };
+            return (
+              <div
+                key={i}
+                style={{
+                  padding: "12px 16px", borderRadius: 10, fontSize: 13,
+                  border: `1px solid ${palette.border}`, background: palette.background,
+                  color: palette.color,
+                }}
+              >
+                <strong>{palette.tag}:</strong> {message}
+              </div>
+            );
+          })}
         </div>
       )}
 
