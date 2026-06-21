@@ -544,6 +544,39 @@ def test_aspect_dims():
     assert ImportSettings(aspect="bogus").dims() == (1080, 1920)  # safe default
 
 
+def test_game_config_form_parser_matches_ui_payload():
+    """The Upload screen sends detection_mode + newline/comma-joined cue lists;
+    the form parser must turn them into a valid GameProfileConfig (and clamp
+    ROIs), defaulting the lists the UI leaves blank."""
+    from app.api.routes_projects import _game_config_from_form
+
+    cfg = _game_config_from_form(
+        detection_mode="hybrid",
+        visual_rois_json='[{"x": -0.5, "y": 0.1, "w": 2, "h": 0.2}]',
+        visual_text_cues="VICTORY\nELIMINATED",
+        reference_audio_files="",
+        vlm_visual_prompts="kill feed, victory screen",
+        audio_prompts="ace celebration, crowd hype",
+        audio_negative_prompts="",
+    )
+    assert cfg.detection_mode == "hybrid"
+    assert cfg.audio_prompts == ["ace celebration", "crowd hype"]
+    assert cfg.visual_text_cues == ["VICTORY", "ELIMINATED"]
+    assert cfg.vlm_visual_prompts == ["kill feed", "victory screen"]
+    # Blank negatives fall back to the built-in defaults, not an empty list.
+    assert cfg.audio_negative_prompts
+    # ROI is clamped into 0..1.
+    roi = cfg.visual_rois[0]
+    assert roi.x == 0.0 and 0.0 <= roi.w <= 1.0
+
+    # Unknown mode is coerced to the safe default.
+    bad = _game_config_from_form(
+        detection_mode="bogus", visual_rois_json="", visual_text_cues="",
+        reference_audio_files="", vlm_visual_prompts="", audio_prompts="",
+        audio_negative_prompts="")
+    assert bad.detection_mode == "zero_shot"
+
+
 def test_game_profile_config_defaults_and_roi_clamp():
     cfg = GameProfileConfig(visual_rois=[{"x": -1, "y": 0.9, "w": 2, "h": 0.5}])
     roi = cfg.visual_rois[0].clamped()

@@ -60,12 +60,12 @@ export interface Rect {
 
 export interface GameProfileConfig {
   detection_mode: "zero_shot" | "manual" | "hybrid" | string;
-  visual_rois: Rect[];
-  visual_text_cues: string[];
-  reference_audio_files: string[];
-  vlm_visual_prompts: string[];
-  audio_prompts: string[];
-  audio_negative_prompts: string[];
+  visual_rois?: Rect[];
+  visual_text_cues?: string[];
+  reference_audio_files?: string[];
+  vlm_visual_prompts?: string[];
+  audio_prompts?: string[];
+  audio_negative_prompts?: string[];
 }
 
 export type Layout = "fill" | "center" | "split" | "framed";
