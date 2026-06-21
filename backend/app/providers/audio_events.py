@@ -576,7 +576,10 @@ def find_events(wav_path: str, duration: float, *, window: float = 6.0,
 
 def event_score(wav_path: str, start: float, end: float, *,
                 profile: str | None = None,
-                language: str | None = None) -> tuple[float, str] | None:
+                language: str | None = None,
+                positive_prompts: list[str] | tuple[str, ...] | None = None,
+                negative_prompts: list[str] | tuple[str, ...] | None = None
+                ) -> tuple[float, str] | None:
     """(hype 0..1, reason) for a clip's audio span, or None.
 
     Uses PANNs when available, then CLAP as a zero-shot fallback. Reads only the
@@ -613,7 +616,9 @@ def event_score(wav_path: str, start: float, end: float, *,
                     if pann is not None:
                         return pann
             if get_settings().has_clap:
-                return _clap_score(str(seg), profile=profile, language=language)
+                return _clap_score(str(seg), profile=profile, language=language,
+                                   positive_prompts=positive_prompts,
+                                   negative_prompts=negative_prompts)
             return None
     except Exception as e:
         log.warning("audio-event scoring failed (%s)", e)

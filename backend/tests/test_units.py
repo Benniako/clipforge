@@ -1774,6 +1774,49 @@ def test_audio_event_reduce_and_bonus():
     assert gated is not None and gated[1] == "crowd cheering"
 
 
+def test_event_score_forwards_custom_audio_prompts_to_clap():
+    """The per-clip CLAP bonus must honour a project's custom audio_prompts,
+    not just the discovery pass — otherwise the config is a no-op on scoring."""
+    from app.providers import audio_events as AE
+
+    seen = {}
+
+    def fake_clap_score(seg_path, *, profile=None, language=None,
+                        positive_prompts=None, negative_prompts=None):
+        seen["pos"] = positive_prompts
+        seen["neg"] = negative_prompts
+        return (0.7, "custom cue")
+
+    old_avail = AE.available
+    old_clap_score = AE._clap_score
+    old_settings = AE.get_settings
+    old_load = AE._load
+    AE.available = lambda: True
+    AE._clap_score = fake_clap_score
+    AE._load = lambda: None  # skip PANNs so we reach the CLAP branch
+    AE.get_settings = lambda: _settings(has_audio_events=False, has_clap=True)
+    try:
+        from app.media import ffmpeg
+        old_run = ffmpeg.run
+        ffmpeg.run = lambda *a, **k: None
+        try:
+            res = AE.event_score("a.wav", 1.0, 3.0, profile="valorant",
+                                 language="en",
+                                 positive_prompts=["German ace celebration"],
+                                 negative_prompts=["inventory click loop"])
+        finally:
+            ffmpeg.run = old_run
+    finally:
+        AE.available = old_avail
+        AE._clap_score = old_clap_score
+        AE._load = old_load
+        AE.get_settings = old_settings
+
+    assert res == (0.7, "custom cue")
+    assert seen["pos"] == ["German ace celebration"]
+    assert seen["neg"] == ["inventory click loop"]
+
+
 def test_clap_prompts_include_game_and_german_context():
     from app.providers import audio_events as AE
 

@@ -497,6 +497,9 @@ class Engine:
         if project.settings.use_audio_events and ae_mod.available() and wav_path:
             try:
                 self._advance(project_id, 2, "Listening for crowd / hype…")
+                aecfg = getattr(project.settings, "game_config", None)
+                ae_pos = getattr(aecfg, "audio_prompts", None) if aecfg else None
+                ae_neg = getattr(aecfg, "audio_negative_prompts", None) if aecfg else None
                 for clip in clips:
                     # Skip clips born from an audio event already — they carry
                     # the CLAP signal in their baseline score, so a second
@@ -506,7 +509,8 @@ class Engine:
                     res = ae_mod.event_score(
                         wav_path, clip.start, clip.end,
                         profile=project.settings.game_profile,
-                        language=project.settings.language)
+                        language=project.settings.language,
+                        positive_prompts=ae_pos, negative_prompts=ae_neg)
                     if res is not None:
                         hype, reason = res
                         clip.score, clip.factors = ae_mod.apply_event_bonus(

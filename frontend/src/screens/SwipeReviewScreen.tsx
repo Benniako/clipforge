@@ -32,7 +32,7 @@ export default function SwipeReviewScreen({
   // past the end.
   const safeIdx = clips.length ? Math.min(idx, clips.length - 1) : 0;
   const active = clips[safeIdx] ?? null;
-  const next = clips[(safeIdx + 1) % Math.max(clips.length, 1)] ?? null;
+  const next = clips.length > 1 ? clips[(safeIdx + 1) % clips.length] : null;
   const prev = () => setIdx((i) => (clips.length ? (Math.min(i, clips.length - 1) - 1 + clips.length) % clips.length : 0));
   const forward = () => setIdx((i) => (clips.length ? (Math.min(i, clips.length - 1) + 1) % clips.length : 0));
 
@@ -73,7 +73,7 @@ export default function SwipeReviewScreen({
     <div className="swipe-review">
       <div className="swipe-topbar">
         <button className="btn ghost sm" onClick={onExit}>Grid</button>
-        <span className="pill">{idx + 1} / {clips.length}</span>
+        <span className="pill">{safeIdx + 1} / {clips.length}</span>
         <a className="btn ghost sm" href={api.exportPremiereUrl(project.id)}>Premiere EDL</a>
       </div>
 
