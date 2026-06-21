@@ -78,6 +78,24 @@ def _band_spectrogram(samples):
     return bands / norm
 
 
+def _template_quality(samples) -> tuple[bool, str]:
+    """Reject cue files that are too weak/flat to be reliable templates."""
+    import numpy as np
+
+    duration = len(samples) / SR
+    if duration < 0.25:
+        return False, "too short"
+    peak = float(np.max(np.abs(samples))) if len(samples) else 0.0
+    rms = float(np.sqrt(np.mean(samples * samples))) if len(samples) else 0.0
+    if peak < 0.025 or rms < 0.004:
+        return False, "too quiet"
+    # Very flat background loops match everywhere; event cues have transients.
+    active = float(np.mean(np.abs(samples) > max(peak * 0.20, 0.015)))
+    if active > 0.92:
+        return False, "too constant"
+    return True, ""
+
+
 def match_template(sig, tmpl, *, threshold: float, min_gap: float):
     """Return [(t, similarity)] where template ``tmpl`` matches signal ``sig``."""
     import numpy as np
@@ -112,7 +130,8 @@ CHUNK_SAMPLES = 120 * SR
 
 
 def find_events(audio_path: str, cues_dir: Path, *,
-                threshold: float = 0.62, min_gap: float = 2.5) -> list[CueEvent]:
+                threshold: float = 0.84, min_gap: float = 6.0,
+                max_events_per_template: int = 24) -> list[CueEvent]:
     """Match every reference cue in ``cues_dir`` against the audio."""
     if not cues_dir.is_dir():
         return []
@@ -131,6 +150,10 @@ def find_events(audio_path: str, cues_dir: Path, *,
     for tpath in templates:
         try:
             tmpl = _load_16k(tpath)
+            ok, reason = _template_quality(tmpl)
+            if not ok:
+                log.warning("cue: skipping %s (%s)", tpath.name, reason)
+                continue
             hits: list[tuple[float, float]] = []
             overlap = len(tmpl) + FRAME
             start = 0
@@ -146,6 +169,11 @@ def find_events(audio_path: str, cues_dir: Path, *,
             for t, s in hits:
                 if all(abs(t - k) >= min_gap for k, _ in kept):
                     kept.append((t, s))
+            if max_events_per_template > 0 and len(kept) > max_events_per_template:
+                log.warning(
+                    "cue: %s produced %d strict matches; keeping strongest %d",
+                    tpath.name, len(kept), max_events_per_template)
+                kept = kept[:max_events_per_template]
             events += [CueEvent(t=round(t, 3), label=tpath.stem, similarity=round(s, 3))
                        for t, s in kept]
         except Exception as e:

@@ -43,7 +43,16 @@ def compute_reframe(src: str, start: float, end: float, src_aspect: float,
                        keyframes=[ReframeKeyframe(t=0.0, cx=0.5)], tracked=False)
 
     s = get_settings()
-    centers = _track_faces(src, start, end, speech) if s.has_opencv else None
+    centers = None
+    if s.has_asd:
+        try:
+            from ..providers import active_speaker
+
+            centers = active_speaker.track_centers(src, start, end)
+        except Exception as e:
+            log.warning("active-speaker reframe failed: %s", e)
+    if not centers and s.has_opencv:
+        centers = _track_faces(src, start, end, speech)
     if not centers:
         return Reframe(layout=LayoutType.center,
                        keyframes=[ReframeKeyframe(t=0.0, cx=0.5)], tracked=False)

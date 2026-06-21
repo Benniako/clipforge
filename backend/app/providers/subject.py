@@ -12,11 +12,13 @@ back to its face track / centre crop exactly as before.
 from __future__ import annotations
 
 import logging
+import os
 
 from ..config import get_settings
 
 log = logging.getLogger("clipforge.subject")
 
+_YOLO_MODEL = os.environ.get("CLIPFORGE_YOLO_MODEL", "yolo11n.pt")
 _yolo = None  # cached ultralytics model, or False
 
 
@@ -27,8 +29,8 @@ def _load_yolo():
     try:
         from ultralytics import YOLO
 
-        _yolo = YOLO("yolo11n.pt")  # nano: fast, auto-downloaded once
-        log.info("YOLO subject model loaded")
+        _yolo = YOLO(_YOLO_MODEL)  # nano default: fast, auto-downloaded once
+        log.info("YOLO subject model loaded (%s)", _YOLO_MODEL)
     except Exception as e:
         log.info("YOLO unavailable (%s)", e)
         _yolo = False

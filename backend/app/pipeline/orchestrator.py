@@ -12,14 +12,15 @@ import logging
 import queue
 import threading
 import traceback
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 
 from .. import feedback, store
 from ..config import get_settings
 from ..media import ffmpeg
 from ..media.ffmpeg import MediaInfo
 from ..models import (ASPECTS, Clip, ClipStatus, ContentType, JobProgress,
-                      LayoutType, ProjectStatus, Reframe, ReframeKeyframe)
+                      LayoutType, ProjectStatus, Reframe, ReframeKeyframe,
+                      now)
 from ..providers import detect as detect_mod
 from ..providers import detect_gameplay as gameplay_mod
 from ..providers import hashtags as hashtags_mod
@@ -36,6 +37,11 @@ from . import render as render_mod
 
 log = logging.getLogger("clipforge.engine")
 
+
+def _media_url(path) -> str:
+    return f"/media/{path.relative_to(get_settings().media_dir).as_posix()}"
+
+
 def _speech_intervals(transcript, start: float, end: float
                       ) -> list[tuple[float, float]] | None:
     """Clip-relative speech spans for speech-aware reframing.
@@ -47,6 +53,23 @@ def _speech_intervals(transcript, start: float, end: float
         return None
     segs = captionize.compute_tight_segments(transcript, start, end)
     return [(a - start, b - start) for a, b in segs]
+
+
+def _score_visual_reads(src_path: str, clips: list[Clip], *,
+                        power_mode: str | None = None,
+                        lang: str | None = None) -> dict[int, tuple[float, str]]:
+    """Optional VLM reads for clip spans, isolated so this contract stays tested."""
+    from ..providers import vlm as vlm_mod
+
+    if not vlm_mod.available():
+        return {}
+    opts = get_settings().vlm_options_for(power_mode)
+    return vlm_mod.score_visuals(src_path, [(c.start, c.end) for c in clips],
+                                 budget=float(opts["budget"]),
+                                 max_workers=int(opts["max_workers"]),
+                                 n_frames=int(opts["n_frames"]),
+                                 timeout=float(opts["timeout"]),
+                                 lang=lang or "en")
 
 
 STAGES = ["transcribe", "detect", "score", "reframe", "caption", "render"]
@@ -71,6 +94,10 @@ class Engine:
         # Entries are tiny and bounded by clips-per-session; never pruned.
         self._clip_locks: dict[tuple[str, str], threading.Lock] = {}
         self._clip_locks_guard = threading.Lock()
+        self._pause_condition = threading.Condition()
+        self._pause_requested: set[str] = set()
+        self._queued_projects: set[str] = set()
+        self._active_projects: set[str] = set()
 
     def _clip_lock(self, project_id: str, clip_id: str) -> threading.Lock:
         with self._clip_locks_guard:
@@ -94,15 +121,74 @@ class Engine:
             p.progress = JobProgress(stage="queued", total_stages=len(STAGES),
                                      message="Waiting to start",
                                      stages=self._stage_view(-1, 0.0))
+        with self._pause_condition:
+            self._queued_projects.add(project_id)
         self._q.put(project_id)
+
+    def pause(self, project_id: str) -> None:
+        with self._pause_condition:
+            self._pause_requested.add(project_id)
+            self._pause_condition.notify_all()
+        self._mark_paused(project_id)
+
+    def resume(self, project_id: str) -> None:
+        with self._pause_condition:
+            active = project_id in self._active_projects
+            queued = project_id in self._queued_projects
+            self._pause_requested.discard(project_id)
+            self._pause_condition.notify_all()
+        if active:
+            with store.mutate(project_id) as p:
+                if p.status == ProjectStatus.paused:
+                    p.status = ProjectStatus.processing
+                    p.progress.message = "Resuming..."
+                    p.progress.updated_at = now()
+            return
+        if queued:
+            with store.mutate(project_id) as p:
+                if p.status == ProjectStatus.paused:
+                    p.status = ProjectStatus.queued
+                    p.progress.message = "Waiting to resume"
+                    p.progress.updated_at = now()
+            return
+        p = store.get(project_id)
+        if p and p.status == ProjectStatus.paused and p.source is not None:
+            self.enqueue(project_id)
+        elif p and p.status == ProjectStatus.paused:
+            with store.mutate(project_id) as project:
+                project.status = ProjectStatus.created
+                project.progress.message = "Paused project reset"
+                project.progress.updated_at = now()
+
+    def resume_incomplete(self) -> int:
+        """Requeue projects stranded mid-run by a restart or dead worker."""
+        resumed = 0
+        for summary in store.list_summaries(limit=1000):
+            if summary.status not in (ProjectStatus.queued, ProjectStatus.processing):
+                continue
+            try:
+                with store.mutate(summary.id) as p:
+                    p.clips = []
+                    p.events = []
+                    p.montages = []
+                self.enqueue(summary.id)
+                resumed += 1
+            except Exception:
+                log.warning("could not resume project %s", summary.id, exc_info=True)
+        if resumed:
+            log.info("requeued %d incomplete project(s)", resumed)
+        return resumed
 
     # -- worker loop ------------------------------------------------------
     def _loop(self) -> None:
         while True:
             project_id = self._q.get()
+            with self._pause_condition:
+                self._queued_projects.discard(project_id)
+                self._active_projects.add(project_id)
             try:
                 self._process(project_id)
-            except Exception as e:  # never let the worker die
+            except BaseException as e:  # never let the worker die
                 log.error("pipeline failed for %s: %s\n%s", project_id, e,
                           traceback.format_exc())
                 try:
@@ -113,6 +199,8 @@ class Engine:
                 except Exception:
                     pass
             finally:
+                with self._pause_condition:
+                    self._active_projects.discard(project_id)
                 self._q.task_done()
 
     # -- progress helpers -------------------------------------------------
@@ -131,6 +219,7 @@ class Engine:
 
     def _advance(self, project_id: str, stage_idx: int, message: str,
                  frac: float = 0.0) -> None:
+        self._wait_if_paused(project_id)
         overall = (stage_idx + max(min(frac, 1.0), 0.0)) / len(STAGES) * 100.0
         with store.mutate(project_id) as p:
             p.status = ProjectStatus.processing
@@ -140,11 +229,52 @@ class Engine:
                 pct=round(overall, 1), stages=self._stage_view(stage_idx, frac),
             )
 
+    def _paused_stage_view(self, p) -> list[dict]:
+        stages = [dict(s) for s in (p.progress.stages or self._stage_view(p.progress.stage_index, 0.0))]
+        for stage in stages:
+            if stage.get("name") == p.progress.stage:
+                stage["status"] = "paused"
+                break
+        return stages
+
+    def _mark_paused(self, project_id: str) -> None:
+        try:
+            with store.mutate(project_id) as p:
+                if p.status in (ProjectStatus.ready, ProjectStatus.failed):
+                    return
+                p.status = ProjectStatus.paused
+                if p.progress.stage == "render":
+                    p.progress.message = "Paused - current encodes finish, then rendering waits"
+                else:
+                    p.progress.message = "Paused - waiting to resume"
+                p.progress.stages = self._paused_stage_view(p)
+                p.progress.updated_at = now()
+        except Exception:
+            pass
+
+    def _wait_if_paused(self, project_id: str) -> None:
+        announced = False
+        while True:
+            p = store.get(project_id)
+            if p is None:
+                return
+            with self._pause_condition:
+                requested = project_id in self._pause_requested
+            paused = bool(p and p.status == ProjectStatus.paused)
+            if not requested and not paused:
+                return
+            if not announced:
+                self._mark_paused(project_id)
+                announced = True
+            with self._pause_condition:
+                self._pause_condition.wait(timeout=0.5)
+
     # -- the pipeline -----------------------------------------------------
     def _process(self, project_id: str) -> None:
         project = store.get(project_id)
         if project is None or project.source is None:
             raise RuntimeError("project or source media missing")
+        self._wait_if_paused(project_id)
         settings = get_settings()
         src_path = str(settings.media_dir / project.source.path)
         info = ffmpeg.probe(src_path)
@@ -163,6 +293,7 @@ class Engine:
                 wav_path, language=project.settings.language,
                 progress=lambda f: self._advance(project_id, 0,
                                                  f"Transcribing… {int(f*100)}%", f),
+                power_mode=project.settings.power_mode.value,
             )
         else:
             # No audio track — skip ASR entirely, go straight to synthetic.
@@ -233,12 +364,10 @@ class Engine:
                                                events_out=detected)
             if not gcs:
                 raise RuntimeError("no highlights found in this footage")
-            with store.mutate(project_id) as p:
-                p.events = detected
             # Learn reusable AUDIO cues from the on-screen (OCR) events: snip the
             # game sound at each banner and save it, so the cheap audio matcher
             # catches that event on future videos even with OCR off.
-            if info.has_audio:
+            if info.has_audio and project.settings.cue_learning:
                 ocr_evs = [e for e in detected if getattr(e, "source", "") == "ocr"]
                 if ocr_evs:
                     try:
@@ -271,10 +400,12 @@ class Engine:
             for gc in gcs:
                 words = ([w for w in transcript.words if w.end > gc.start and w.t < gc.end]
                          if real_speech else [])  # never carry filler text
+                features = dict(gc.features)
+                features["evidence_t"] = round(float(gc.peak_t), 3)
                 clips.append(Clip(
                     start=gc.start, end=gc.end, title=gc.title,
                     kind="gameplay", score=gc.score, factors=gc.factors,
-                    features=gc.features,
+                    features=features,
                     # Mute captions around matched game sounds — the announcer
                     # saying "Double Kill" isn't the streamer talking.
                     caption_mute=[[round(t - 0.4, 3), round(t + 2.6, 3)]
@@ -354,12 +485,20 @@ class Engine:
         # Optional audio-event detection (PANNs): hear the *sounds* that signal a
         # highlight — cheering, laughter, applause, an explosion — and fold them
         # in as an explainable factor. Zero-shot, so it needs no per-game cue.
-        if settings.has_audio_events and wav_path:
+        from ..providers import audio_events as ae_mod
+        if project.settings.use_audio_events and ae_mod.available() and wav_path:
             try:
-                from ..providers import audio_events as ae_mod
                 self._advance(project_id, 2, "Listening for crowd / hype…")
                 for clip in clips:
-                    res = ae_mod.event_score(wav_path, clip.start, clip.end)
+                    # Skip clips born from an audio event already — they carry
+                    # the CLAP signal in their baseline score, so a second
+                    # apply_event_bonus would double-count the same evidence.
+                    if clip.features.get("audio_event", 0.0) > 0.0:
+                        continue
+                    res = ae_mod.event_score(
+                        wav_path, clip.start, clip.end,
+                        profile=project.settings.game_profile,
+                        language=project.settings.language)
                     if res is not None:
                         hype, reason = res
                         clip.score, clip.factors = ae_mod.apply_event_bonus(
@@ -376,9 +515,11 @@ class Engine:
         # local vision model.
         try:
             from ..providers import vlm as vlm_mod
-            if vlm_mod.available():
+            if project.settings.use_vlm and vlm_mod.available():
                 self._advance(project_id, 2, "AI watching the clips…")
-                reads = vlm_mod.score_visuals([(c.start, c.end) for c in clips])
+                reads = _score_visual_reads(
+                    src_path, clips, power_mode=project.settings.power_mode.value,
+                    lang=transcript.language)
                 for i, (viral, reason) in reads.items():
                     clips[i].score, clips[i].factors = score_mod.apply_viral_boost(
                         clips[i].score, clips[i].factors, viral,
@@ -402,14 +543,23 @@ class Engine:
         # empty or fails, so clamp every clip to the real media duration.
         if info.duration > 0:
             for clip in clips:
+                # Clamp both ends — a start past EOF would render an empty span
+                # before the duration filter below could drop it.
+                clip.start = round(max(0.0, min(clip.start, info.duration)), 3)
                 clip.end = round(min(clip.end, info.duration), 3)
             clips = [c for c in clips if c.end - c.start >= 1.0]
             if not clips:
                 raise RuntimeError("no clip-worthy moments found in this video")
 
+        if kind == "gameplay":
+            gameplay_mod.apply_evidence_caps(clips)
+            gameplay_mod.apply_title_fallbacks(clips)
+
         clips.sort(key=lambda c: c.score, reverse=True)
         with store.mutate(project_id) as p:
             p.clips = clips
+            if kind == "gameplay":
+                p.events = gameplay_mod.accepted_events_for_clips(detected, clips)
 
         # 4. reframe ------------------------------------------------------
         out_w, out_h = project.settings.dims()
@@ -489,8 +639,9 @@ class Engine:
             self._advance(project_id, 5, "Isolating voice (Demucs)…")
             try:
                 from ..providers import separate as sep_mod
-                dst = str(ingest.project_dir(project_id) / "source.denoised.mp4")
-                cleaned = sep_mod.denoise_source(src_path, dst)
+                dst_path = ingest.project_dir(project_id) / "source.denoised.mp4"
+                dst = str(dst_path)
+                cleaned = dst if dst_path.exists() else sep_mod.denoise_source(src_path, dst)
                 if cleaned:
                     render_src = cleaned
             except Exception as e:
@@ -500,16 +651,10 @@ class Engine:
         out_w, out_h = project.settings.dims()
         self._advance(project_id, 5, "Rendering clips…")
         self._render_all(project_id, clips, render_src, info, out_w, out_h,
-                         project.settings.burn_captions, project.settings.motion)
+                         project.settings.burn_captions, project.settings.motion,
+                         project.settings.power_mode.value)
 
-        with store.mutate(project_id) as p:
-            ready = sum(1 for c in p.clips if c.status == ClipStatus.ready)
-            p.status = ProjectStatus.ready
-            p.progress = JobProgress(
-                stage="done", stage_index=len(STAGES), total_stages=len(STAGES),
-                message=f"Done — {ready} clips ready", pct=100.0,
-                stages=self._stage_view(len(STAGES), 1.0),
-            )
+        self._finish_render_progress(project_id)
         log.info("project %s complete", project_id)
 
     # First-person games keep the action at the crosshair — never chase motion.
@@ -542,19 +687,39 @@ class Engine:
 
     def _render_all(self, project_id: str, clips: list[Clip], src_path: str,
                     info: MediaInfo, out_w: int, out_h: int,
-                    burn_captions: bool = True, motion: str = "none") -> None:
+                    burn_captions: bool = True, motion: str = "none",
+                    power_mode: str | None = None) -> None:
         settings = get_settings()
         done = 0
         total = len(clips)
-        n = max(1, min(settings.render_workers, total))
+        n = max(1, min(settings.render_workers_for(power_mode), total))
+        clip_iter = iter(clips)
         with ThreadPoolExecutor(max_workers=n) as ex:
-            futs = {ex.submit(self._render_one, project_id, c, src_path, info,
-                              out_w, out_h, burn_captions, motion): c for c in clips}
-            for fut in as_completed(futs):
-                done += 1
-                fut.result()  # surface unexpected (non-per-clip) errors
-                self._advance(project_id, 5,
-                              f"Rendered {done}/{total} clips", done / total)
+            futs = {}
+
+            def submit_next() -> bool:
+                self._wait_if_paused(project_id)
+                try:
+                    clip = next(clip_iter)
+                except StopIteration:
+                    return False
+                futs[ex.submit(self._render_one, project_id, clip, src_path, info,
+                               out_w, out_h, burn_captions, motion)] = clip
+                return True
+
+            for _ in range(n):
+                if not submit_next():
+                    break
+            while futs:
+                completed, _pending = wait(futs, return_when=FIRST_COMPLETED)
+                for fut in completed:
+                    futs.pop(fut, None)
+                    done += 1
+                    fut.result()  # surface unexpected (non-per-clip) errors
+                    self._advance(project_id, 5,
+                                  f"Rendered {done}/{total} clips", done / total)
+                while len(futs) < n and submit_next():
+                    pass
 
     def _render_one(self, project_id: str, clip: Clip, src_path: str,
                     info: MediaInfo, out_w: int, out_h: int,
@@ -570,6 +735,10 @@ class Engine:
         thumb = pdir / "clips" / f"{clip.id}.jpg"
         style = get_style(clip.captions.style_id)
         try:
+            with store.mutate(project_id) as p:
+                c = p.clip(clip.id)
+                if c and c.status != ClipStatus.ready:
+                    c.status = ClipStatus.rendering
             with self._clip_lock(project_id, clip.id):
                 self._render_one_locked(project_id, clip, src_path, info,
                                         out_w, out_h, burn_captions, motion,
@@ -587,15 +756,51 @@ class Engine:
         render_mod.render_clip(clip, src_path, info, style, out, thumb,
                                out_w=out_w, out_h=out_h,
                                burn_captions=burn_captions, motion=motion)
-        rel = out.relative_to(settings.media_dir)
-        trel = thumb.relative_to(settings.media_dir)
         with store.mutate(project_id) as p:
             c = p.clip(clip.id)
             if c:
                 c.status = ClipStatus.ready
-                c.export_url = f"/media/{rel}"
-                c.thumb_url = f"/media/{trel}"
+                c.export_url = _media_url(out)
+                c.thumb_url = _media_url(thumb)
                 c.error = None
+
+    def _finish_render_progress(self, project_id: str,
+                                selected_ids: set[str] | None = None) -> None:
+        with store.mutate(project_id) as p:
+            ready = sum(1 for c in p.clips if c.status == ClipStatus.ready)
+            failed = sum(1 for c in p.clips if c.status == ClipStatus.failed)
+            if selected_ids is not None:
+                selected_ready = sum(1 for c in p.clips
+                                     if c.id in selected_ids and c.status == ClipStatus.ready)
+                if selected_ready == 0:
+                    for c in p.clips:
+                        if c.id in selected_ids and c.status != ClipStatus.failed:
+                            c.status = ClipStatus.failed
+                            c.error = "Selected re-render did not produce an output."
+                    p.status = ProjectStatus.ready if ready else ProjectStatus.failed
+                    p.progress = JobProgress(
+                        stage="render", stage_index=5, total_stages=len(STAGES),
+                        message="Selected re-render failed for every selected clip",
+                        pct=100.0, stages=self._stage_view(5, 1.0))
+                    return
+            if ready == 0:
+                p.status = ProjectStatus.failed
+                p.error = "Rendering failed for every clip."
+                p.progress = JobProgress(
+                    stage="render", stage_index=5, total_stages=len(STAGES),
+                    message="Rendering failed for every clip",
+                    pct=100.0, stages=self._stage_view(5, 1.0))
+                return
+            if failed:
+                msg = f"{failed} clip(s) failed to render."
+                if msg not in p.warnings:
+                    p.warnings.append(msg)
+            p.status = ProjectStatus.ready
+            p.error = None
+            p.progress = JobProgress(
+                stage="done", stage_index=len(STAGES), total_stages=len(STAGES),
+                message=f"Done - {ready} clips ready", pct=100.0,
+                stages=self._stage_view(len(STAGES), 1.0))
 
     # -- single-clip re-render (editor edits) -----------------------------
     def rerender_clip(self, project_id: str, clip_id: str) -> None:
@@ -638,20 +843,49 @@ class Engine:
             out_w, out_h = project.settings.dims()
             self._render_all(project_id, project.clips, src_path, info,
                              out_w, out_h, project.settings.burn_captions,
-                             project.settings.motion)
-            with store.mutate(project_id) as p:
-                ready = sum(1 for c in p.clips if c.status == ClipStatus.ready)
-                p.status = ProjectStatus.ready
-                p.progress = JobProgress(
-                    stage="done", stage_index=len(STAGES), total_stages=len(STAGES),
-                    message=f"Done — {ready} clips ready", pct=100.0,
-                    stages=self._stage_view(len(STAGES), 1.0))
+                             project.settings.motion,
+                             project.settings.power_mode.value)
+            self._finish_render_progress(project_id)
         except Exception as e:
             log.error("re-render all failed for %s: %s", project_id, e)
             try:
                 with store.mutate(project_id) as p:
                     p.status = ProjectStatus.ready  # clips keep their old files
                     p.progress.message = f"Format change failed: {e}"
+            except Exception:
+                pass  # project deleted underneath us
+
+    def rerender_clips(self, project_id: str, clip_ids: list[str]) -> None:
+        """Re-render selected clips with current project render settings."""
+        try:
+            project = store.get(project_id)
+            if not project or not project.source:
+                raise RuntimeError("project or source media missing")
+            wanted = set(clip_ids)
+            clips = [c for c in project.clips if c.id in wanted]
+            if not clips:
+                raise RuntimeError("no selected clips found")
+            src_path = self._render_source(project_id, project)
+            info = ffmpeg.probe(src_path)
+            out_w, out_h = project.settings.dims()
+            with store.mutate(project_id) as p:
+                for c in p.clips:
+                    if c.id in wanted:
+                        c.status = ClipStatus.rendering
+                        c.error = None
+            self._render_all(project_id, clips, src_path, info,
+                             out_w, out_h, project.settings.burn_captions,
+                             project.settings.motion,
+                             project.settings.power_mode.value)
+            self._finish_render_progress(project_id, selected_ids=wanted)
+        except Exception as e:
+            log.error("selected re-render failed for %s: %s", project_id, e)
+            for cid in clip_ids:
+                self._mark_clip_failed(project_id, cid, e)
+            try:
+                with store.mutate(project_id) as p:
+                    p.status = ProjectStatus.ready
+                    p.progress.message = f"Selected re-render failed: {e}"
             except Exception:
                 pass  # project deleted underneath us
 
@@ -695,14 +929,12 @@ class Engine:
             out = mdir / f"{montage_id}.mp4"
             thumb = mdir / f"{montage_id}.jpg"
             dur = montage_mod.build_montage_video(paths, out, thumb)
-            rel = out.relative_to(settings.media_dir)
-            trel = thumb.relative_to(settings.media_dir)
             with store.mutate(project_id) as p:
                 m = p.montage(montage_id)
                 if m:
                     m.status = ClipStatus.ready
-                    m.export_url = f"/media/{rel}"
-                    m.thumb_url = f"/media/{trel}"
+                    m.export_url = _media_url(out)
+                    m.thumb_url = _media_url(thumb)
                     m.duration = round(dur, 2)
                     m.error = None
         except Exception as e:

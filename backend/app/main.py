@@ -52,6 +52,12 @@ async def lifespan(app: FastAPI):
     store.init_db()
     feedback.init_db()
     engine.start()
+    # Don't block the lifespan startup on resuming N stranded projects —
+    # /api/ready would otherwise not answer until every store.mutate runs.
+    # The worker pool is already up; resume_incomplete just feeds the queue.
+    import threading
+    threading.Thread(target=engine.resume_incomplete,
+                     name="clipforge-resume", daemon=True).start()
     s = get_settings()
     logging.getLogger("clipforge").info("capabilities: %s", s.capability_report())
     yield
@@ -70,8 +76,9 @@ def create_app() -> FastAPI:
 
     @app.get("/api/health", tags=["meta"])
     def health() -> dict:
-        from .providers import llm, vlm
+        from .providers import audio_events, llm, vlm
         caps = settings.capability_report()
+        caps.update(audio_events.capability_flags())
         caps["llm"] = llm.available()
         caps["llm_model"] = llm.active_model()
         caps["vlm"] = vlm.available()
@@ -82,6 +89,16 @@ def create_app() -> FastAPI:
             "capabilities": caps,
             "output": {"width": settings.out_width, "height": settings.out_height},
         }
+
+    @app.get("/api/ready", tags=["meta"])
+    def ready() -> dict:
+        """Fast readiness probe for launch scripts.
+
+        /api/health intentionally checks optional AI backends, which can take a
+        few seconds when Ollama or audio detectors are waking up. Startup scripts
+        only need to know that FastAPI finished booting and can serve the SPA.
+        """
+        return {"ok": True, "version": __version__}
 
     app.include_router(routes_projects.router)
     app.include_router(routes_clips.router)

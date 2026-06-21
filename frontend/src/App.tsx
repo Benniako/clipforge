@@ -2,46 +2,61 @@ import { useEffect, useState } from "react";
 import { Link, Route, Routes } from "react-router-dom";
 import { api } from "./lib/api";
 import type { Health } from "./lib/types";
-import Upload from "./screens/Upload";
-import ProjectView from "./screens/ProjectView";
-import ClipEditor from "./screens/ClipEditor";
 import CueModal from "./components/CueModal";
+import ClipEditor from "./screens/ClipEditor";
+import ProjectView from "./screens/ProjectView";
+import Upload from "./screens/Upload";
 
 function Caps({ health }: { health: Health | null }) {
   if (!health) return null;
   const c = health.capabilities;
   const engine =
-    c.transcription === "whisperx" ? "WhisperX" : c.transcription === "whisper" ? "Whisper" : "Synthetic";
+    c.transcription === "whisperx" ? "WhisperX" : c.transcription === "whisper" ? "Whisper" : "Synthetisch";
   const asr =
     c.transcription === "synthetic"
-      ? "Synthetic ASR"
-      : `${engine} ${c.whisper_model}` + (c.diarization ? " +diariz." : "");
-  const hw = `device: ${c.device}${c.vram_gb ? ` · ${c.vram_gb} GB VRAM` : ""} · ${c.cpu} cpu` +
-    (c.auto_model ? " · model auto-selected" : "");
+      ? "Synthetische Transkription"
+      : `${engine} ${c.whisper_model}` + (c.diarization ? " + Sprecher" : "");
+  const hw = `Gerät: ${c.device}${c.vram_gb ? ` - ${c.vram_gb} GB VRAM` : ""} - ${c.cpu} CPU` +
+    (c.auto_model ? " - Modell automatisch gewählt" : "");
   const ocrName = c.ocr
     ? { paddleocr: "PaddleOCR", easyocr: "EasyOCR", tesseract: "Tesseract" }[c.ocr] ?? "OCR"
     : "OCR";
   const items: [string, boolean, string][] = [
     [asr, c.transcription !== "synthetic", hw],
-    ["Face tracking", c.face_tracking, ""],
+    ["Gesichts-Tracking", c.face_tracking, ""],
     [
-      c.ocr ? `${ocrName} cues` : "On-screen OCR",
+      c.ocr ? `${ocrName} Cues` : "Bildschirm-OCR",
       Boolean(c.ocr),
-      c.ocr ? "Reads on-screen game text (kills/goals) & learns reusable audio cues" : "Install easyocr/paddleocr to detect on-screen game events",
+      c.ocr
+        ? "Liest Spieltext auf dem Bildschirm und lernt wiederverwendbare Audio-Cues"
+        : "Installiere easyocr oder paddleocr, um Spielereignisse auf dem Bildschirm zu erkennen",
     ],
-    [c.gpu_encode ? "GPU encode" : c.gpu ? "GPU" : "CPU render", c.gpu || c.gpu_encode, hw],
+    [c.gpu_encode ? "GPU-Encode" : c.gpu ? "GPU-Rendering" : "CPU-Rendering", c.gpu || c.gpu_encode, hw],
   ];
-  if (c.vad) items.push(["VAD captions", true, "Captions snapped to exact speech (Silero VAD)"]);
-  if (c.emotion) items.push(["Emotion score", true, "Excitement/arousal virality signal (emotion2vec)"]);
-  if (c.audio_events) items.push(["Audio events", true, "Hears cheering/laughter/explosions for virality (PANNs)"]);
-  if (c.denoise) items.push(["Clean voice", true, "Isolates speech from music/game audio (Demucs)"]);
-  if (c.reframe_engine && c.reframe_engine !== "haar")
-    items.push([`${c.reframe_engine === "yolo" ? "YOLO" : "MediaPipe"} reframe`, true, "Content-aware subject tracking for 9:16"]);
-  if (c.active_speaker) items.push(["Active speaker", true, "LR-ASD: crop/caption follow the real talker"]);
-  if (c.llm) items.push(["AI titles + viral", true, c.llm_model ?? ""]);
-  if (c.vlm) items.push(["AI vision", true, `Vision virality read on keyframes${c.vlm_model ? ` (${c.vlm_model})` : ""}`]);
+  if (c.vad) items.push(["VAD-Untertitel", true, "Untertitel werden exakt an Sprache ausgerichtet"]);
+  if (c.emotion) items.push(["Emotions-Score", true, "Erkennt Aufregung als Virality-Signal"]);
+  if (c.audio_events) {
+    items.push([
+      c.panns_audio ? "PANNs Audio" : c.clap_audio ? "CLAP Audio" : "Audio-Ereignisse",
+      true,
+      c.panns_audio
+        ? "Erkennt Jubel, Lachen und Explosionen für die Virality-Wertung"
+        : "Zero-Shot-Audio-Cues für Jubel, Lachen und Action",
+    ]);
+  }
+  if (c.denoise) items.push(["Saubere Stimme", true, "Trennt Sprache von Musik und Spielsound"]);
+  if (c.reframe_engine && c.reframe_engine !== "haar") {
+    items.push([
+      `${c.reframe_engine === "yolo" ? "YOLO" : "MediaPipe"} Reframe`,
+      true,
+      "Motiv-Tracking für 9:16",
+    ]);
+  }
+  if (c.active_speaker) items.push(["Aktiver Sprecher", true, "LR-ASD folgt der tatsächlich sprechenden Person"]);
+  if (c.llm) items.push(["KI-Titel + Viral", true, c.llm_model ?? ""]);
+  if (c.vlm) items.push(["KI-Bildanalyse", true, `Bildbewertung auf Keyframes${c.vlm_model ? ` (${c.vlm_model})` : ""}`]);
   return (
-    <div className="caps" title="Pipeline capabilities detected in this environment">
+    <div className="caps" title="In dieser Umgebung erkannte ClipForge-Funktionen">
       {items.map(([label, on, title]) => (
         <span key={label} title={title || undefined}>
           <span className={"cap-dot" + (on ? "" : " off")} />
@@ -55,6 +70,7 @@ function Caps({ health }: { health: Health | null }) {
 export default function App() {
   const [health, setHealth] = useState<Health | null>(null);
   const [showCues, setShowCues] = useState(false);
+
   useEffect(() => {
     api.health().then(setHealth).catch(() => setHealth(null));
   }, []);
@@ -67,12 +83,15 @@ export default function App() {
         </Link>
         <div className="spacer" />
         <Caps health={health} />
-        <button className="btn ghost sm" onClick={() => setShowCues(true)}
-          title="Add reference game sounds (kill ding, goal horn…) so key moments are detected exactly">
-          🎯 Game cues
+        <button
+          className="btn ghost sm"
+          onClick={() => setShowCues(true)}
+          title="Referenzsounds oder OCR-Begriffe für Spielereignisse hinzufügen und testen"
+        >
+          Spiel-Cues
         </button>
         <Link to="/" className="btn primary sm">
-          + New project
+          + Neues Projekt
         </Link>
       </nav>
       {showCues && <CueModal onClose={() => setShowCues(false)} />}

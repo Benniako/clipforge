@@ -52,7 +52,54 @@ if [ ! -f "$MODEL" ] && command -v curl >/dev/null 2>&1; then
     || { rm -f "$MODEL"; echo "[..] YuNet model skipped (offline?) - using Haar fallback"; }
 fi
 
-# 4. build the web UI
+# 4. Optional Ollama models (best hardware-fit defaults when Ollama exists)
+if command -v ollama >/dev/null 2>&1; then
+  echo "Setting up local Ollama models (optional but recommended)..."
+  if ! curl -fsS --max-time 2 http://127.0.0.1:11434/api/tags >/dev/null 2>&1; then
+    (ollama serve >/dev/null 2>&1 &)
+    sleep 3
+  fi
+  VRAM_MB=0
+  if command -v nvidia-smi >/dev/null 2>&1; then
+    VRAM_MB=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -n1 | tr -dc '0-9')
+    VRAM_MB=${VRAM_MB:-0}
+  fi
+  RAM_GB=0
+  if command -v python3 >/dev/null 2>&1; then
+    RAM_GB=$(python3 - <<'PY'
+import os
+try:
+    pages = os.sysconf("SC_PHYS_PAGES")
+    size = os.sysconf("SC_PAGE_SIZE")
+    print(round(pages * size / (1024**3)))
+except Exception:
+    print(0)
+PY
+)
+  fi
+  if [ "$VRAM_MB" -ge 20000 ] && [ "$RAM_GB" -ge 48 ]; then
+    VISION=qwen2.5vl:32b; VFALL=qwen2.5vl:7b; TEXT=qwen3:32b; TFALL=qwen3:14b
+  elif [ "$VRAM_MB" -ge 10000 ] && [ "$RAM_GB" -ge 24 ]; then
+    VISION=qwen2.5vl:7b; VFALL=qwen2.5vl:3b; TEXT=qwen3:14b; TFALL=qwen3:8b
+  elif [ "$VRAM_MB" -ge 6000 ] && [ "$RAM_GB" -ge 16 ]; then
+    VISION=qwen2.5vl:7b; VFALL=qwen2.5vl:3b; TEXT=qwen3:8b; TFALL=qwen3:4b
+  else
+    VISION=qwen2.5vl:3b; VFALL=llava:7b; TEXT=qwen3:4b; TFALL=llama3.2:3b
+  fi
+  echo "Best default models: vision=$VISION, text=$TEXT"
+  ollama pull "$VISION" || ollama pull "$VFALL" || true
+  ollama pull "$TEXT" || ollama pull "$TFALL" || true
+else
+  echo "[..] Ollama not found. Install it from https://ollama.com for AI titles/vision."
+fi
+
+# 4b. User-supplied Valorant cue pack. Best-effort so setup still completes
+#     if the soundboard site is temporarily unavailable.
+echo "Installing Valorant reference cues (optional)..."
+"$VPY" scripts/install_valorant_cues.py \
+  || echo "[..] Valorant cues skipped - rerun scripts/install_valorant_cues.py later."
+
+# 5. build the web UI
 ( cd frontend && npm install && npm run build )
 
 echo
