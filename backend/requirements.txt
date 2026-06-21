@@ -1,0 +1,34 @@
+# ClipForge backend dependencies
+fastapi>=0.110
+uvicorn[standard]>=0.29
+python-multipart>=0.0.9      # multipart/form-data uploads
+pydantic>=2.6
+
+# Media engine (a static ffmpeg/ffprobe is bundled by these wheels, so no
+# system install is required to run the pipeline end-to-end).
+static-ffmpeg>=2.5
+imageio-ffmpeg>=0.4.9        # fallback source for a static ffmpeg binary
+
+# Optional, auto-detected at runtime. The pipeline degrades gracefully when
+# these are absent (synthetic transcript / smart-center reframe).
+faster-whisper>=1.0          # real word-timed transcription (Whisper)
+opencv-python-headless>=4.9  # face tracking for speaker-aware 9:16 reframe
+numpy>=1.26
+yt-dlp>=2024.0              # optional: import from a pasted video URL
+
+# Gameplay on-screen text detection (OCR) — optional, gameplay-tuned. Reads
+# kill banners / scorelines / "VICTORY" splashes and learns reusable audio cues
+# from them. Auto-detected when installed. Enable with:
+#   pip install -r backend/requirements-ocr.txt   (EasyOCR / PaddleOCR / Tesseract)
+
+# GPU transcription (NVIDIA): ctranslate2 needs cuBLAS + cuDNN at runtime.
+# setup.bat/setup.sh install these automatically when nvidia-smi is present:
+#   pip install nvidia-cublas-cu12 nvidia-cudnn-cu12
+
+# Opt-in, higher-quality transcription: whisperX adds forced word-level
+# alignment (tighter caption timing) and speaker diarization. It is heavy
+# (pulls PyTorch + pyannote) and a CUDA GPU is recommended; diarization also
+# needs a Hugging Face token (set HF_TOKEN). When installed it is used
+# automatically, falling back to faster-whisper otherwise. Enable with:
+#   pip install whisperx
+# whisperx>=3.1
