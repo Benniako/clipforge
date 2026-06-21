@@ -560,14 +560,6 @@ export default function Upload({ health }: { health: Health | null }) {
               onToggle={setUseCues}
             />
           )}
-          {/* Spielübergreifende Sounds (Airhorn, Hype, Lacher ...) - werden für jedes Spielprofil genutzt. */}
-          <CueManager
-            game="common"
-            cues={cues}
-            onChange={setCues}
-            enabled={useCues}
-            onToggle={setUseCues}
-          />
         </>
       )}
 

@@ -13,7 +13,8 @@ export default function CueModal({ onClose }: { onClose: () => void }) {
       .cues()
       .then((c) => {
         setCues(c);
-        setGame((g) => g || Object.keys(c)[0] || "");
+        setGame((g) =>
+          g && g !== "common" ? g : Object.keys(c).find((id) => id !== "common") || "");
       })
       .catch(() => {});
   };
@@ -46,7 +47,7 @@ export default function CueModal({ onClose }: { onClose: () => void }) {
         {cues ? (
           <>
             <div className="seg" style={{ marginBottom: 4, flexWrap: "wrap" }}>
-              {Object.entries(cues).map(([id, pack]) => (
+              {Object.entries(cues).filter(([id]) => id !== "common").map(([id, pack]) => (
                 <button
                   key={id}
                   className={game === id ? "on" : ""}
