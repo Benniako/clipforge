@@ -155,6 +155,33 @@ class Rect(BaseModel):
                     y=min(max(self.y, 0.0), 1.0 - h), w=w, h=h)
 
 
+class GameProfileConfig(BaseModel):
+    """Optional per-project cue tuning for gameplay detection.
+
+    The built-in detectors stay automatic, but this lets a project carry custom
+    OCR boxes, visual phrases, and CLAP prompt hints without hard-coding them
+    into a global game profile.
+    """
+    detection_mode: str = "zero_shot"  # "zero_shot" | "manual" | "hybrid"
+    visual_rois: list[Rect] = Field(default_factory=list)
+    visual_text_cues: list[str] = Field(default_factory=list)
+    reference_audio_files: list[str] = Field(default_factory=list)
+    vlm_visual_prompts: list[str] = Field(default_factory=lambda: [
+        "victory screen",
+        "defeat screen",
+        "kill feed",
+        "skull icon",
+    ])
+    audio_prompts: list[str] = Field(default_factory=list)
+    audio_negative_prompts: list[str] = Field(default_factory=lambda: [
+        "mouse clicking",
+        "UI menu navigation",
+        "keyboard typing",
+        "quiet lobby music",
+        "loading screen ambience",
+    ])
+
+
 class ReframeKeyframe(BaseModel):
     t: float                    # time relative to the CLIP (s)
     cx: float                   # crop-window centre X as a fraction [0,1] of src width
@@ -330,6 +357,8 @@ class ImportSettings(BaseModel):
     # or audio-event window. None keeps the profile default.
     lead_seconds: float | None = None
     tail_seconds: float | None = None
+    # Project-local cue configuration for custom CLAP prompts and OCR ROIs.
+    game_config: GameProfileConfig = Field(default_factory=GameProfileConfig)
 
     def dims(self) -> tuple[int, int]:
         return ASPECTS.get(self.aspect, ASPECTS["9:16"])

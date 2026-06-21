@@ -372,9 +372,12 @@ def _normalize_profile(profile: str | None) -> str:
     return _PROFILE_ALIAS.get(name, name)
 
 
-def _prompt_sets(profile: str | None = None, language: str | None = None
+def _prompt_sets(profile: str | None = None, language: str | None = None,
+                 positive_prompts: list[str] | tuple[str, ...] | None = None,
+                 negative_prompts: list[str] | tuple[str, ...] | None = None,
                  ) -> tuple[dict[str, tuple[str, ...]], dict[str, tuple[str, ...]]]:
     pos = {label: tuple(prompts) for label, prompts in CLAP_PROMPTS.items()}
+    neg = {label: tuple(prompts) for label, prompts in NEGATIVE_CLAP_PROMPTS.items()}
     name = _normalize_profile(profile)
     for label, prompts in GAME_CLAP_PROMPTS.get(name, {}).items():
         pos[label] = tuple(dict.fromkeys(pos.get(label, ()) + prompts))
@@ -390,7 +393,14 @@ def _prompt_sets(profile: str | None = None, language: str | None = None
                 "German streamer gasps in surprise",
                 "German voice shocked by a gameplay moment",
             )))
-    return pos, NEGATIVE_CLAP_PROMPTS
+    custom_pos = tuple(p.strip() for p in positive_prompts or () if p and p.strip())
+    custom_neg = tuple(p.strip() for p in negative_prompts or () if p and p.strip())
+    if custom_pos:
+        pos["custom cue"] = tuple(dict.fromkeys(pos.get("custom cue", ()) + custom_pos))
+    if custom_neg:
+        neg["custom non-highlight"] = tuple(
+            dict.fromkeys(neg.get("custom non-highlight", ()) + custom_neg))
+    return pos, neg
 
 
 def _flatten_prompts(groups: dict[str, tuple[str, ...]]) -> tuple[list[str], list[str]]:
@@ -411,7 +421,9 @@ def _group_prompt_scores(labels: list[str], values) -> dict[str, float]:
 
 
 def _clap_similarity_rows(paths: list[str], *, profile: str | None = None,
-                          language: str | None = None
+                          language: str | None = None,
+                          positive_prompts: list[str] | tuple[str, ...] | None = None,
+                          negative_prompts: list[str] | tuple[str, ...] | None = None,
                           ) -> list[tuple[dict[str, float], dict[str, float]]]:
     if not paths:
         return []
@@ -421,7 +433,9 @@ def _clap_similarity_rows(paths: list[str], *, profile: str | None = None,
     try:
         import numpy as np
 
-        pos_prompts, neg_prompts = _prompt_sets(profile, language)
+        pos_prompts, neg_prompts = _prompt_sets(
+            profile, language, positive_prompts=positive_prompts,
+            negative_prompts=negative_prompts)
         pos_labels, pos_texts = _flatten_prompts(pos_prompts)
         neg_labels, neg_texts = _flatten_prompts(neg_prompts)
         all_prompts = [*pos_texts, *neg_texts]
@@ -461,8 +475,13 @@ def _embedding_array(fn, values):
 
 
 def _clap_score(seg_path: str, *, profile: str | None = None,
-                language: str | None = None) -> tuple[float, str] | None:
-    rows = _clap_similarity_rows([seg_path], profile=profile, language=language)
+                language: str | None = None,
+                positive_prompts: list[str] | tuple[str, ...] | None = None,
+                negative_prompts: list[str] | tuple[str, ...] | None = None
+                ) -> tuple[float, str] | None:
+    rows = _clap_similarity_rows(
+        [seg_path], profile=profile, language=language,
+        positive_prompts=positive_prompts, negative_prompts=negative_prompts)
     if not rows:
         return None
     return reduce_clap_window(*rows[0])
@@ -471,7 +490,10 @@ def _clap_score(seg_path: str, *, profile: str | None = None,
 def find_events(wav_path: str, duration: float, *, window: float = 6.0,
                 hop: float = 3.0, threshold: float = 0.35,
                 limit: int = 20, profile: str | None = None,
-                language: str | None = None) -> list[AudioEvent]:
+                language: str | None = None,
+                positive_prompts: list[str] | tuple[str, ...] | None = None,
+                negative_prompts: list[str] | tuple[str, ...] | None = None
+                ) -> list[AudioEvent]:
     """Zero-shot CLAP search over audio windows.
 
     Returns highlight-like audio events (cheer/laugh/action/etc.) while filtering
@@ -515,7 +537,9 @@ def find_events(wav_path: str, duration: float, *, window: float = 6.0,
                 except Exception as e:
                     log.debug("CLAP window extract failed at %.1fs: %s", start, e)
             rows = _clap_similarity_rows([p for _, p in pairs],
-                                         profile=profile, language=language)
+                                         profile=profile, language=language,
+                                         positive_prompts=positive_prompts,
+                                         negative_prompts=negative_prompts)
 
         events: list[AudioEvent] = []
         for (t_mid, _path), row in zip(pairs, rows):

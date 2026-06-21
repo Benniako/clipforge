@@ -1,6 +1,7 @@
 // Tiny typed API client. All paths are same-origin (dev proxy / prod static).
 import type {
   Clip,
+  GameProfileConfig,
   Health,
   ImportSettings,
   Project,
@@ -77,6 +78,7 @@ export interface CreateProjectInput {
   auto_length: boolean;
   lead_seconds: number | null;
   tail_seconds: number | null;
+  game_config?: GameProfileConfig;
   onProgress?: (pct: number) => void;
 }
 
@@ -255,6 +257,15 @@ export const api = {
       fd.set("auto_length", String(input.auto_length));
       if (input.lead_seconds !== null) fd.set("lead_seconds", String(input.lead_seconds));
       if (input.tail_seconds !== null) fd.set("tail_seconds", String(input.tail_seconds));
+      if (input.game_config) {
+        fd.set("detection_mode", input.game_config.detection_mode);
+        fd.set("visual_rois_json", JSON.stringify(input.game_config.visual_rois ?? []));
+        fd.set("visual_text_cues", (input.game_config.visual_text_cues ?? []).join("\n"));
+        fd.set("reference_audio_files", (input.game_config.reference_audio_files ?? []).join("\n"));
+        fd.set("vlm_visual_prompts", (input.game_config.vlm_visual_prompts ?? []).join("\n"));
+        fd.set("audio_prompts", (input.game_config.audio_prompts ?? []).join("\n"));
+        fd.set("audio_negative_prompts", (input.game_config.audio_negative_prompts ?? []).join("\n"));
+      }
       if (input.url) fd.set("url", input.url);
       if (input.file) fd.set("file", input.file);
 
@@ -355,4 +366,6 @@ export const api = {
     `/api/projects/${projectId}/clips/${clipId}/download`,
 
   exportBatchUrl: (projectId: string) => `/api/projects/${projectId}/export`,
+
+  exportPremiereUrl: (projectId: string) => `/api/projects/${projectId}/export/premiere`,
 };

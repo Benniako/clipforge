@@ -18,8 +18,8 @@ from pathlib import Path
 # Isolate the learning DB before anything imports settings.
 os.environ.setdefault("CLIPFORGE_DATA_DIR", tempfile.mkdtemp(prefix="clipforge-test-"))
 
-from app.models import (Clip, ClipStatus, DetectedEvent, ImportSettings,
-                        Platform, Project, ProjectStatus, Reframe,
+from app.models import (Clip, ClipStatus, DetectedEvent, GameProfileConfig,
+                        ImportSettings, Platform, Project, ProjectStatus, Reframe,
                         ReframeKeyframe, SourceMedia, Transcript, Word)
 from app.pipeline import captionize, render
 from app.pipeline import captions as C
@@ -79,6 +79,23 @@ def test_srt_output_format():
     assert srt.startswith("1\n00:00:00,000 --> 00:00:00,900\nHallo Welt")
     assert _srt_ts(1.9996) == "00:00:02,000"
     assert _srt_ts(59.9996) == "00:01:00,000"
+
+
+def test_premiere_edl_uses_source_timecodes():
+    from app.pipeline.nle_export import build_cmx3600, timecode
+
+    p = Project(
+        name="EDL Test",
+        source=SourceMedia(filename="source.mp4", path="proj/source.mp4", fps=30),
+        clips=[
+            Clip(start=10.0, end=15.0, title="First", score=91, export_url="/media/a.mp4"),
+            Clip(start=30.0, end=33.0, title="Second", score=72, export_url="/media/b.mp4"),
+        ],
+    )
+    edl = build_cmx3600(p, source_file="D:/clips/source.mp4")
+    assert timecode(10.0, 30) == "00:00:10:00"
+    assert "00:00:10:00 00:00:15:00 00:00:00:00 00:00:05:00" in edl
+    assert "* SOURCE FILE: D:/clips/source.mp4" in edl
 
 
 def test_spa_fallback_serves_index_for_client_routes(tmp_path=None):
@@ -398,6 +415,34 @@ def test_whisperx_diarization_constructor_supports_new_and_old_token_api():
             sys.modules["whisperx.diarize"] = old_child
 
 
+def test_german_transcription_prompt_is_optional_and_backward_compatible():
+    from app.providers import transcribe as T
+
+    old_get = T.get_settings
+    T.get_settings = lambda: _settings(german_gaming_prompt="Deutsch Gaming Prompt")
+
+    class OldEngine:
+        def __init__(self):
+            self.calls = []
+
+        def transcribe(self, audio, **kwargs):
+            self.calls.append(kwargs)
+            if "initial_prompt" in kwargs:
+                raise TypeError("unexpected keyword initial_prompt")
+            return "segments", "info"
+
+    try:
+        assert T._initial_prompt("de") == "Deutsch Gaming Prompt"
+        assert T._initial_prompt("en") is None
+        engine = OldEngine()
+        assert T._transcribe_with_prompt(engine, "audio.wav", language="de",
+                                         initial_prompt="Prompt") == ("segments", "info")
+        assert "initial_prompt" in engine.calls[0]
+        assert "initial_prompt" not in engine.calls[-1]
+    finally:
+        T.get_settings = old_get
+
+
 # --------------------------------------------------------------------------- #
 # GPU encoding gating — never try NVENC without a real GPU
 # --------------------------------------------------------------------------- #
@@ -464,6 +509,15 @@ def test_aspect_dims():
     assert ImportSettings(aspect="1:1").dims() == (1080, 1080)
     assert ImportSettings(aspect="4:5").dims() == (1080, 1350)
     assert ImportSettings(aspect="bogus").dims() == (1080, 1920)  # safe default
+
+
+def test_game_profile_config_defaults_and_roi_clamp():
+    cfg = GameProfileConfig(visual_rois=[{"x": -1, "y": 0.9, "w": 2, "h": 0.5}])
+    roi = cfg.visual_rois[0].clamped()
+    assert cfg.audio_negative_prompts
+    assert "kill feed" in cfg.vlm_visual_prompts
+    assert roi.x == 0.0 and roi.w == 1.0
+    assert 0.0 <= roi.y <= 1.0 and roi.y + roi.h <= 1.0
 
 
 def test_hashtags_talking_vs_gameplay():
@@ -1099,6 +1153,22 @@ def test_ocr_keyword_matching_finds_viral_markers():
     assert O.match_keywords("the quick brown fox", "generic", fuzzy=False) == []
 
 
+def test_ocr_menu_context_is_detected_but_not_highlighted():
+    from app.media.ffmpeg import MediaInfo
+    from app.providers import detect_gameplay as DG
+    from app.providers import detect_ocr as O
+    from app.providers.detect_ocr import OcrEvent
+
+    assert any(l == "menu" for l, _ in O.match_keywords("MAIN MENU SETTINGS", "generic"))
+    menu = OcrEvent(t=10.0, label="menu", text="main menu settings", confidence=0.9)
+    audio = [types.SimpleNamespace(t=12.0, label="excited_shouting", confidence=0.8, detail="CLAP")]
+    assert DG._suppress_audio_events_near_menu(audio, [menu]) == []
+
+    info = MediaInfo(duration=120, width=1920, height=1080, fps=30,
+                     has_audio=True, has_video=True, codec=None)
+    assert DG._ocr_clips([menu], info, ImportSettings(min_len=8, max_len=20)) == []
+
+
 def test_saved_visual_cues_extend_ocr_lexicon():
     from app import visual_cues
     from app.providers import detect_ocr as O
@@ -1630,6 +1700,14 @@ def test_clap_prompts_include_game_and_german_context():
     assert "valorant" in joined_pos and "spike" in joined_pos
     assert "german streamer" in joined_pos
     assert "lobby" in joined_neg and "menu" in joined_neg
+
+    pos2, neg2 = AE._prompt_sets(
+        "generic", "de",
+        positive_prompts=["German ace celebration"],
+        negative_prompts=["inventory click loop"],
+    )
+    assert "German ace celebration" in pos2["custom cue"]
+    assert "inventory click loop" in neg2["custom non-highlight"]
 
 
 def test_clap_loader_hides_server_args_and_restores_argv():

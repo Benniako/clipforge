@@ -299,6 +299,9 @@ export default function ClipGridView({
           <a className="btn primary sm" href={api.exportBatchUrl(project.id)}>
             Alle exportieren ({ready})
           </a>
+          <a className="btn ghost sm" href={api.exportPremiereUrl(project.id)}>
+            Premiere EDL
+          </a>
         </div>
       </div>
 

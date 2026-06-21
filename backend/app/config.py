@@ -297,6 +297,12 @@ class Settings:
     # (the pyannote model is gated). Without it, whisperX still aligns words.
     hf_token: str | None = (os.environ.get("HF_TOKEN")
                             or os.environ.get("CLIPFORGE_HF_TOKEN") or None)
+    german_gaming_prompt: str = os.environ.get(
+        "CLIPFORGE_GERMAN_GAMING_PROMPT",
+        "Dies ist ein deutsches Gameplay-Video. Begriffe wie Ace, Clutch, "
+        "Enemy down, Bombe geplant, Bombe gelegt, Runde gewonnen, Kopfschuss, "
+        "krass und insane werden gesprochen.",
+    )
     # pyannote's current free local pipeline. Override only when you have a
     # different gated model/API-key arrangement.
     diarization_model: str = os.environ.get(
@@ -489,5 +495,9 @@ def get_settings() -> Settings:
         diarization_model=os.environ.get(
             "CLIPFORGE_DIARIZATION_MODEL",
             "pyannote/speaker-diarization-community-1",
+        ),
+        german_gaming_prompt=os.environ.get(
+            "CLIPFORGE_GERMAN_GAMING_PROMPT",
+            Settings.__dataclass_fields__["german_gaming_prompt"].default,
         ),
     )

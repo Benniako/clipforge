@@ -82,6 +82,14 @@ _GW_FACTOR = {
 # (creator-platform data, 2026) — the reaction IS the content.
 REACTION_WEIGHT = 0.2
 CONFIRM_WINDOW = 3.0
+MENU_CONTEXT_WINDOW = 5.0
+MENU_OCR_LABELS = {"menu"}
+MENU_OCR_WORDS = {
+    "settings", "inventory", "main menu", "menu", "lobby", "store", "shop",
+    "collection", "loadout", "agent select", "matchmaking", "einstellungen",
+    "inventar", "hauptmenu", "hauptmenue", "hauptmenü", "menue", "menü",
+    "laden", "sammlung", "ausruestung", "ausrüstung", "agenten",
+}
 
 
 def _label_family(label: str | None) -> str:
@@ -302,6 +310,8 @@ def detect_gameplay(src_path: str, info: MediaInfo, settings: ImportSettings,
         ocr_events = _find_ocr_events(src_path, info, settings,
                                       focus_times=focus_times)
 
+    audio_window_events = _suppress_audio_events_near_menu(
+        audio_window_events, ocr_events)
     _record_events(events_out, cue_events, ocr_events, audio_window_events)
 
     if times is None:
@@ -497,6 +507,33 @@ def _record_events(events_out: list | None, cue_events: list,
     events_out.sort(key=lambda e: e.t)
 
 
+def _is_menu_ocr_event(event) -> bool:
+    label = str(getattr(event, "label", "") or "").lower()
+    if label in MENU_OCR_LABELS:
+        return True
+    detail = str(getattr(event, "text", "") or getattr(event, "detail", "") or "").lower()
+    return any(word in detail for word in MENU_OCR_WORDS)
+
+
+def _suppress_audio_events_near_menu(audio_events: list, ocr_events: list,
+                                     *, window: float = MENU_CONTEXT_WINDOW) -> list:
+    """Drop generic CLAP hits when OCR says the player is in menus/lobbies."""
+    if not audio_events or not ocr_events:
+        return audio_events
+    menu_times = [float(e.t) for e in ocr_events if _is_menu_ocr_event(e)]
+    if not menu_times:
+        return audio_events
+    kept = []
+    for e in audio_events:
+        t = float(e.t)
+        if any(abs(t - mt) <= window for mt in menu_times):
+            log.info("suppressed CLAP event %s at %.1fs near menu OCR",
+                     getattr(e, "label", "unknown"), t)
+            continue
+        kept.append(e)
+    return kept
+
+
 # On-screen markers that mean the moment already happened — open a little before
 # so the play that earned the banner is in-frame, with less tail.
 def _ocr_clips(events: list, info: MediaInfo, settings: ImportSettings, *,
@@ -510,6 +547,8 @@ def _ocr_clips(events: list, info: MediaInfo, settings: ImportSettings, *,
         tail = max(target - lead, 2.0)
     out: list[GameplayClip] = []
     for e in events:
+        if _is_menu_ocr_event(e):
+            continue
         start = max(0.0, e.t - lead)
         end = min(info.duration, e.t + tail)
         if end - start < settings.min_len:
@@ -590,10 +629,13 @@ def _audio_events(wav_path: str, duration: float, settings: ImportSettings) -> l
         hop = 4.0 if mode in ("max_gpu", "quality") else 5.0
         window = 5.0 if mode == "max_gpu" else 6.0
         threshold = 0.55 if mode == "quality" else 0.58
+        cfg = getattr(settings, "game_config", None)
         return audio_events_mod.find_events(
             wav_path, duration, window=window, hop=hop, threshold=threshold,
             limit=max(settings.target_clips, 6), profile=settings.game_profile,
-            language=settings.language)
+            language=settings.language,
+            positive_prompts=getattr(cfg, "audio_prompts", None),
+            negative_prompts=getattr(cfg, "audio_negative_prompts", None))
     except Exception as e:
         log.warning("CLAP audio event search failed: %s", e)
         return []
