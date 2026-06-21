@@ -63,14 +63,17 @@ def _resolve_ffmpeg() -> tuple[str | None, str | None]:
 def _has_module(name: str) -> bool:
     import importlib.util
 
-    return importlib.util.find_spec(name) is not None
+    try:
+        return importlib.util.find_spec(name) is not None
+    except ModuleNotFoundError:
+        return False
 
 
 def _detect_ocr() -> str:
     """Best available OCR backend for on-screen game text, or "" if none.
 
     Preference follows accuracy on noisy game UI text (2026 benchmarks):
-    PaddleOCR (PP-OCRv5, most accurate) → EasyOCR (great on screenshots /
+    PaddleOCR (PP-OCRv6 -> PP-OCRv5, most accurate) → EasyOCR (great on screenshots /
     overlays) → Tesseract (lightweight fallback, needs the system binary too).
     Every backend is optional — with none installed, OCR detection is skipped
     and the audio-energy / cue path still finds highlights.
@@ -97,6 +100,67 @@ def _detect_reframe_engine() -> str:
     return "haar"
 
 
+def _detect_asd_adapter() -> bool:
+    """True only when active-speaker detection can actually relabel words.
+
+    ``CLIPFORGE_ASD_DIR`` alone is not enough: the LR-ASD checkout must include
+    its demo entrypoint, model code, weights, and the small MFCC dependency.
+    """
+    candidates: list[Path] = []
+    env = os.environ.get("CLIPFORGE_ASD_DIR")
+    if env:
+        candidates.append(Path(env))
+    data_dir = Path(os.environ.get("CLIPFORGE_DATA_DIR",
+                                   Path(__file__).resolve().parents[1] / "data"))
+    candidates.append(data_dir / "models" / "LR-ASD")
+
+    required = ("ASD.py", "Columbia_test.py", "model/Model.py")
+    weights = ("weight/pretrain_AVA.model", "model/faceDetector/s3fd/sfd_face.pth")
+    deps = ("cv2", "numpy", "python_speech_features", "scipy", "sklearn", "torch")
+    for asd_dir in candidates:
+        if not all((asd_dir / rel).exists() for rel in required):
+            continue
+        missing_weight = False
+        for rel in weights:
+            weight_path = asd_dir / rel
+            if not weight_path.exists() or weight_path.stat().st_size < 100_000:
+                missing_weight = True
+                break
+        if missing_weight:
+            continue
+        if not _lr_asd_script_compatible(asd_dir):
+            continue
+        if not all(_has_module(dep) for dep in deps):
+            continue
+        if not _torch_cuda_available():
+            continue
+        return True
+    return False
+
+
+def _lr_asd_script_compatible(asd_dir: Path) -> bool:
+    """Guard against an old LR-ASD demo script + new PySceneDetect install."""
+    script = asd_dir / "Columbia_test.py"
+    try:
+        text = script.read_text(encoding="utf-8", errors="ignore")
+    except Exception:
+        return False
+    if "VideoManager = None" in text and "open_video" in text:
+        return True
+    if "from scenedetect.video_manager import VideoManager" not in text:
+        return True
+    return _has_module("scenedetect.video_manager")
+
+
+def _torch_cuda_available() -> bool:
+    try:
+        import torch
+
+        return bool(torch.cuda.is_available())
+    except Exception:
+        return False
+
+
 def _detect_cuda() -> bool:
     """True if an NVIDIA GPU is usable for the neural models."""
     try:
@@ -106,12 +170,7 @@ def _detect_cuda() -> bool:
             return True
     except Exception:
         pass
-    try:
-        import torch
-
-        return bool(torch.cuda.is_available())
-    except Exception:
-        return False
+    return _torch_cuda_available()
 
 
 def _detect_nvenc(ffmpeg: str | None) -> tuple[bool, bool]:
@@ -207,6 +266,9 @@ class Settings:
     has_vad: bool = False        # Silero VAD — snap captions to exact speech
     has_scenedetect: bool = False  # PySceneDetect — better scene-cut snapping
     has_emotion: bool = False    # emotion2vec/FunASR — excitement virality signal
+    has_demucs: bool = False     # Demucs — isolate voice from music/game audio
+    has_audio_events: bool = False  # PANNs — cheering/laughter/explosion detection
+    has_clap: bool = False       # CLAP zero-shot audio cue detection
     reframe_engine: str = "haar"  # "yolo" | "mediapipe" | "haar"
     has_asd: bool = False        # LR-ASD active-speaker detection wired in
     vram_mb: int = 0        # total VRAM of the first GPU (MB)
@@ -235,6 +297,18 @@ class Settings:
     # (the pyannote model is gated). Without it, whisperX still aligns words.
     hf_token: str | None = (os.environ.get("HF_TOKEN")
                             or os.environ.get("CLIPFORGE_HF_TOKEN") or None)
+    german_gaming_prompt: str = os.environ.get(
+        "CLIPFORGE_GERMAN_GAMING_PROMPT",
+        "Dies ist ein deutsches Gameplay-Video. Begriffe wie Ace, Clutch, "
+        "Enemy down, Bombe geplant, Bombe gelegt, Runde gewonnen, Kopfschuss, "
+        "krass und insane werden gesprochen.",
+    )
+    # pyannote's current free local pipeline. Override only when you have a
+    # different gated model/API-key arrangement.
+    diarization_model: str = os.environ.get(
+        "CLIPFORGE_DIARIZATION_MODEL",
+        "pyannote/speaker-diarization-community-1",
+    )
     # Output codec: "h264" (default — universal playback) or "av1" (av1_nvenc,
     # better quality per bitrate; needs an RTX 40/50-series GPU encoder).
     codec: str = os.environ.get("CLIPFORGE_CODEC", "h264")
@@ -302,6 +376,40 @@ class Settings:
         return ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
                 "-pix_fmt", "yuv420p", "-profile:v", "high"]
 
+    def render_workers_for(self, power_mode: str | None) -> int:
+        """Per-project render fan-out."""
+        mode = (power_mode or "balanced").lower()
+        cpu = os.cpu_count() or 4
+        if mode == "max_gpu":
+            return max(1, min(max(self.render_workers, cpu // 2), 8))
+        if mode == "quality":
+            return max(1, min(self.render_workers, 2))
+        return max(1, self.render_workers)
+
+    def whisper_batch_for(self, power_mode: str | None) -> int:
+        """Batch size for faster-whisper/WhisperX on this project."""
+        base = max(0, self.whisper_batch_size)
+        if self.device != "cuda":
+            return 0
+        mode = (power_mode or "balanced").lower()
+        if mode == "max_gpu":
+            return max(base, 16 if self.vram_mb >= 12000 else 8)
+        if mode == "quality":
+            return max(base, 8)
+        return base
+
+    def vlm_options_for(self, power_mode: str | None) -> dict[str, float | int]:
+        """Budget/parallelism for local vision-model scoring."""
+        mode = (power_mode or "balanced").lower()
+        if mode == "max_gpu":
+            return {"budget": 90.0, "max_workers": 2, "n_frames": 2,
+                    "timeout": 35.0}
+        if mode == "quality":
+            return {"budget": 120.0, "max_workers": 2, "n_frames": 3,
+                    "timeout": 45.0}
+        return {"budget": 45.0, "max_workers": 1, "n_frames": 2,
+                "timeout": 30.0}
+
     def capability_report(self) -> dict:
         return {
             "ffmpeg": bool(self.ffmpeg),
@@ -312,6 +420,10 @@ class Settings:
             "vad": self.has_vad,
             "scene_detect": self.has_scenedetect,
             "emotion": self.has_emotion,
+            "denoise": self.has_demucs,
+            "audio_events": self.has_audio_events or self.has_clap,
+            "panns_audio": self.has_audio_events,
+            "clap_audio": self.has_clap,
             "reframe_engine": self.reframe_engine,
             "active_speaker": self.has_asd,
             "face_tracking": self.has_opencv,
@@ -322,9 +434,13 @@ class Settings:
                       and self.has_av1_nvenc else "h264"),
             "device": self.device,
             "whisper_model": self.whisper_model,
+            "diarization_model": self.diarization_model if self.hf_token else None,
             "auto_model": self.auto_model,
             "vram_gb": round(self.vram_mb / 1024, 1) if self.vram_mb else 0,
             "cpu": os.cpu_count() or 0,
+            "recommended_power_mode": (
+                "max_gpu" if self.has_cuda and self.vram_mb >= 12000 else "balanced"
+            ),
         }
 
 
@@ -362,8 +478,11 @@ def get_settings() -> Settings:
         has_vad=_has_module("silero_vad"),
         has_scenedetect=_has_module("scenedetect"),
         has_emotion=_has_module("funasr"),
+        has_demucs=_has_module("demucs"),
+        has_audio_events=_has_module("panns_inference"),
+        has_clap=_has_module("laion_clap"),
         reframe_engine=_detect_reframe_engine(),
-        has_asd=bool(os.environ.get("CLIPFORGE_ASD_DIR")) and _has_module("torch"),
+        has_asd=_detect_asd_adapter(),
         has_cuda=has_cuda,
         has_nvenc=has_nvenc,
         has_nvidia=has_nvidia,
@@ -373,4 +492,12 @@ def get_settings() -> Settings:
         device=device,
         whisper_model=whisper_model,
         render_workers=render_workers,
+        diarization_model=os.environ.get(
+            "CLIPFORGE_DIARIZATION_MODEL",
+            "pyannote/speaker-diarization-community-1",
+        ),
+        german_gaming_prompt=os.environ.get(
+            "CLIPFORGE_GERMAN_GAMING_PROMPT",
+            Settings.__dataclass_fields__["german_gaming_prompt"].default,
+        ),
     )

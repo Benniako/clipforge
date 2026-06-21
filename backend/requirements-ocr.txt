@@ -5,19 +5,23 @@
 # engine installed, ClipForge reads those and turns them into highlights (and
 # learns a reusable audio cue from each one — see app/cue_learning.py).
 #
-# Install ONE of these (auto-detected at runtime; nothing else to configure):
+# Install these optional OCR engines (auto-detected at runtime; nothing else to configure):
 #
 #   pip install -r backend/requirements-ocr.txt
 #
-# EasyOCR is the most robust on noisy game overlays (kill feeds, HUDs) and is
-# the recommended default for gameplay. It pulls PyTorch; a CUDA GPU makes it
-# much faster but it runs on CPU too.
-easyocr>=1.7
+# PaddleOCR (PP-OCRv6 -> PP-OCRv5 fallback) is the most accurate overall.
+paddleocr>=3.2
+transformers>=4.45        # required for PP-OCRv6 engine="transformers"
+paddlepaddle>=3.2         # runtime engine used by PaddleOCR/PaddleX
 
-# Alternative — PaddleOCR (PP-OCRv5) is the most accurate overall. Use it
-# *instead of* EasyOCR if you prefer (comment out easyocr above):
-# paddleocr>=2.7
-# paddlepaddle>=2.6           # or paddlepaddle-gpu for CUDA
+# EasyOCR is the robust fallback on noisy game overlays (kill feeds, HUDs).
+# It pulls PyTorch; a CUDA GPU makes it much faster but it runs on CPU too.
+easyocr>=1.7
 
 # Lightweight fallback — Tesseract (needs the system `tesseract` binary too):
 # pytesseract>=0.3.10
+
+# Fuzzy keyword matching — lets garbled OCR ("VICT0RY", "ELiMiNATED") still
+# match the viral-marker lexicon. Tiny, pure-Python wheel, no native deps. When
+# absent, ClipForge falls back to exact substring matching automatically.
+rapidfuzz>=3.0

@@ -59,6 +59,9 @@ YuNet when available, Haar fallback); clips then use the TikTok-standard
 cam's **reaction energy** feeds the virality score ("streamer reacts hard"), and
 the gameplay crop follows the **motion centroid** instead of blindly centering —
 all overridable per clip in the editor.
+If NVIDIA background removal makes the rectangular webcam hard to see, the
+optional YOLO fallback looks for a stable small person cutout and uses that as
+the facecam region.
 Outputs in **9:16, 4:5, 1:1, or 16:9** (horizontal for YouTube / NLE editing),
 captions optionally burned in, plus **montages** that stitch chosen clips into one
 video with its own virality score. All **local, no APIs**.
@@ -116,9 +119,16 @@ fully transparent (`/api/learning` shows what it learned), and resettable.
 
 ### Easiest — Windows (double-click)
 1. **Double-click `setup.bat`** — creates an isolated Python 3.12 env, installs
-   everything, builds the UI. (Run once.)
+   everything, pulls the strongest local Qwen/Ollama text + vision models that
+   fit your GPU/RAM when possible, guides you through the private Hugging Face
+   token needed for speaker diarization, sets up LR-ASD active-speaker tracking
+   when possible, and builds the UI. (Run once.)
 2. **Double-click `run.bat`** — starts the server and opens
    **http://localhost:8000**. That's it — one window, one URL.
+
+   Setup also makes later runs simple: `run.bat` starts Ollama if it exists,
+   leaves model choice on auto, and ClipForge picks the strongest installed
+   local text/vision model by default.
 
 ### macOS / Linux (or Git Bash)
 ```bash
@@ -143,15 +153,31 @@ runs from a **single process on http://localhost:8000** — no second terminal.
 | `CLIPFORGE_TRANSCRIBER` | `auto` | `auto` (whisperX if installed, else faster-whisper), or force `whisperx`/`faster`/`synthetic`. |
 | `CLIPFORGE_DEVICE` | *auto* | `cuda` when a usable GPU is detected, else `cpu`. Set to force. |
 | `HF_TOKEN` | – | Hugging Face token; enables whisperX **speaker diarization** (gated pyannote model). |
+| `CLIPFORGE_DIARIZATION_MODEL` | `pyannote/speaker-diarization-community-1` | WhisperX/pyannote diarization model to load once `HF_TOKEN` is valid. |
 | `CLIPFORGE_OLLAMA_URL` | `http://localhost:11434` | Local LLM (Ollama) for AI titles/hooks; used only if reachable. |
 | `CLIPFORGE_LLM_MODEL` | *auto* | Ollama model for titles — auto-picks the strongest installed (qwen3 → llama3.1 → …). Set to force. |
 | `CLIPFORGE_RENDER_WORKERS` | *auto* | Parallel clip renders (scaled to CPU cores). |
 | `CLIPFORGE_CODEC` | `h264` | `av1` opts into av1_nvenc (RTX 40/50 series) — better quality per bitrate. |
 | `CLIPFORGE_WHISPER_BATCH` | `8` | Batched-inference batch size for faster-whisper on GPU (keeps the card saturated). |
+| `CLIPFORGE_YOLO_MODEL` | `yolo11n.pt` | YOLO subject-tracking model. Set `yolo26n.pt` to opt into YOLO26 when `ultralytics>=8.4` is installed. |
 | `CLIPFORGE_ASD_DIR` | – | Path to an [LR-ASD](https://github.com/Junhua-Liao/LR-ASD) checkout to enable active-speaker attribution. |
 | `CLIPFORGE_DATA_DIR` | `backend/data` | Where the DB + media live. |
 | `CLIPFORGE_MAX_UPLOAD_MB` | `0` (unlimited) | Upload / URL-import size cap in MB; set only to guard a small disk. |
 | `FFMPEG_BIN` / `FFPROBE_BIN` | auto | Override binary resolution. |
+
+By default, `setup.bat` pulls the strongest hardware-fit local models it can:
+on a 16 GB NVIDIA GPU / 32 GB RAM machine this is the strongest installed
+compatible vision model (`qwen3-vl` if available, then `qwen2.5vl`) for visual
+scoring and `qwen3:14b` / `gemma4` tier models for titles/virality. `run.bat`
+starts Ollama when available, sets `CLIPFORGE_DEFAULT_POWER_MODE=max_gpu`, and
+leaves `CLIPFORGE_LLM_MODEL` / `CLIPFORGE_VLM_MODEL` unset so ClipForge
+automatically chooses the strongest installed compatible model. Set either
+variable only when you want to force a specific model.
+
+For German-heavy videos on a strong GPU, set `CLIPFORGE_WHISPER_MODEL=large-v3`
+when accuracy matters more than speed. The default auto/turbo path stays faster
+for everyday batches, but `large-v3` is the better quality choice for dense
+German speech.
 
 Default spoken language is **German** (English/auto selectable per project).
 Game events can be pinpointed by matching reference **audio cues** — see
@@ -183,6 +209,9 @@ pip install -r backend/requirements-extras.txt
 | **Silero VAD** | Captions snapped to the *exact* speech — words clear the instant talking stops. | `silero-vad` |
 | **PySceneDetect** | More robust scene-cut snapping (adaptive detector) than the ffmpeg score. | `scenedetect` |
 | **emotion2vec** | A speech-emotion **excitement** signal (laughs/hype/rage) folded into virality as an explainable factor. | `funasr` |
+| **PANNs audio events** | Hears the *sounds* that signal a highlight — **cheering, laughter, applause, explosions** — as an explainable, zero-shot virality factor (no per-game cue needed). | `panns-inference` |
+| **Demucs clean voice** | Isolates the **voice** from background music / game audio so speech and captions sound studio-clean. Opt-in per project (*Clean voice*). | `demucs` |
+| **VLM vision read** | A local **vision-language second opinion** on virality from a clip's keyframes (expression, action, framing) — bounded & explainable, like the text re-rank. | `ollama pull qwen2.5vl` |
 | **OCR** | On-screen game text (kill banners, scorelines, VICTORY) → highlights, and **learns reusable audio cues** from them. | `easyocr` / `paddleocr` |
 | **YOLO reframe** | Content-aware 9:16 — tracks people/objects through cuts when no face is visible. | `ultralytics` |
 | **LR-ASD** | Active-speaker detection: crop & captions follow the *real* talker in multi-person shots. | clone [LR-ASD](https://github.com/Junhua-Liao/LR-ASD), set `CLIPFORGE_ASD_DIR` |

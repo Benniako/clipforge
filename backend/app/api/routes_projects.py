@@ -2,13 +2,17 @@
 from __future__ import annotations
 
 import logging
+import math
 import os
 import shutil
+import subprocess
 import tempfile
+import time
 import zipfile
 from pathlib import Path
 
 import asyncio
+import json
 import threading
 
 from fastapi import (APIRouter, File, Form, HTTPException, UploadFile,
@@ -21,15 +25,18 @@ from starlette.background import BackgroundTask
 
 from .. import store
 from ..config import get_settings
-from ..models import (ASPECTS, ContentType, ImportSettings, Platform, Project,
-                      ProjectStatus, ProjectSummary)
+from ..models import (ASPECTS, ContentType, GameProfileConfig, ImportSettings,
+                      Platform, PowerMode, Project, ProjectStatus,
+                      ProjectSummary)
 from ..pipeline import ingest
 from ..pipeline.captions import build_srt
+from ..pipeline.nle_export import build_cmx3600, ready_clips_for_edl
 from ..pipeline.orchestrator import engine
 from ..providers.detect_gameplay import KNOWN_PROFILES
 
 log = logging.getLogger("clipforge.api")
 router = APIRouter(prefix="/api/projects", tags=["projects"])
+_SYSTEM_SAMPLE: tuple[float, dict] | None = None
 
 
 def _safe_name(s: str) -> str:
@@ -37,11 +44,151 @@ def _safe_name(s: str) -> str:
     return (keep or "clip")[:60]
 
 
+def _auto_length_range(platform: Platform, content_type: ContentType) -> tuple[float, float]:
+    """Short-form defaults when Auto length is enabled."""
+    if content_type == ContentType.gameplay:
+        return 12.0, 35.0
+    if platform in (Platform.tiktok, Platform.reels):
+        return 12.0, 42.0
+    if platform == Platform.shorts:
+        return 18.0, 55.0
+    return 15.0, 60.0
+
+
+def _clamp_lengths(min_len: float, max_len: float) -> tuple[float, float]:
+    return max(3.0, min(min_len, max_len)), max(min_len, max_len)
+
+
+def _clamp_pad(v: float | None) -> float | None:
+    if v is None:
+        return None
+    value = float(v)
+    if not math.isfinite(value):
+        return None
+    return round(max(0.0, min(value, 60.0)), 3)
+
+
+def _split_values(text: str | None) -> list[str]:
+    raw = (text or "").replace("\r", "\n")
+    if not raw.strip():
+        return []
+    chunks: list[str] = []
+    for part in raw.replace(";", "\n").split("\n"):
+        if "," in part and len(part) < 160:
+            chunks.extend(part.split(","))
+        else:
+            chunks.append(part)
+    out: list[str] = []
+    seen: set[str] = set()
+    for chunk in chunks:
+        value = " ".join(chunk.split())
+        key = value.lower()
+        if value and key not in seen:
+            seen.add(key)
+            out.append(value)
+    return out[:80]
+
+
+def _parse_roi_json(text: str | None) -> list[dict]:
+    if not text or not text.strip():
+        return []
+    try:
+        raw = json.loads(text)
+    except Exception:
+        return []
+    if not isinstance(raw, list):
+        return []
+    out: list[dict] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        try:
+            out.append({
+                "x": float(item.get("x", 0.0)),
+                "y": float(item.get("y", 0.0)),
+                "w": float(item.get("w", 1.0)),
+                "h": float(item.get("h", 1.0)),
+            })
+        except (TypeError, ValueError):
+            continue
+    return out[:40]
+
+
+def _game_config_from_form(*, detection_mode: str, visual_rois_json: str,
+                           visual_text_cues: str, reference_audio_files: str,
+                           vlm_visual_prompts: str, audio_prompts: str,
+                           audio_negative_prompts: str) -> GameProfileConfig:
+    mode = detection_mode if detection_mode in {"zero_shot", "manual", "hybrid"} else "zero_shot"
+    data = {
+        "detection_mode": mode,
+        "visual_rois": _parse_roi_json(visual_rois_json),
+        "visual_text_cues": _split_values(visual_text_cues),
+        "reference_audio_files": _split_values(reference_audio_files),
+        "vlm_visual_prompts": _split_values(vlm_visual_prompts) or GameProfileConfig().vlm_visual_prompts,
+        "audio_prompts": _split_values(audio_prompts),
+        "audio_negative_prompts": (
+            _split_values(audio_negative_prompts)
+            or GameProfileConfig().audio_negative_prompts
+        ),
+    }
+    cfg = GameProfileConfig.model_validate(data)
+    cfg.visual_rois = [r.clamped() for r in cfg.visual_rois]
+    return cfg
+
+
+def _system_usage() -> dict:
+    """Best-effort CPU/GPU use for the live processing UI.
+
+    All fields are nullable so a missing psutil/nvidia-smi never breaks polling.
+    Cached briefly because the status endpoint is called often while rendering.
+    """
+    global _SYSTEM_SAMPLE
+    now = time.time()
+    if _SYSTEM_SAMPLE and now - _SYSTEM_SAMPLE[0] < 2.0:
+        return _SYSTEM_SAMPLE[1]
+
+    sample = {
+        "cpu_pct": None,
+        "gpu_pct": None,
+        "gpu_mem_mb": None,
+        "gpu_mem_total_mb": None,
+    }
+    try:
+        import psutil  # type: ignore
+
+        sample["cpu_pct"] = float(psutil.cpu_percent(interval=None))
+    except Exception:
+        pass
+    try:
+        proc = subprocess.run(
+            [
+                "nvidia-smi",
+                "--query-gpu=utilization.gpu,memory.used,memory.total",
+                "--format=csv,noheader,nounits",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=0.8,
+        )
+        if proc.returncode == 0 and proc.stdout.strip():
+            parts = [p.strip() for p in proc.stdout.splitlines()[0].split(",")]
+            if len(parts) >= 3:
+                sample["gpu_pct"] = float(parts[0])
+                sample["gpu_mem_mb"] = float(parts[1])
+                sample["gpu_mem_total_mb"] = float(parts[2])
+    except Exception:
+        pass
+
+    _SYSTEM_SAMPLE = (now, sample)
+    return sample
+
+
 @router.post("")
 async def create_project(
     name: str = Form("Untitled"),
     url: str | None = Form(None),
     platform: str = Form("generic"),
+    power_mode: str = Form("balanced"),
     min_len: float = Form(15.0),
     max_len: float = Form(60.0),
     target_clips: int = Form(10),
@@ -52,8 +199,24 @@ async def create_project(
     burn_captions: bool = Form(True),
     game_profile: str = Form("auto"),
     tighten: bool = Form(False),
+    denoise: bool = Form(False),
     motion: str = Form("none"),
     facecam_layout: str = Form("auto"),
+    use_ocr: bool = Form(True),
+    use_vlm: bool = Form(True),
+    use_cues: bool = Form(True),
+    use_audio_events: bool = Form(True),
+    cue_learning: bool = Form(True),
+    auto_length: bool = Form(False),
+    lead_seconds: float | None = Form(None),
+    tail_seconds: float | None = Form(None),
+    detection_mode: str = Form("zero_shot"),
+    visual_rois_json: str = Form(""),
+    visual_text_cues: str = Form(""),
+    reference_audio_files: str = Form(""),
+    vlm_visual_prompts: str = Form(""),
+    audio_prompts: str = Form(""),
+    audio_negative_prompts: str = Form(""),
     file: UploadFile | None = File(None),
 ) -> Project:
     if not file and not url:
@@ -62,15 +225,22 @@ async def create_project(
         plat = Platform(platform)
     except ValueError:
         plat = Platform.generic
+    try:
+        pmode = PowerMode(power_mode)
+    except ValueError:
+        pmode = PowerMode.balanced
 
     try:
         ctype = ContentType(content_type)
     except ValueError:
         ctype = ContentType.auto
+    clean_min, clean_max = (_auto_length_range(plat, ctype) if auto_length
+                            else _clamp_lengths(min_len, max_len))
     settings = ImportSettings(
         platform=plat,
-        min_len=max(3.0, min(min_len, max_len)),
-        max_len=max(min_len, max_len),
+        power_mode=pmode,
+        min_len=clean_min,
+        max_len=clean_max,
         target_clips=max(1, min(target_clips, 30)),
         default_style_id=style_id,
         language=language if language in ("auto", "en", "de") else "de",
@@ -79,10 +249,28 @@ async def create_project(
         burn_captions=burn_captions,
         game_profile=game_profile if game_profile in KNOWN_PROFILES else "auto",
         tighten=tighten,
+        denoise=denoise,
         motion=motion if motion in ("none", "push") else "none",
         facecam_layout=(facecam_layout
                         if facecam_layout in ("auto", "off", "split", "framed")
                         else "auto"),
+        use_ocr=use_ocr,
+        use_vlm=use_vlm,
+        use_cues=use_cues,
+        use_audio_events=use_audio_events,
+        cue_learning=cue_learning,
+        auto_length=auto_length,
+        lead_seconds=_clamp_pad(lead_seconds),
+        tail_seconds=_clamp_pad(tail_seconds),
+        game_config=_game_config_from_form(
+            detection_mode=detection_mode,
+            visual_rois_json=visual_rois_json,
+            visual_text_cues=visual_text_cues,
+            reference_audio_files=reference_audio_files,
+            vlm_visual_prompts=vlm_visual_prompts,
+            audio_prompts=audio_prompts,
+            audio_negative_prompts=audio_negative_prompts,
+        ),
     )
     project = Project(name=name or "Untitled", settings=settings,
                       status=ProjectStatus.created)
@@ -161,6 +349,11 @@ def _status_payload(project_id: str) -> dict | None:
         "error": p.error,
         "warnings": p.warnings,
         "content_type": p.content_type,
+        "settings": {
+            "power_mode": p.settings.power_mode,
+            "aspect": p.settings.aspect,
+        },
+        "system": _system_usage(),
         "progress": p.progress.model_dump(),
         "clips": [
             {
@@ -181,6 +374,28 @@ def project_status(project_id: str) -> dict:
     if payload is None:
         raise HTTPException(404, "project not found")
     return payload
+
+
+@router.post("/{project_id}/pause")
+def pause_project(project_id: str) -> dict:
+    p = store.get(project_id)
+    if not p:
+        raise HTTPException(404, "project not found")
+    if p.status not in (ProjectStatus.queued, ProjectStatus.processing, ProjectStatus.paused):
+        raise HTTPException(409, "only queued or processing projects can be paused")
+    engine.pause(project_id)
+    return project_status(project_id)
+
+
+@router.post("/{project_id}/resume")
+def resume_project(project_id: str) -> dict:
+    p = store.get(project_id)
+    if not p:
+        raise HTTPException(404, "project not found")
+    if p.status != ProjectStatus.paused:
+        raise HTTPException(409, "project is not paused")
+    engine.resume(project_id)
+    return project_status(project_id)
 
 
 @router.websocket("/{project_id}/ws")
@@ -224,6 +439,7 @@ def delete_project(project_id: str) -> dict:
 class Reprocess(BaseModel):
     """Optional setting overrides applied before re-running the pipeline."""
     platform: str | None = None
+    power_mode: str | None = None
     content_type: str | None = None
     aspect: str | None = None
     min_len: float | None = None
@@ -234,8 +450,18 @@ class Reprocess(BaseModel):
     burn_captions: bool | None = None
     game_profile: str | None = None
     tighten: bool | None = None
+    denoise: bool | None = None
     motion: str | None = None
     facecam_layout: str | None = None
+    use_ocr: bool | None = None
+    use_vlm: bool | None = None
+    use_cues: bool | None = None
+    use_audio_events: bool | None = None
+    cue_learning: bool | None = None
+    auto_length: bool | None = None
+    lead_seconds: float | None = None
+    tail_seconds: float | None = None
+    game_config: GameProfileConfig | None = None
 
 
 @router.post("/{project_id}/reprocess", response_model=Project)
@@ -245,7 +471,7 @@ def reprocess(project_id: str, body: Reprocess | None = None) -> Project:
     p = store.get(project_id)
     if not p or not p.source:
         raise HTTPException(404, "project or source missing")
-    if p.status in (ProjectStatus.queued, ProjectStatus.processing):
+    if p.status in (ProjectStatus.queued, ProjectStatus.processing, ProjectStatus.paused):
         # A second concurrent run would fight the first over the same clip
         # files and clobber its store writes.
         raise HTTPException(409, "project is still processing — wait for it to finish")
@@ -254,6 +480,11 @@ def reprocess(project_id: str, body: Reprocess | None = None) -> Project:
         if body.platform:
             try:
                 s.platform = Platform(body.platform)
+            except ValueError:
+                pass
+        if body.power_mode:
+            try:
+                s.power_mode = PowerMode(body.power_mode)
             except ValueError:
                 pass
         if body.content_type:
@@ -273,14 +504,37 @@ def reprocess(project_id: str, body: Reprocess | None = None) -> Project:
             s.burn_captions = body.burn_captions
         if body.tighten is not None:
             s.tighten = body.tighten
+        if body.denoise is not None:
+            s.denoise = body.denoise
         if body.motion in ("none", "push"):
             s.motion = body.motion
         if body.facecam_layout in ("auto", "off", "split", "framed"):
             s.facecam_layout = body.facecam_layout
+        if body.use_ocr is not None:
+            s.use_ocr = body.use_ocr
+        if body.use_vlm is not None:
+            s.use_vlm = body.use_vlm
+        if body.use_cues is not None:
+            s.use_cues = body.use_cues
+        if body.use_audio_events is not None:
+            s.use_audio_events = body.use_audio_events
+        if body.cue_learning is not None:
+            s.cue_learning = body.cue_learning
+        if body.auto_length is not None:
+            s.auto_length = body.auto_length
+        if "lead_seconds" in body.model_fields_set:
+            s.lead_seconds = _clamp_pad(body.lead_seconds)
+        if "tail_seconds" in body.model_fields_set:
+            s.tail_seconds = _clamp_pad(body.tail_seconds)
+        if body.game_config is not None:
+            body.game_config.visual_rois = [r.clamped() for r in body.game_config.visual_rois]
+            s.game_config = body.game_config
         if body.min_len is not None and body.max_len is not None:
-            s.min_len, s.max_len = max(3.0, min(body.min_len, body.max_len)), max(body.min_len, body.max_len)
+            s.min_len, s.max_len = _clamp_lengths(body.min_len, body.max_len)
         if body.target_clips is not None:
             s.target_clips = max(1, min(body.target_clips, 30))
+        if s.auto_length:
+            s.min_len, s.max_len = _auto_length_range(s.platform, s.content_type)
 
     # Drop previous outputs (files + records); the source media is kept.
     pdir = get_settings().media_dir / project_id
@@ -290,6 +544,7 @@ def reprocess(project_id: str, body: Reprocess | None = None) -> Project:
         proj.settings = s
         proj.clips = []
         proj.montages = []
+        proj.events = []
         proj.content_type = None
         proj.facecam = None      # re-detected on the next run
         proj.warnings = []
@@ -313,7 +568,7 @@ def set_aspect(project_id: str, body: AspectBody) -> Project:
     p = store.get(project_id)
     if not p:
         raise HTTPException(404, "project not found")
-    if p.status in (ProjectStatus.queued, ProjectStatus.processing):
+    if p.status in (ProjectStatus.queued, ProjectStatus.processing, ProjectStatus.paused):
         raise HTTPException(409, "project is still processing — wait for it to finish")
     if not p.clips:
         raise HTTPException(409, "no clips to re-render yet")
@@ -348,5 +603,34 @@ def export_batch(project_id: str):
                 if c.captions.words:
                     z.writestr(f"{stem}.srt", build_srt(c.captions))
     fname = f"{_safe_name(p.name)}_clips.zip"
+    return FileResponse(tmp_zip, media_type="application/zip", filename=fname,
+                        background=BackgroundTask(lambda: tmp_zip.unlink(missing_ok=True)))
+
+
+@router.get("/{project_id}/export/premiere")
+def export_premiere(project_id: str):
+    """Zip a source-based CMX 3600 EDL plus SRT sidecars for desktop editing."""
+    p = store.get(project_id)
+    if not p:
+        raise HTTPException(404, "project not found")
+    if not p.source:
+        raise HTTPException(409, "project source is missing")
+    ready = ready_clips_for_edl(p)
+    if not ready:
+        raise HTTPException(409, "no rendered clips to export yet")
+
+    settings = get_settings()
+    source_file = settings.media_dir / p.source.path
+    fd, zip_name = tempfile.mkstemp(suffix=".zip")
+    os.close(fd)
+    tmp_zip = Path(zip_name)
+    edl_name = f"{_safe_name(p.name)}.edl"
+    with zipfile.ZipFile(tmp_zip, "w", zipfile.ZIP_STORED) as z:
+        z.writestr(edl_name, build_cmx3600(p, source_file=source_file, clips=ready))
+        for i, c in enumerate(ready, 1):
+            if c.captions.words:
+                stem = f"{i:02d}_{c.score:02d}_{_safe_name(c.title)}"
+                z.writestr(f"captions/{stem}.srt", build_srt(c.captions))
+    fname = f"{_safe_name(p.name)}_premiere_edl.zip"
     return FileResponse(tmp_zip, media_type="application/zip", filename=fname,
                         background=BackgroundTask(lambda: tmp_zip.unlink(missing_ok=True)))

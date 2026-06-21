@@ -83,7 +83,8 @@ def list_summaries(limit: int = 100) -> list[ProjectSummary]:
 def delete(project_id: str) -> bool:
     with _write_lock, _connect() as con:
         cur = con.execute("DELETE FROM projects WHERE id=?", (project_id,))
-    return cur.rowcount > 0
+        deleted = cur.rowcount > 0  # read before the connection closes
+    return deleted
 
 
 @contextmanager

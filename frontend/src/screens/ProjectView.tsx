@@ -4,12 +4,14 @@ import { api } from "../lib/api";
 import type { Project, StatusPayload } from "../lib/types";
 import ProcessingView from "../components/ProcessingView";
 import ClipGridView from "../components/ClipGridView";
+import SwipeReviewScreen from "./SwipeReviewScreen";
 
 export default function ProjectView() {
   const { projectId } = useParams();
   const [status, setStatus] = useState<StatusPayload | null>(null);
   const [project, setProject] = useState<Project | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [viewMode, setViewMode] = useState<"grid" | "swipe">("grid");
   const timer = useRef<number | null>(null);
 
   useEffect(() => {
@@ -108,8 +110,21 @@ export default function ProjectView() {
       </div>
     );
 
-  if (status.status === "ready" && project)
-    return <ClipGridView project={project} onChange={setProject} />;
+  if (status.status === "ready" && project) {
+    if (viewMode === "swipe") {
+      return <SwipeReviewScreen project={project} onChange={setProject} onExit={() => setViewMode("grid")} />;
+    }
+    return (
+      <>
+        <div className="container view-switch">
+          <button className="btn primary sm" onClick={() => setViewMode("swipe")}>
+            Swipe Review
+          </button>
+        </div>
+        <ClipGridView project={project} onChange={setProject} />
+      </>
+    );
+  }
 
-  return <ProcessingView status={status} projectId={projectId!} />;
+  return <ProcessingView status={status} projectId={projectId!} onStatus={setStatus} />;
 }

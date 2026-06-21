@@ -102,7 +102,7 @@ def _finalize(project: Project, path: Path, *, filename: str, url: str | None) -
         log.warning("source thumbnail failed: %s", e)
     rel = path.relative_to(get_settings().media_dir)
     return SourceMedia(
-        filename=filename, path=str(rel), url=url,
+        filename=filename, path=rel.as_posix(), url=url,
         duration=info.duration, width=info.width, height=info.height,
         fps=info.fps, size_bytes=path.stat().st_size,
     )

@@ -48,7 +48,8 @@ def _ensure_cuda_dlls() -> None:
     """On Windows, make pip-installed NVIDIA runtime DLLs loadable.
 
     ctranslate2 detects CUDA via the driver, but executing a model needs
-    cuBLAS/cuDNN. The ``nvidia-cublas-cu12``/``nvidia-cudnn-cu12`` wheels ship
+    cuBLAS/cuDNN. The ``nvidia-cublas-cu12``/``nvidia-cudnn-cu12`` wheels (and
+    matching cu13 wheels when installed) ship
     them into ``site-packages/nvidia/*/bin`` — outside any default DLL search
     path — so without this hook GPU transcription dies with
     "Library cublas64_12.dll is not found" and the pipeline silently degrades
@@ -57,7 +58,7 @@ def _ensure_cuda_dlls() -> None:
     if os.name != "nt":
         return
     try:
-        import nvidia  # namespace package owned by the nvidia-*-cu12 wheels
+        import nvidia  # namespace package owned by the nvidia-*-cu12/cu13 wheels
     except Exception:
         return
     for root in getattr(nvidia, "__path__", []):
@@ -97,14 +98,14 @@ def _load_whisper():
 _batched = None  # cached BatchedInferencePipeline wrapper (or False if N/A)
 
 
-def _batched_pipeline(model):
+def _batched_pipeline(model, batch_size: int | None = None):
     """A faster-whisper BatchedInferencePipeline on GPU (keeps the card
     saturated → ~1.8x faster), or None when unavailable / on CPU."""
     global _batched
     if _batched is not None:
         return _batched or None
     s = get_settings()
-    if s.device != "cuda" or s.whisper_batch_size <= 0:
+    if s.device != "cuda" or (batch_size or s.whisper_batch_size) <= 0:
         _batched = False
         return None
     try:
@@ -112,24 +113,44 @@ def _batched_pipeline(model):
 
         _batched = BatchedInferencePipeline(model=model)
         log.info("faster-whisper batched inference on (batch_size=%d)",
-                 s.whisper_batch_size)
+                 batch_size or s.whisper_batch_size)
     except Exception as e:
         log.info("batched inference unavailable (%s); sequential", e)
         _batched = False
     return _batched or None
 
 
+def _initial_prompt(language: str | None) -> str | None:
+    if not (language or "").lower().startswith("de"):
+        return None
+    prompt = (get_settings().german_gaming_prompt or "").strip()
+    return prompt or None
+
+
+def _transcribe_with_prompt(engine, audio, *, initial_prompt: str | None = None,
+                            **kwargs):
+    if not initial_prompt:
+        return engine.transcribe(audio, **kwargs)
+    try:
+        return engine.transcribe(audio, initial_prompt=initial_prompt, **kwargs)
+    except TypeError as e:
+        if "initial_prompt" not in str(e):
+            raise
+        return engine.transcribe(audio, **kwargs)
+
+
 def transcribe(audio_path: str, *, language: str | None = None,
-               progress=None) -> Transcript:
+               progress=None, power_mode: str | None = None) -> Transcript:
     """Transcribe ``audio_path`` to a word-timed :class:`Transcript`."""
     s = get_settings()
+    batch_size = s.whisper_batch_for(power_mode)
     lang = None if (language in (None, "auto", "")) else language
     engine = s.transcription_engine
 
     if engine == "whisperx":
         try:
             with _asr_lock:
-                return _whisperx_transcribe(audio_path, lang, progress)
+                return _whisperx_transcribe(audio_path, lang, progress, batch_size)
         except Exception as e:
             log.warning("whisperX failed (%s); falling back", e)
             engine = "whisper" if s.has_whisper else "synthetic"
@@ -137,7 +158,7 @@ def transcribe(audio_path: str, *, language: str | None = None,
     if engine == "whisper":
         try:
             with _asr_lock:
-                return _whisper_transcribe(audio_path, lang, progress)
+                return _whisper_transcribe(audio_path, lang, progress, batch_size)
         except Exception as e:  # model download blocked, etc. — degrade.
             log.warning("whisper failed (%s); using synthetic transcript", e)
 
@@ -173,11 +194,21 @@ def _diarization_pipeline():
         from whisperx.diarize import DiarizationPipeline
     except Exception:
         from whisperx import DiarizationPipeline  # type: ignore
-    _wx_diarize = DiarizationPipeline(use_auth_token=s.hf_token, device=s.device)
+    try:
+        _wx_diarize = DiarizationPipeline(
+            model_name=s.diarization_model,
+            token=s.hf_token,
+            device=s.device,
+        )
+    except TypeError:
+        _wx_diarize = DiarizationPipeline(
+            use_auth_token=s.hf_token,
+            device=s.device,
+        )
     return _wx_diarize
 
 
-def _whisperx_transcribe(audio_path, language, progress) -> Transcript:
+def _whisperx_transcribe(audio_path, language, progress, batch_size: int) -> Transcript:
     import whisperx
 
     _ensure_ffmpeg_on_path()
@@ -185,7 +216,9 @@ def _whisperx_transcribe(audio_path, language, progress) -> Transcript:
     audio = whisperx.load_audio(audio_path)
 
     model = _load_whisperx_model()
-    result = model.transcribe(audio, batch_size=8, language=language)
+    result = _transcribe_with_prompt(
+        model, audio, batch_size=max(batch_size, 1), language=language,
+        initial_prompt=_initial_prompt(language))
     lang = result.get("language", language or "en") or "en"
     if progress:
         progress(0.5)
@@ -220,7 +253,11 @@ def _whisperx_transcribe(audio_path, language, progress) -> Transcript:
             if not text or start is None or end is None:
                 continue
             spk_label = w.get("speaker")
-            spk = speaker_ids.setdefault(spk_label, len(speaker_ids)) if spk_label else 0
+            # Reserve id 0 for unattributed words (no diarization label). Real
+            # speakers start at 1, so the first diarized speaker never collides
+            # with the "no speaker" fallback — otherwise two distinct talkers
+            # merge and the per-speaker caption toggles can't tell them apart.
+            spk = speaker_ids.setdefault(spk_label, len(speaker_ids) + 1) if spk_label else 0
             words.append(Word(t=float(start), d=max(float(end) - float(start), 0.01),
                               text=text, speaker=spk))
     if not words:
@@ -231,25 +268,25 @@ def _whisperx_transcribe(audio_path, language, progress) -> Transcript:
                       speakers=max(len(speaker_ids), 1), provider="whisperx")
 
 
-def _whisper_transcribe(audio_path, language, progress) -> Transcript:
+def _whisper_transcribe(audio_path, language, progress, batch_size: int) -> Transcript:
     model = _load_whisper()
-    s = get_settings()
-    batched = _batched_pipeline(model)
+    batched = _batched_pipeline(model, batch_size)
+    prompt = _initial_prompt(language)
     if batched is not None:
         try:
-            segments, info = batched.transcribe(
-                audio_path, language=language, word_timestamps=True,
-                vad_filter=True, batch_size=s.whisper_batch_size)
+            segments, info = _transcribe_with_prompt(
+                batched, audio_path, language=language, word_timestamps=True,
+                vad_filter=True, batch_size=max(batch_size, 1),
+                initial_prompt=prompt)
         except Exception as e:  # any batched-path issue -> sequential, never fail
             log.warning("batched transcribe failed (%s); sequential", e)
-            segments, info = model.transcribe(
-                audio_path, language=language, word_timestamps=True,
-                vad_filter=True, beam_size=1)
+            segments, info = _transcribe_with_prompt(
+                model, audio_path, language=language, word_timestamps=True,
+                vad_filter=True, beam_size=1, initial_prompt=prompt)
     else:
-        segments, info = model.transcribe(
-            audio_path, language=language, word_timestamps=True,
-            vad_filter=True, beam_size=1,
-        )
+        segments, info = _transcribe_with_prompt(
+            model, audio_path, language=language, word_timestamps=True,
+            vad_filter=True, beam_size=1, initial_prompt=prompt)
     total = max(getattr(info, "duration", 0.0), 0.001)
     words: list[Word] = []
     for seg in segments:
