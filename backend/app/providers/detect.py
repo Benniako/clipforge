@@ -73,6 +73,8 @@ def _segment_sentences(words: list[Word], *, pause: float = 0.65) -> list[Senten
 def _salience(words: list[Word], duration: float, st: ImportSettings,
               lex: signals.Lexicon, weights: dict[str, float] | None = None) -> float:
     vals = {
+        "instant_hook": signals.instant_hook(words, lex)[0],
+        "swipe": signals.swipe_resistance(words, duration, lex)[0],
         "hook": signals.hook_strength(words, lex)[0],
         "emotion": signals.emotional_payoff(words, lex)[0],
         "clarity": signals.standalone_clarity(words, lex)[0],
@@ -83,8 +85,10 @@ def _salience(words: list[Word], duration: float, st: ImportSettings,
     }
     if weights:  # personalised ranking — same weights as scoring
         return sum(v * weights.get(k, 0.0) for k, v in vals.items())
-    return (0.26 * vals["hook"] + 0.16 * vals["emotion"] + 0.20 * vals["clarity"]
-            + 0.14 * vals["quote"] + 0.12 * vals["length"] + 0.12 * vals["pace"])
+    return (0.20 * vals["instant_hook"] + 0.14 * vals["swipe"]
+            + 0.18 * vals["hook"] + 0.14 * vals["emotion"]
+            + 0.16 * vals["clarity"] + 0.10 * vals["quote"]
+            + 0.04 * vals["length"] + 0.04 * vals["pace"])
 
 
 def _make_title(words: list[Word]) -> str:

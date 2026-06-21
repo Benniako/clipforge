@@ -65,11 +65,10 @@ def _group_lines(words, n: int, max_gap: float = LINE_GAP):
 
 
 def _srt_ts(t: float) -> str:
-    t = max(t, 0.0)
-    h = int(t // 3600)
-    m = int((t % 3600) // 60)
-    s = int(t % 60)
-    ms = int(round((t - int(t)) * 1000))
+    ms_total = max(int(round(t * 1000)), 0)
+    h, rem = divmod(ms_total, 3_600_000)
+    m, rem = divmod(rem, 60_000)
+    s, ms = divmod(rem, 1000)
     return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
 
 
@@ -113,7 +112,13 @@ Style: Cap,{style.font},{style.font_size},{primary.rstrip("&")},{primary.rstrip(
 Format: Layer, Start, End, Style, MarginL, MarginR, MarginV, Effect, Text
 """
 
-    words = captions.words
+    # Production-value pass: mark power words for keyword emphasis + auto-emoji
+    # (Submagic/Hormozi look), language-aware, capped per line so it stays
+    # tasteful. Honoured below in _dialogue; no-op when the style opts out.
+    from .caption_fx import annotate
+    words = annotate(captions.words, lang=captions.lang,
+                     emphasis=style.emphasis, emoji=style.emoji,
+                     max_words_per_line=captions.max_words_per_line)
     lines = _group_lines(words, captions.max_words_per_line)
     events: list[str] = []
 
@@ -143,9 +148,16 @@ def _dialogue(line, active_idx, start, end, primary, highlight, upper) -> str:
         token = _esc(w.text)
         if upper:
             token = token.upper()
+        emoji = getattr(w, "emoji", None)
+        if emoji:
+            token = f"{token} {emoji}"
         if i == active_idx:
             # active word: highlight colour + a slight pop for the animated feel
             parts.append(f"{{\\c{highlight}\\fscx112\\fscy112}}{token}{{\\c{primary}\\fscx100\\fscy100}}")
+        elif getattr(w, "emphasis", False):
+            # power word: stays highlighted + slightly larger for the whole line
+            # (keyword emphasis) even when it isn't the currently-spoken word.
+            parts.append(f"{{\\c{highlight}\\fscx106\\fscy106}}{token}{{\\c{primary}\\fscx100\\fscy100}}")
         else:
             parts.append(token)
     text = " ".join(parts)

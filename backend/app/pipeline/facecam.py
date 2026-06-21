@@ -5,6 +5,9 @@ for the whole VOD. We sample frames across the source, cluster face detections
 over time, and accept a cluster that is present in most samples with almost no
 positional drift — then expand the median face box to an estimate of the camera
 overlay rectangle (a face fills roughly a third of a typical cam frame).
+When NVIDIA background removal hides the rectangular webcam background and makes
+faces harder to detect, an optional YOLO fallback looks for a stable small
+person cutout in the same way.
 
 The detected ``Rect`` enables:
   • split / framed layouts (cam stacked above or overlaid on the gameplay),
@@ -33,6 +36,10 @@ MAX_DRIFT = 0.025          # max std-dev of the cluster centre (fractions)
 MAX_FACE_FRAC = 0.22       # a "facecam" face wider than this is a talking head
 # Face box -> overlay rectangle expansion (face sits upper-middle of the cam).
 EXPAND_W, EXPAND_H = 2.1, 2.5
+MIN_PERSON_PRESENCE = 0.35
+MAX_PERSON_DRIFT = 0.045
+MAX_PERSON_W = 0.38
+MAX_PERSON_H = 0.72
 
 
 def detect_facecam(src_path: str, duration: float) -> Rect | None:
@@ -46,6 +53,7 @@ def detect_facecam(src_path: str, duration: float) -> Rect | None:
     from ..media import faces as faces_mod
 
     samples: list[list[tuple[float, float, float, float]]] = []
+    frames = []
     with tempfile.TemporaryDirectory() as tmp:
         for i in range(SAMPLE_FRAMES):
             t = duration * (i + 0.5) / SAMPLE_FRAMES
@@ -62,10 +70,15 @@ def detect_facecam(src_path: str, duration: float) -> Rect | None:
             boxes = faces_mod.detect_faces(img, min_size_frac=0.025)
             samples.append([(x / w, y / h, fw / w, fh / h)
                             for x, y, fw, fh in boxes])
+            frames.append(img)
     rect = stable_face_cluster(samples)
-    if rect is None:
-        return None
-    cam = expand_to_overlay(rect)
+    if rect is not None:
+        cam = expand_to_overlay(rect)
+    else:
+        person = stable_person_cluster(_person_samples(frames))
+        if person is None:
+            return None
+        cam = expand_person_to_overlay(person)
     log.info("facecam detected at x=%.2f y=%.2f w=%.2f h=%.2f",
              cam.x, cam.y, cam.w, cam.h)
     return cam
@@ -124,6 +137,82 @@ def expand_to_overlay(face: Rect) -> Rect:
     # faces sit in the upper-middle of a cam frame: bias the box downward
     y = face.y - h * 0.18
     return Rect(x=cx - w / 2, y=y, w=w, h=h).clamped()
+
+
+def stable_person_cluster(
+        samples: list[list[tuple[float, float, float, float]]]) -> Rect | None:
+    """Stable small person cutout fallback for background-removed facecams."""
+    valid = [s for s in samples if s is not None]
+    if len(valid) < 6:
+        return None
+    clusters: list[list[tuple[float, float, float, float]]] = []
+    for boxes in valid:
+        for b in boxes:
+            if b[2] > MAX_PERSON_W or b[3] > MAX_PERSON_H:
+                continue
+            cx, cy = b[0] + b[2] / 2, b[1] + b[3] / 2
+            for cl in clusters:
+                m = cl[len(cl) // 2]
+                mx, my = m[0] + m[2] / 2, m[1] + m[3] / 2
+                if abs(cx - mx) < 0.10 and abs(cy - my) < 0.10:
+                    cl.append(b)
+                    break
+            else:
+                clusters.append([b])
+
+    best: Rect | None = None
+    best_n = 0
+    for cl in clusters:
+        if len(cl) < max(int(len(valid) * MIN_PERSON_PRESENCE), 4) or len(cl) <= best_n:
+            continue
+        xs = sorted(b[0] + b[2] / 2 for b in cl)
+        ys = sorted(b[1] + b[3] / 2 for b in cl)
+        if _std(xs) > MAX_PERSON_DRIFT or _std(ys) > MAX_PERSON_DRIFT:
+            continue
+        ws = sorted(b[2] for b in cl)
+        hs = sorted(b[3] for b in cl)
+        w, h = ws[len(ws) // 2], hs[len(hs) // 2]
+        cx, cy = xs[len(xs) // 2], ys[len(ys) // 2]
+        best = Rect(x=cx - w / 2, y=cy - h / 2, w=w, h=h).clamped()
+        best_n = len(cl)
+    return best
+
+
+def expand_person_to_overlay(person: Rect) -> Rect:
+    """Pad a background-removed person cutout into a usable PiP/stack crop."""
+    pad_x = person.w * 0.20
+    pad_y = person.h * 0.08
+    return Rect(x=person.x - pad_x, y=person.y - pad_y,
+                w=person.w + pad_x * 2, h=person.h + pad_y * 2).clamped()
+
+
+def _person_samples(frames) -> list[list[tuple[float, float, float, float]]]:
+    if not frames:
+        return []
+    try:
+        from ..providers import subject as subject_mod
+
+        model = subject_mod._load_yolo()
+    except Exception:
+        model = None
+    if model is None:
+        return []
+    out = []
+    for img in frames:
+        try:
+            h, w = img.shape[:2]
+            res = model.predict(img, verbose=False, conf=0.30)[0]
+            boxes = []
+            for b in res.boxes:
+                if int(b.cls[0]) != 0:  # COCO person
+                    continue
+                x0, y0, x1, y1 = (float(v) for v in b.xyxy[0])
+                boxes.append((x0 / w, y0 / h, (x1 - x0) / w, (y1 - y0) / h))
+            out.append(boxes)
+        except Exception as e:
+            log.warning("YOLO facecam fallback failed: %s", e)
+            out.append([])
+    return out
 
 
 def _std(vals: list[float]) -> float:

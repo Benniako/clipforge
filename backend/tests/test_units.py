@@ -10,13 +10,17 @@ lexicons, detection ranking, scoring range, crop geometry).
 from __future__ import annotations
 
 import os
+import sys
 import tempfile
+import types
+from pathlib import Path
 
 # Isolate the learning DB before anything imports settings.
 os.environ.setdefault("CLIPFORGE_DATA_DIR", tempfile.mkdtemp(prefix="clipforge-test-"))
 
-from app.models import (Clip, ImportSettings, Platform, Reframe,
-                        ReframeKeyframe, Transcript, Word)
+from app.models import (Clip, ClipStatus, DetectedEvent, ImportSettings,
+                        Platform, Project, ProjectStatus, Reframe,
+                        ReframeKeyframe, SourceMedia, Transcript, Word)
 from app.pipeline import captionize, render
 from app.pipeline import captions as C
 from app.providers import detect, score, signals
@@ -67,12 +71,14 @@ def test_ass_timestamp_never_emits_60_seconds():
 
 def test_srt_output_format():
     from app.models import CaptionSet, CaptionWord
-    from app.pipeline.captions import build_srt
+    from app.pipeline.captions import _srt_ts, build_srt
     cs = CaptionSet(words=[CaptionWord(t=0.0, d=0.4, text="Hallo"),
                            CaptionWord(t=0.5, d=0.4, text="Welt")],
                     max_words_per_line=2)
     srt = build_srt(cs)
     assert srt.startswith("1\n00:00:00,000 --> 00:00:00,900\nHallo Welt")
+    assert _srt_ts(1.9996) == "00:00:02,000"
+    assert _srt_ts(59.9996) == "00:01:00,000"
 
 
 def test_spa_fallback_serves_index_for_client_routes(tmp_path=None):
@@ -90,6 +96,16 @@ def test_spa_fallback_serves_index_for_client_routes(tmp_path=None):
     assert c.get("/").status_code == 200
     assert c.get("/p/proj_abc").status_code == 200          # client-side route
     assert "app" in c.get("/p/proj_abc/clip/c1").text       # nested route too
+
+
+def test_generated_media_urls_are_browser_paths():
+    from app.config import get_settings
+    from app.pipeline.orchestrator import _media_url
+
+    p = get_settings().media_dir / "proj_x" / "clips" / "clip_1.mp4"
+    url = _media_url(p)
+    assert url == "/media/proj_x/clips/clip_1.mp4"
+    assert "\\" not in url
 
 
 def test_caption_uppercase_and_highlight_present():
@@ -157,6 +173,19 @@ def test_score_in_range_and_has_factors():
     assert len(factors) >= 2
     assert all(f.label for f in factors)
     assert "hook" in feats and 0.0 <= feats["hook"] <= 1.0  # features returned for learning
+    assert "instant_hook" in feats and "swipe" in feats
+
+
+def test_first_two_seconds_reduce_swipe_risk():
+    strong = _words("Why does nobody show you this trick? It changed everything")
+    soft = _words("Um okay so this is just a normal update")
+    lex = signals.get_lexicon("en")
+    ih_strong, _ = signals.instant_hook(strong, lex)
+    ih_soft, _ = signals.instant_hook(soft, lex)
+    sw_strong, _ = signals.swipe_resistance(strong, 12.0, lex)
+    sw_soft, _ = signals.swipe_resistance(soft, 12.0, lex)
+    assert ih_strong > ih_soft
+    assert sw_strong > sw_soft
 
 
 def test_platform_weights_shift_score():
@@ -220,6 +249,20 @@ def test_facecam_cluster_rejects_moving_and_big_faces():
     assert FC.stable_face_cluster(big) is None
     # Too few samples to trust.
     assert FC.stable_face_cluster([[(0.05, 0.7, 0.08, 0.14)]] * 3) is None
+
+
+def test_facecam_person_cutout_fallback_for_background_removed_cam():
+    from app.pipeline import facecam as FC
+    cutout = (0.04, 0.48, 0.16, 0.42)
+    samples = [[cutout] for _ in range(12)]
+    rect = FC.stable_person_cluster(samples)
+    assert rect is not None
+    overlay = FC.expand_person_to_overlay(rect)
+    assert overlay.w > rect.w and overlay.h > rect.h
+    moving = [[(0.05 + i * 0.04, 0.48, 0.16, 0.42)] for i in range(12)]
+    assert FC.stable_person_cluster(moving) is None
+    huge = [[(0.2, 0.05, 0.55, 0.88)] for _ in range(12)]
+    assert FC.stable_person_cluster(huge) is None
 
 
 def test_rect_crop_grows_to_aspect_and_clamps():
@@ -298,6 +341,61 @@ def test_diarization_capability_requires_token():
     assert _settings(has_whisperx=True, hf_token="tok").capability_report()["diarization"] is True
     assert _settings(has_whisperx=True, hf_token=None).capability_report()["diarization"] is False
     assert _settings(has_whisperx=False, hf_token="tok").capability_report()["diarization"] is False
+    assert _settings(has_whisperx=True, hf_token="tok").capability_report()["diarization_model"] == "pyannote/speaker-diarization-community-1"
+    assert _settings(has_whisperx=True, hf_token=None).capability_report()["diarization_model"] is None
+
+
+def test_whisperx_diarization_constructor_supports_new_and_old_token_api():
+    from app.providers import transcribe as T
+
+    old_get_settings, old_pipe = T.get_settings, T._wx_diarize
+    old_parent = sys.modules.get("whisperx")
+    old_child = sys.modules.get("whisperx.diarize")
+    calls = []
+
+    parent = types.ModuleType("whisperx")
+    parent.__path__ = []
+    child = types.ModuleType("whisperx.diarize")
+
+    class NewPipeline:
+        def __init__(self, **kw):
+            calls.append(kw)
+
+    child.DiarizationPipeline = NewPipeline
+    sys.modules["whisperx"] = parent
+    sys.modules["whisperx.diarize"] = child
+    T.get_settings = lambda: _settings(
+        has_whisperx=True, hf_token="tok", device="cuda",
+        diarization_model="pyannote/test-model")
+    T._wx_diarize = None
+    try:
+        assert isinstance(T._diarization_pipeline(), NewPipeline)
+        assert calls[-1] == {
+            "model_name": "pyannote/test-model",
+            "token": "tok",
+            "device": "cuda",
+        }
+
+        class OldPipeline:
+            def __init__(self, **kw):
+                if "token" in kw:
+                    raise TypeError("old whisperX")
+                calls.append(kw)
+
+        child.DiarizationPipeline = OldPipeline
+        T._wx_diarize = None
+        assert isinstance(T._diarization_pipeline(), OldPipeline)
+        assert calls[-1] == {"use_auth_token": "tok", "device": "cuda"}
+    finally:
+        T.get_settings, T._wx_diarize = old_get_settings, old_pipe
+        if old_parent is None:
+            sys.modules.pop("whisperx", None)
+        else:
+            sys.modules["whisperx"] = old_parent
+        if old_child is None:
+            sys.modules.pop("whisperx.diarize", None)
+        else:
+            sys.modules["whisperx.diarize"] = old_child
 
 
 # --------------------------------------------------------------------------- #
@@ -328,6 +426,15 @@ def test_encoder_args_switch():
     gpu = _settings(has_nvenc=True, has_nvidia=True).video_encoder_args()
     assert "libx264" in cpu
     assert "h264_nvenc" in gpu
+
+
+def test_power_mode_scales_local_engine():
+    s = _settings(has_cuda=True, vram_mb=16000, device="cuda",
+                  whisper_batch_size=8, render_workers=2)
+    assert s.whisper_batch_for("max_gpu") >= 16
+    assert s.render_workers_for("max_gpu") >= s.render_workers
+    assert s.vlm_options_for("quality")["n_frames"] > s.vlm_options_for("balanced")["n_frames"]
+    assert s.capability_report()["recommended_power_mode"] == "max_gpu"
 
 
 def test_av1_codec_opt_in_with_safe_fallbacks():
@@ -652,6 +759,55 @@ def test_status_ws_reports_missing_project():
         assert ws.receive_json() == {"error": "project not found"}
 
 
+def test_pause_resume_project_endpoint():
+    from starlette.testclient import TestClient
+    from app import store
+    from app.main import create_app
+
+    store.init_db()
+    p = Project(
+        id="proj_pause_resume",
+        status=ProjectStatus.processing,
+        source=SourceMedia(filename="source.mp4", path="proj_pause_resume/source.mp4"),
+    )
+    store.save(p)
+    c = TestClient(create_app(), raise_server_exceptions=False)
+
+    paused = c.post(f"/api/projects/{p.id}/pause")
+    assert paused.status_code == 200
+    assert paused.json()["status"] == "paused"
+    assert "Paused" in paused.json()["progress"]["message"]
+
+    resumed = c.post(f"/api/projects/{p.id}/resume")
+    assert resumed.status_code == 200
+    assert resumed.json()["status"] in {"queued", "processing"}
+
+    missing = c.post("/api/projects/proj_missing/pause")
+    assert missing.status_code == 404
+
+
+def test_render_finish_fails_project_when_no_clips_ready():
+    from app import store
+    from app.pipeline.orchestrator import Engine
+
+    store.init_db()
+    p = Project(
+        id="proj_render_finish_none_ready",
+        status=ProjectStatus.processing,
+        clips=[
+            Clip(start=0, end=5, status=ClipStatus.failed, error="boom"),
+            Clip(start=5, end=10, status=ClipStatus.failed, error="boom"),
+        ],
+    )
+    store.save(p)
+    Engine()._finish_render_progress(p.id)
+    out = store.get(p.id)
+    assert out is not None
+    assert out.status == ProjectStatus.failed
+    assert "every clip" in (out.error or "").lower()
+    assert out.progress.stage == "render"
+
+
 def test_multikill_streaks_chain_and_outscore_single_kills():
     from app.media.ffmpeg import MediaInfo
     from app.providers.detect_cues import CueEvent
@@ -675,6 +831,149 @@ def test_multikill_streaks_chain_and_outscore_single_kills():
     assert triple.start <= 100.0 and triple.end >= 109.0   # covers all kills
     assert len(triple.cue_ts) == 3
     assert any("streak" in f.label for f in triple.factors)
+
+
+def test_cue_streaks_do_not_chain_unrelated_valorant_events():
+    from app.media.ffmpeg import MediaInfo
+    from app.providers.detect_cues import CueEvent
+    from app.providers.detect_gameplay import (_cue_clips, apply_evidence_caps,
+                                               group_streaks, GameplayClip)
+
+    evs = [CueEvent(t=10.0, label="spike_plant", similarity=0.95),
+           CueEvent(t=13.0, label="spike_defuse", similarity=0.96),
+           CueEvent(t=16.0, label="kill", similarity=0.94)]
+    groups = group_streaks(evs)
+    assert [[e.label for e in g] for g in groups] == [
+        ["spike_plant"], ["spike_defuse"], ["kill"]]
+
+    info = MediaInfo(duration=120, width=1920, height=1080, fps=30,
+                     has_audio=True, has_video=True, codec=None)
+    clips = _cue_clips(evs, info, lead=5.0, tail=5.0,
+                       settings=ImportSettings(min_len=8, max_len=20))
+    assert all(c.score <= 88 for c in clips)
+    assert not any("Streak:" in c.title for c in clips)
+
+    c = GameplayClip(start=0, end=10, score=99, features={"cue": 0.99})
+    apply_evidence_caps([c])
+    assert c.score == 88
+    confirmed = GameplayClip(start=0, end=10, score=99,
+                             features={"cue": 0.99, "ocr": 0.9})
+    apply_evidence_caps([confirmed])
+    assert confirmed.score == 99
+
+
+def test_custom_sound_cues_can_be_disabled():
+    from app.providers import detect_gameplay as DG
+
+    calls = []
+    old_find = DG.detect_cues.find_events
+    DG.detect_cues.find_events = lambda wav, path: calls.append((wav, path)) or ["hit"]
+    try:
+        disabled = DG._cue_events("source.wav", ImportSettings(
+            game_profile="valorant", use_cues=False))
+        assert disabled == []
+        assert calls == []
+
+        enabled = DG._cue_events("source.wav", ImportSettings(
+            game_profile="valorant", use_cues=True))
+        assert enabled == ["hit", "hit"]      # active game + common cues
+        assert len(calls) == 2
+    finally:
+        DG.detect_cues.find_events = old_find
+
+
+def test_corroboration_requires_same_moment_cluster():
+    from app.providers.detect_cues import CueEvent
+    from app.providers.detect_ocr import OcrEvent
+    from app.providers.audio_events import AudioEvent
+    from app.providers.detect_gameplay import GameplayClip, apply_corroboration
+
+    far = GameplayClip(start=90, end=130, score=80, peak_t=100.0,
+                       features={})
+    apply_corroboration(
+        [far],
+        [CueEvent(t=100.0, label="kill", similarity=0.95)],
+        [OcrEvent(t=120.0, label="kill", text="headshot", confidence=0.9)],
+    )
+    assert far.score == 80
+    assert "corroborated" not in far.features
+
+    near = GameplayClip(start=90, end=130, score=80, peak_t=100.0,
+                        features={})
+    apply_corroboration(
+        [near],
+        [CueEvent(t=100.0, label="kill", similarity=0.95)],
+        [OcrEvent(t=102.0, label="kill", text="headshot", confidence=0.9)],
+    )
+    assert near.score > 80
+    assert near.features["corroborated"] == 1.0
+    assert near.features["cue"] == 0.95
+
+    mismatch = GameplayClip(start=90, end=130, score=80, peak_t=100.0,
+                            features={})
+    apply_corroboration(
+        [mismatch],
+        [CueEvent(t=100.0, label="spike_plant", similarity=0.95)],
+        [OcrEvent(t=101.0, label="kill", text="headshot", confidence=0.9)],
+    )
+    assert mismatch.score == 80
+    assert "corroborated" not in mismatch.features
+
+    soft = GameplayClip(start=90, end=130, score=80, peak_t=100.0,
+                        features={})
+    apply_corroboration(
+        [soft],
+        [],
+        [OcrEvent(t=100.0, label="kill", text="headshot", confidence=0.9)],
+        [AudioEvent(t=101.0, label="explosive_action", confidence=0.9)],
+    )
+    assert soft.score == 83
+    assert "corroborated" not in soft.features
+    assert soft.features["supporting_audio"] == 1.0
+
+
+def test_only_accepted_events_are_shown_for_final_clips():
+    from app.providers.detect_gameplay import GameplayClip, accepted_events_for_clips
+
+    clip = GameplayClip(start=90, end=130, score=80, peak_t=100.0,
+                        cue_ts=[104.0])
+    events = [
+        DetectedEvent(t=100.0, source="cue", label="kill", confidence=0.95),
+        DetectedEvent(t=104.3, source="cue", label="kill", confidence=0.92),
+        DetectedEvent(t=120.0, source="ocr", label="kill", confidence=0.9),
+        DetectedEvent(t=300.0, source="cue", label="kill", confidence=0.99),
+    ]
+    kept = accepted_events_for_clips(events, [clip])
+    assert [(e.source, e.label, round(e.t, 1)) for e in kept] == [
+        ("cue", "kill", 100.0),
+        ("cue", "kill", 104.3),
+    ]
+
+    shifted_ocr_clip = GameplayClip(start=90, end=130, score=88, peak_t=90.0,
+                                    features={"ocr": 0.9, "evidence_t": 120.0})
+    kept = accepted_events_for_clips(events, [shifted_ocr_clip])
+    assert [(e.source, e.label, round(e.t, 1)) for e in kept] == [
+        ("ocr", "kill", 120.0),
+    ]
+
+
+def test_single_audio_or_model_signal_cannot_score_99():
+    from app.providers.detect_gameplay import GameplayClip, apply_evidence_caps
+
+    audio_only = GameplayClip(start=0, end=10, score=99,
+                              features={"audio_event": 0.95})
+    apply_evidence_caps([audio_only])
+    assert audio_only.score == 86
+
+    model_only = GameplayClip(start=0, end=10, score=99,
+                              features={"vlm_viral": 0.95})
+    apply_evidence_caps([model_only])
+    assert model_only.score == 89
+
+    two_signals = GameplayClip(start=0, end=10, score=99,
+                               features={"reaction": 0.8, "excitement": 0.8})
+    apply_evidence_caps([two_signals])
+    assert two_signals.score == 99
 
 
 def test_caption_exclude_mutes_cue_windows():
@@ -709,6 +1008,9 @@ def test_gameplay_hashtags_lead_with_the_game():
 def test_ollama_model_autopick_prefers_strongest():
     from app.providers import llm
     assert llm._resolve_model(["llama3.2:latest", "qwen3:8b"]) == "qwen3:8b"
+    assert llm._resolve_model(["gemma4:12b", "llama3.3:70b"]) == "gemma4:12b"
+    assert llm._resolve_model(["qwen3:8b", "qwen3:14b"]) == "qwen3:14b"
+    assert llm._resolve_model(["qwen2.5vl:7b", "qwen3:8b"]) == "qwen3:8b"
     assert llm._resolve_model(["llama3.2:latest"]) == "llama3.2:latest"
     assert llm._resolve_model(["some-custom:7b"]) == "some-custom:7b"  # anything > nothing
     assert llm._resolve_model([]) is None
@@ -749,6 +1051,16 @@ def test_set_aspect_endpoint_validation():
     assert r.status_code == 404          # then the project must exist
 
 
+def test_ready_endpoint_is_lightweight():
+    from starlette.testclient import TestClient
+    from app.main import create_app
+
+    c = TestClient(create_app(), raise_server_exceptions=False)
+    r = c.get("/api/ready")
+    assert r.status_code == 200
+    assert r.json()["ok"] is True
+
+
 def test_clip_aspect_override_falls_back_to_project_dims():
     from app.models import ASPECTS
     st = ImportSettings(aspect="9:16")
@@ -760,8 +1072,12 @@ def test_clip_aspect_override_falls_back_to_project_dims():
 
 def test_llm_titles_safe_when_unavailable():
     from app.providers import llm
-    # no Ollama in CI -> must return {} fast instead of raising/hanging
-    assert llm.suggest_titles(["some transcript"], lang="en", budget=2.0) == {}
+    old_available = llm.available
+    try:
+        llm.available = lambda: False
+        assert llm.suggest_titles(["some transcript"], lang="en", budget=2.0) == {}
+    finally:
+        llm.available = old_available
 
 
 # --------------------------------------------------------------------------- #
@@ -771,6 +1087,8 @@ def test_ocr_keyword_matching_finds_viral_markers():
     from app.providers import detect_ocr as O
     # noisy OCR text still matches the marker as a normalized substring
     assert ("victory", "victory") in O.match_keywords("|| VICT0RY ||".replace("0", "o"), "valorant")
+    assert any(l == "victory" for l, _ in O.match_keywords("SIEG - RUNDE GEWONNEN", "generic"))
+    assert any(l == "kill" for l, _ in O.match_keywords("KRASSER KOPFSCHUSS", "generic"))
     assert any(l == "kill" for l, _ in O.match_keywords("ENEMY DOUBLE KILL", "cs2"))
     assert any(l == "goal" for l, _ in O.match_keywords("GOOOAL!! what a save", "rocketleague"))
     # word-boundary: "ko" must not fire inside "took"
@@ -779,6 +1097,113 @@ def test_ocr_keyword_matching_finds_viral_markers():
     assert O.match_keywords("loading please wait", "generic") == []
     # exact matching must never fire on clean unrelated text (fuzzy off here)
     assert O.match_keywords("the quick brown fox", "generic", fuzzy=False) == []
+
+
+def test_saved_visual_cues_extend_ocr_lexicon():
+    from app import visual_cues
+    from app.providers import detect_ocr as O
+
+    visual_cues.add_visual_cue("valorant", "custom_killfeed", "One enemy remaining")
+    assert ("custom_killfeed", "one enemy remaining") in O.match_keywords(
+        "HUD: ONE ENEMY REMAINING", "valorant", fuzzy=False)
+    assert not O.match_keywords("HUD: ONE ENEMY REMAINING", "cs2", fuzzy=False)
+
+
+def test_visual_cue_regions_and_false_hits_are_persisted():
+    from app import visual_cues
+    from app.providers import detect_ocr as O
+
+    game = "unit_visual_calibration"
+    visual_cues.add_visual_cue(game, "killfeed", "Fake headshot")
+    visual_cues.add_visual_region(game, "killfeed", {"x": 0.55, "y": 0.02, "w": 0.35, "h": 0.22})
+    visual_cues.add_false_visual_cue(game, "killfeed", "Fake headshot")
+
+    meta = visual_cues.list_visual_meta()[game]
+    assert meta["phrases"]["killfeed"] == ["Fake headshot"]
+    assert meta["regions"]["killfeed"][0]["x"] == 0.55
+    assert visual_cues.is_false_positive(game, "killfeed", "HUD: FAKE HEADSHOT")
+    assert O.match_keywords("HUD: FAKE HEADSHOT", game, fuzzy=False) == []
+
+
+def test_saved_visual_regions_are_sampled_by_ocr_cropper():
+    try:
+        from PIL import Image
+    except ImportError:
+        return  # Pillow is optional (OCR ROI cropping); skip when absent in CI
+    from app import visual_cues
+    from app.providers import detect_ocr as O
+
+    game = "unit_region_scan"
+    visual_cues.add_visual_region(game, "scoreboard", {"x": 0.1, "y": 0.2, "w": 0.3, "h": 0.2})
+    with tempfile.TemporaryDirectory() as tmp:
+        tmpd = Path(tmp)
+        frame = tmpd / "frame.png"
+        Image.new("RGB", (640, 360), "black").save(frame)
+        crops = O._ocr_frame_images(frame, tmpd, idx=1, profile=game)
+    assert any(name.startswith("saved_scoreboard") for name, _ in crops)
+
+
+def test_ocr_valorant_german_markers_and_easyocr_shapes():
+    from app.providers import detect_ocr as O
+
+    assert any(l == "kill" for l, _ in O.match_keywords("GEGNER ÜBRIG", "valorant"))
+    assert any(l == "spike" for l, _ in O.match_keywords("SPIKE ENTSCHÄRFT", "valorant"))
+
+    assert any(l == "bomb" for l, _ in O.match_keywords("BOMBE WURDE GELEGT", "cs2"))
+    assert any(l == "win" for l, _ in O.match_keywords("TERRORISTEN GEWINNEN", "cs2"))
+    assert any(l == "goal" for l, _ in O.match_keywords("TOR! ELFMETER VERWANDELT", "eafc"))
+
+    class Reader:
+        def readtext(self, _path, detail=1, paragraph=False):
+            assert paragraph is False
+            if detail == 1:
+                return [([[0, 0]], "Spike platziert", 0.98),
+                        ([[0, 1]], ("Headshot", 0.92))]
+            return ["fallback"]
+
+    text = O._easyocr_text(Reader(), "frame.png")
+    assert "Spike platziert" in text and "Headshot" in text
+
+
+def test_paddle_text_accepts_ocr_result_objects():
+    from app.providers import detect_ocr as O
+
+    class ResultObject:
+        rec_texts = ["Sieg", "Kopfschuss"]
+
+    class Reader:
+        def predict(self, _path):
+            return [ResultObject(), {"rec_texts": ["Bombe gelegt"]}]
+
+    text = O._paddle_text(Reader(), "frame.png")
+    assert "Sieg" in text and "Kopfschuss" in text and "Bombe gelegt" in text
+
+
+def test_ocr_reader_falls_back_to_easyocr_when_paddle_fails():
+    from app.providers import detect_ocr as O
+
+    old_reader = O._reader
+    old_make_paddle = O._make_paddle
+    old_make_easyocr = O._make_easyocr
+
+    class EasyReader:
+        pass
+
+    try:
+        O._reader = None
+
+        def fail_paddle(_gpu):
+            raise RuntimeError("broken paddle runtime")
+
+        O._make_paddle = fail_paddle
+        O._make_easyocr = lambda _gpu: EasyReader()
+        kind, reader = O._get_reader("paddleocr")
+        assert kind == "easyocr"
+        assert isinstance(reader, EasyReader)
+    finally:
+        O._reader = old_reader
+        O._make_paddle = old_make_paddle
+        O._make_easyocr = old_make_easyocr
 
 
 def test_ocr_fuzzy_matches_garbled_text():
@@ -803,6 +1228,9 @@ def test_ocr_frame_sampling_is_bounded_and_spaced():
     assert all(b - a >= 1.9 for a, b in zip(ts, ts[1:]))
     # a long VOD never exceeds the frame cap
     assert len(O.sample_frame_times(100000, every=2.0, max_frames=400)) <= 400
+    focused = O.focused_frame_times(3600, [100.0, 103.0], max_frames=12)
+    assert any(99.0 <= t <= 104.5 for t in focused)
+    assert len(focused) <= 12
 
 
 def test_ocr_dedupes_persisting_banner():
@@ -911,7 +1339,7 @@ def test_common_cue_pack_is_available_for_all_games():
     from app import game_packs
     status = game_packs.pack_status()
     assert "common" in status
-    assert status["common"]["label"].lower().startswith("common")
+    assert status["common"]["label"].lower().startswith(("common", "allgemein"))
     assert {e["name"] for e in status["common"]["events"]} >= {"airhorn", "hype", "laugh"}
 
 
@@ -943,15 +1371,53 @@ def test_corroboration_boosts_multi_signal_clips():
     from app.providers.detect_cues import CueEvent
     from app.providers.detect_gameplay import GameplayClip, apply_corroboration
     from app.providers.detect_ocr import OcrEvent
-    c = GameplayClip(start=10, end=30, score=70)
+    c = GameplayClip(start=10, end=30, score=70, peak_t=20)
     apply_corroboration([c], [CueEvent(t=20, label="kill", similarity=0.9)],
                         [OcrEvent(t=21, label="kill", text="kill", confidence=0.8)])
     assert c.score > 70 and c.features.get("corroborated") == 1.0
     assert any("confirm" in f.label.lower() for f in c.factors)
     # a single source does not corroborate
-    c2 = GameplayClip(start=10, end=30, score=70)
+    c2 = GameplayClip(start=10, end=30, score=70, peak_t=20)
     apply_corroboration([c2], [CueEvent(t=20, label="kill", similarity=0.9)], [])
     assert c2.score == 70
+
+
+def test_gameplay_title_fallback_names_reaction_peaks():
+    from app.providers.detect_gameplay import GameplayClip, apply_title_fallbacks
+
+    c = GameplayClip(start=2300, end=2335, score=95, peak_t=2325,
+                     title="Highlight — 38:45",
+                     features={"reaction": 1.0, "intensity": 0.99})
+    apply_title_fallbacks([c])
+    assert c.title == "Big Reaction — 38:45"
+
+
+def test_custom_event_padding_and_clap_clips():
+    from app.media.ffmpeg import MediaInfo
+    from app.providers.audio_events import AudioEvent
+    from app.providers.detect_gameplay import (_audio_event_clips, _timing_window,
+                                               get_profile)
+    info = MediaInfo(duration=200, width=1920, height=1080, fps=30,
+                     has_audio=True, has_video=True, codec=None)
+    st = ImportSettings(min_len=10, max_len=40, lead_seconds=7, tail_seconds=9)
+    lead, tail = _timing_window(st, get_profile("generic"))
+    assert (lead, tail) == (7.0, 9.0)
+    clips = _audio_event_clips(
+        [AudioEvent(t=80, label="crowd_cheering", confidence=0.8,
+                    detail="CLAP heard crowd cheering")],
+        info, st, lead=lead, tail=tail)
+    assert clips and clips[0].start == 73 and clips[0].end == 89
+    assert clips[0].features["audio_event"] == 0.8
+
+
+def test_manual_clip_context_rejects_nonfinite_values():
+    from app.api.routes_projects import _clamp_pad
+
+    assert _clamp_pad(None) is None
+    assert _clamp_pad(float("nan")) is None
+    assert _clamp_pad(float("inf")) is None
+    assert _clamp_pad(-5) == 0.0
+    assert _clamp_pad(999) == 60.0
 
 
 def test_cue_learning_pending_labels():
@@ -1033,6 +1499,105 @@ def test_optional_powerups_off_by_default_in_ci():
     assert r["reframe_engine"] in ("haar", "yolo", "mediapipe")
 
 
+def test_active_speaker_not_advertised_until_adapter_exists():
+    from app import config
+
+    old_env = os.environ.pop("CLIPFORGE_ASD_DIR", None)
+    try:
+        assert config._detect_asd_adapter() is False
+    finally:
+        if old_env is not None:
+            os.environ["CLIPFORGE_ASD_DIR"] = old_env
+
+
+def test_optional_nested_module_lookup_is_safe_when_parent_missing():
+    from app import config
+
+    assert config._has_module("definitely_missing_parent.child") is False
+
+
+def test_active_speaker_adapter_detects_valid_checkout_fixture():
+    from app import config
+
+    old_env = os.environ.get("CLIPFORGE_ASD_DIR")
+    old_has_module = config._has_module
+    old_cuda = config._torch_cuda_available
+    with tempfile.TemporaryDirectory() as td:
+        root = os.path.join(td, "LR-ASD")
+        os.makedirs(os.path.join(root, "model"), exist_ok=True)
+        os.makedirs(os.path.join(root, "weight"), exist_ok=True)
+        os.makedirs(os.path.join(root, "model", "faceDetector", "s3fd"), exist_ok=True)
+        for rel in ("ASD.py", "Columbia_test.py", os.path.join("model", "Model.py")):
+            with open(os.path.join(root, rel), "w", encoding="utf-8") as f:
+                f.write("# fixture\n")
+        with open(os.path.join(root, "weight", "pretrain_AVA.model"), "wb") as f:
+            f.write(b"x" * 100_001)
+        with open(os.path.join(root, "model", "faceDetector", "s3fd", "sfd_face.pth"), "wb") as f:
+            f.write(b"x" * 100_001)
+        os.environ["CLIPFORGE_ASD_DIR"] = root
+        config._has_module = lambda _name: True
+        config._torch_cuda_available = lambda: True
+        try:
+            assert config._detect_asd_adapter() is True
+        finally:
+            config._has_module = old_has_module
+            config._torch_cuda_available = old_cuda
+            if old_env is None:
+                os.environ.pop("CLIPFORGE_ASD_DIR", None)
+            else:
+                os.environ["CLIPFORGE_ASD_DIR"] = old_env
+
+
+def test_lr_asd_script_compatibility_accepts_patched_scenedetect_fallback():
+    from pathlib import Path
+    from app import config
+
+    with tempfile.TemporaryDirectory() as td:
+        root = os.path.join(td, "LR-ASD")
+        os.makedirs(root, exist_ok=True)
+        script = os.path.join(root, "Columbia_test.py")
+        with open(script, "w", encoding="utf-8") as f:
+            f.write("from scenedetect.video_manager import VideoManager\n")
+        assert config._lr_asd_script_compatible(Path(root)) is False
+        with open(script, "w", encoding="utf-8") as f:
+            f.write("from scenedetect.video_manager import VideoManager\n"
+                    "from scenedetect import open_video\n"
+                    "VideoManager = None\n")
+        assert config._lr_asd_script_compatible(Path(root)) is True
+
+
+def test_lr_asd_parser_selects_highest_speaking_track():
+    from app.providers import active_speaker as AS
+
+    tracks = [
+        {"track": {"frame": [0, 1, 2], "bbox": [[100, 0, 200, 100],
+                                                [110, 0, 210, 100],
+                                                [120, 0, 220, 100]]}},
+        {"track": {"frame": [0, 1, 2], "bbox": [[700, 0, 800, 100],
+                                                [710, 0, 810, 100],
+                                                [720, 0, 820, 100]]}},
+    ]
+    centers = AS._centers_from_tracks(
+        tracks, [[-0.2, 0.8, 0.7], [1.0, -0.1, -0.2]], frame_width=1000, fps=25.0)
+    assert centers == [(0.0, 0.75), (0.04, 0.16), (0.08, 0.17)]
+    assert AS._centers_from_tracks(tracks, [[-1, -1, -1], [-0.5, -0.2, -0.1]], 1000) is None
+
+
+def test_reframe_uses_lr_asd_centers_before_face_fallback():
+    from app.pipeline import reframe as RF
+    from app.providers import active_speaker as AS
+
+    old_settings, old_track = RF.get_settings, AS.track_centers
+    RF.get_settings = lambda: _settings(has_asd=True, has_opencv=False)
+    AS.track_centers = lambda *_args: [(0.0, 0.8), (0.4, 0.82), (0.8, 0.84)]
+    try:
+        rf = RF.compute_reframe("unused.mp4", 10.0, 11.0, 16 / 9)
+    finally:
+        RF.get_settings, AS.track_centers = old_settings, old_track
+    assert rf.tracked is True
+    assert rf.keyframes[0].cx > 0.7
+
+
 def test_audio_event_reduce_and_bonus():
     from app.models import ScoreFactor
     from app.providers import audio_events as AE
@@ -1048,6 +1613,160 @@ def test_audio_event_reduce_and_bonus():
     ns, nf = AE.apply_event_bonus(60, base, 1.0, "crowd cheering", max_bonus=10.0)
     assert ns == 70 and nf[0].weight == 10.0 and "cheering" in nf[0].label.lower()
     assert AE.apply_event_bonus(60, base, 0.0, "x") == (60, base)  # quiet -> no-op
+    clap = AE.reduce_clap_similarities({"crowd cheering": 0.42, "impact": 0.12})
+    assert clap is not None and clap[1] == "crowd cheering" and clap[0] > 0.5
+    assert AE.reduce_clap_similarities({"crowd cheering": 0.1}) is None
+    assert AE.reduce_clap_window(
+        {"crowd cheering": 0.42}, {"lobby music": 0.48}) is None
+    assert AE.reduce_clap_window(
+        {"crowd cheering": 0.34}, {"lobby music": 0.31}) is None
+    gated = AE.reduce_clap_window({"crowd cheering": 0.42}, {"lobby music": 0.24})
+    assert gated is not None and gated[1] == "crowd cheering"
+
+
+def test_clap_prompts_include_game_and_german_context():
+    from app.providers import audio_events as AE
+
+    pos, neg = AE._prompt_sets("valorant", "de")
+    joined_pos = " ".join(p for prompts in pos.values() for p in prompts).lower()
+    joined_neg = " ".join(p for prompts in neg.values() for p in prompts).lower()
+    assert "valorant" in joined_pos and "spike" in joined_pos
+    assert "german streamer" in joined_pos
+    assert "lobby" in joined_neg and "menu" in joined_neg
+
+
+def test_clap_loader_hides_server_args_and_restores_argv():
+    from app.providers import audio_events as AE
+
+    old_clap = AE._clap
+    old_mod = sys.modules.get("laion_clap")
+    old_argv = sys.argv[:]
+    calls = []
+    mod = types.ModuleType("laion_clap")
+    import importlib.machinery
+    mod.__spec__ = importlib.machinery.ModuleSpec("laion_clap", loader=None)
+
+    class FakeClap:
+        def __init__(self, **_kwargs):
+            calls.append(sys.argv[:])
+
+        def load_ckpt(self):
+            pass
+
+    mod.CLAP_Module = FakeClap
+    sys.modules["laion_clap"] = mod
+    AE._clap = None
+    sys.argv = ["uvicorn", "app.main:app", "--port", "8000"]
+    try:
+        assert AE._load_clap() is not None
+        assert calls and all(call == ["uvicorn"] for call in calls)
+        assert sys.argv == ["uvicorn", "app.main:app", "--port", "8000"]
+    finally:
+        AE._clap = old_clap
+        sys.argv = old_argv
+        if old_mod is None:
+            sys.modules.pop("laion_clap", None)
+        else:
+            sys.modules["laion_clap"] = old_mod
+
+
+def test_clap_loader_uses_nonstrict_checkpoint_fallback():
+    from app.providers import audio_events as AE
+
+    class Core:
+        def __init__(self):
+            self.strict_values = []
+
+        def load_state_dict(self, _state, *args, **kwargs):
+            strict = kwargs.get("strict", args[0] if args else True)
+            self.strict_values.append(strict)
+            if strict:
+                raise RuntimeError(
+                    'Unexpected key(s) in state_dict: "text_branch.embeddings.position_ids".'
+                )
+
+    class FakeClap:
+        def __init__(self):
+            self.model = Core()
+
+        def load_ckpt(self):
+            self.model.load_state_dict({"ok": 1})
+
+    model = FakeClap()
+    AE._load_clap_checkpoint(model)
+    assert model.model.strict_values == [True, False]
+
+
+def test_audio_capability_flags_drop_failed_runtime_detectors():
+    from app.providers import audio_events as AE
+
+    old_get, old_tagger, old_clap = AE.get_settings, AE._tagger, AE._clap
+    AE.get_settings = lambda: _settings(has_audio_events=True, has_clap=True)
+    try:
+        AE._tagger = None
+        AE._clap = False
+        assert AE.capability_flags() == {
+            "audio_events": True, "panns_audio": True, "clap_audio": False}
+        AE._tagger = False
+        assert AE.available() is False
+    finally:
+        AE.get_settings = old_get
+        AE._tagger = old_tagger
+        AE._clap = old_clap
+
+
+def test_clap_embedding_array_supports_old_signature():
+    from app.providers import audio_events as AE
+
+    calls = []
+
+    def old_signature(values):
+        calls.append(values)
+        return [[1.0, 0.0]]
+
+    assert AE._embedding_array(old_signature, ["a"]).shape == (1, 2)
+    assert calls == [["a"]]
+
+
+def test_caption_emphasis_and_emoji():
+    from app.models import CaptionWord
+    from app.pipeline.caption_fx import annotate
+    # "secret" (hook/payoff) and "100" (number) are power words; "the"/"is" aren't.
+    ws = [CaptionWord(t=0, d=0.3, text="the"),
+          CaptionWord(t=0.3, d=0.3, text="secret"),
+          CaptionWord(t=0.6, d=0.3, text="is"),
+          CaptionWord(t=0.9, d=0.3, text="100")]
+    out = annotate(ws, lang="en", emphasis=True, emoji=False, max_words_per_line=4)
+    flags = {w.text: w.emphasis for w in out}
+    assert flags["secret"] and flags["100"]
+    assert not flags["the"] and not flags["is"]
+    # input is not mutated (pure)
+    assert all(w.emphasis is False for w in ws)
+    # emphasis is capped per on-screen line so a whole line never lights up
+    many = [CaptionWord(t=i, d=0.3, text="secret") for i in range(3)]
+    capped = annotate(many, lang="en", emphasis=True, max_words_per_line=3,
+                      max_emphasis_per_line=2)
+    assert sum(w.emphasis for w in capped) == 2
+    # emoji appended only when enabled, and only to mapped power words
+    emo = annotate([CaptionWord(t=0, d=0.3, text="fire")], lang="en", emoji=True)
+    assert emo[0].emoji == "🔥"
+    assert annotate([CaptionWord(t=0, d=0.3, text="fire")], lang="en", emoji=False)[0].emoji is None
+    # both off → returns the list unchanged
+    assert annotate(ws, emphasis=False, emoji=False) is ws
+
+
+def test_caption_emphasis_renders_in_ass():
+    from app.models import CaptionSet, CaptionWord, StyleTemplate
+    style = StyleTemplate(id="t", name="t", highlight="00FF00", emphasis=True)
+    cs = CaptionSet(words=[CaptionWord(t=0, d=0.4, text="the"),
+                           CaptionWord(t=1.0, d=0.4, text="secret")],
+                    lang="en")
+    ass = C.build_ass(cs, style, 1080, 1920)
+    # the emphasised power word carries the highlight colour scale tag
+    assert "fscx106" in ass
+    # opting the style out removes the standalone emphasis
+    plain = C.build_ass(cs, style.model_copy(update={"emphasis": False}), 1080, 1920)
+    assert "fscx106" not in plain
 
 
 def test_vlm_keyframe_times_are_inside_span():
@@ -1056,6 +1775,44 @@ def test_vlm_keyframe_times_are_inside_span():
     assert len(ts) == 3 and all(10.0 < t < 22.0 for t in ts)
     assert ts == sorted(ts)
     assert keyframe_times(5.0, 5.0) == [5.0]  # zero-length span is safe
+
+
+def test_vlm_model_autopick_accepts_hyphenated_qwen_name():
+    from app.providers import vlm
+    assert vlm._resolve_model(["qwen3-vl:8b", "qwen2.5vl:32b"]) == "qwen3-vl:8b"
+    assert vlm._resolve_model(["qwen2.5-vl:7b", "llava:latest"]) == "qwen2.5-vl:7b"
+    assert vlm._resolve_model(["qwen2.5vl:7b", "qwen2.5vl:32b"]) == "qwen2.5vl:32b"
+
+
+def test_vlm_negative_reason_caps_score():
+    from app.providers import vlm
+    assert vlm._parse("SCORE: 88 | REASON: loading screen")[0] <= 0.35
+    assert "Bewerte" in vlm._prompt_for("de")
+
+
+def test_orchestrator_passes_source_path_to_vlm_scorer():
+    from app.pipeline import orchestrator as O
+    from app.providers import vlm
+
+    old_available, old_score_visuals = vlm.available, vlm.score_visuals
+    calls = []
+
+    def fake_score_visuals(src_path, spans, *, budget=45.0, max_workers=2,
+                           n_frames=3, timeout=30.0, lang="en"):
+        calls.append((src_path, spans, budget, max_workers, n_frames, timeout, lang))
+        return {0: (0.8, "strong frames")}
+
+    try:
+        vlm.available = lambda: True
+        vlm.score_visuals = fake_score_visuals
+        out = O._score_visual_reads("source.mp4", [Clip(start=1.0, end=2.5)],
+                                    lang="de")
+    finally:
+        vlm.available = old_available
+        vlm.score_visuals = old_score_visuals
+
+    assert out == {0: (0.8, "strong frames")}
+    assert calls == [("source.mp4", [(1.0, 2.5)], 45.0, 1, 2, 30.0, "de")]
 
 
 if __name__ == "__main__":

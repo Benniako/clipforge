@@ -1,4 +1,4 @@
-import { useState } from "react";
+﻿import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../lib/api";
 import type { Clip } from "../lib/types";
@@ -8,16 +8,30 @@ import ScoreBadge from "./ScoreBadge";
 interface Props {
   clip: Clip;
   projectId: string;
+  rank?: number;
   selected?: boolean;
   onToggleSelect?: (id: string) => void;
+}
+
+// A small "Top pick" ribbon for the strongest few clips — the at-a-glance cue
+// every social clipper uses so you know what to post first.
+function RankRibbon({ rank }: { rank?: number }) {
+  if (!rank || rank > 3) return null;
+  const label = rank === 1 ? "Top pick" : `#${rank}`;
+  return (
+    <span className={"rank-ribbon r" + rank} title="Ranked by virality score">
+      {rank === 1 ? "★ " : ""}
+      {label}
+    </span>
+  );
 }
 
 function StatusChip({ status }: { status: Clip["status"] }) {
   if (status === "ready") return null;
   const map: Record<string, [string, string]> = {
     rendering: ["Rendering…", "var(--warn)"],
-    pending: ["Queued", "var(--muted)"],
-    failed: ["Failed", "var(--bad)"],
+    pending: ["Warteschlange", "var(--muted)"],
+    failed: ["Fehlgeschlagen", "var(--bad)"],
   };
   const [label, color] = map[status] ?? [status, "var(--muted)"];
   return (
@@ -27,7 +41,7 @@ function StatusChip({ status }: { status: Clip["status"] }) {
   );
 }
 
-export default function ClipCard({ clip, projectId, selected, onToggleSelect }: Props) {
+export default function ClipCard({ clip, projectId, rank, selected, onToggleSelect }: Props) {
   const nav = useNavigate();
   const open = () => nav(`/p/${projectId}/clip/${clip.id}`);
   const ready = clip.status === "ready" && clip.export_url;
@@ -49,6 +63,8 @@ export default function ClipCard({ clip, projectId, selected, onToggleSelect }: 
         role="button"
       >
         <StatusChip status={clip.status} />
+        <RankRibbon rank={rank} />
+        {ready && <span className="thumb-scrim" />}
         {onToggleSelect && ready && (
           <span
             onClick={(e) => {
@@ -75,7 +91,7 @@ export default function ClipCard({ clip, projectId, selected, onToggleSelect }: 
         )}
         <span className="dur">
           {fmtDuration(clip.tightened_duration ?? clip.end - clip.start)}
-          {clip.tightened_duration != null && " ✂"}
+          {clip.tightened_duration != null && " Schnitt"}
         </span>
       </div>
       <div className="clip-body">
@@ -83,7 +99,7 @@ export default function ClipCard({ clip, projectId, selected, onToggleSelect }: 
           <ScoreBadge score={clip.score} />
         </div>
         <div className="clip-title" onClick={open} role="button">
-          {clip.title || "Untitled clip"}
+          {clip.title || "Unbenannter Clip"}
         </div>
         <div className="factors">
           {clip.factors.slice(0, 2).map((f, i) => (
@@ -94,7 +110,7 @@ export default function ClipCard({ clip, projectId, selected, onToggleSelect }: 
         </div>
         <div className="card-actions">
           <button className="btn sm ghost" onClick={open}>
-            Edit
+            Bearbeiten
           </button>
           {ready && (
             <a
@@ -108,22 +124,24 @@ export default function ClipCard({ clip, projectId, selected, onToggleSelect }: 
           <div className="spacer" style={{ flex: 1 }} />
           <button
             className="btn sm ghost"
-            title="More like this — teaches the local scorer your taste"
+            title="Mehr davon - verbessert die lokale Bewertung"
             onClick={(e) => rate(e, "up")}
             style={{ padding: "7px 9px", color: fb === "up" ? "var(--good)" : undefined }}
           >
-            👍
+            Gut
           </button>
           <button
             className="btn sm ghost"
-            title="Less like this"
+            title="Weniger davon"
             onClick={(e) => rate(e, "down")}
             style={{ padding: "7px 9px", color: fb === "down" ? "var(--bad)" : undefined }}
           >
-            👎
+            Schlecht
           </button>
         </div>
       </div>
     </div>
   );
 }
+
+

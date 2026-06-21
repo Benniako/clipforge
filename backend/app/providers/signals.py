@@ -162,6 +162,55 @@ def hook_strength(words: list[Word], lex: Lexicon = _EN) -> tuple[float, str]:
     return _clamp(raw), reason
 
 
+_FILLER_OPENERS = frozenset({
+    "um", "uh", "okay", "ok", "so", "well", "like", "yeah", "also", "äh",
+    "ehm", "ja", "naja", "okay",
+})
+
+
+def instant_hook(words: list[Word], lex: Lexicon = _EN) -> tuple[float, str]:
+    """Scroll-stop strength inside the first two seconds."""
+    if not words:
+        return 0.0, ""
+    start = words[0].t
+    head = [w for w in words if w.t - start < 2.0] or words[:5]
+    toks = _tokens(head)
+    if not toks:
+        return 0.0, ""
+    first = toks[0]
+    hook = any(t in lex.hook for t in toks)
+    direct = any(t in lex.second_person for t in toks)
+    question = any(w.text.strip().endswith("?") for w in head)
+    number = _has_number(head)
+    weak = first in (lex.dangling | _FILLER_OPENERS)
+    raw = 0.30 * hook + 0.22 * direct + 0.22 * question + 0.18 * number
+    raw += 0.10 if not weak else -0.20
+    reason = ("First 2s hook lands" if (hook or direct or question or number) else
+              "Clean opening beat" if not weak else "Soft opening beat")
+    return _clamp(raw), reason
+
+
+def swipe_resistance(words: list[Word], duration: float,
+                     lex: Lexicon = _EN) -> tuple[float, str]:
+    """Positive proxy for low swipe-away risk."""
+    if not words or duration <= 0:
+        return 0.0, ""
+    start = words[0].t
+    first_two = [w for w in words if w.t - start < 2.0] or words[:5]
+    toks = _tokens(first_two)
+    first = toks[0] if toks else ""
+    weak_open = first in (lex.dangling | _FILLER_OPENERS)
+    hook_val, _ = instant_hook(words, lex)
+    early_wps = len(first_two) / max(min(duration, 2.0), 0.5)
+    pace_ok = 1.0 if 1.4 <= early_wps <= 4.8 else 0.35
+    complete_open = 1.0 if first_two and len(first_two) >= 3 else 0.45
+    raw = 0.55 * hook_val + 0.25 * pace_ok + 0.20 * complete_open
+    if weak_open:
+        raw -= 0.25
+    reason = "Low swipe-away risk" if raw >= 0.55 else "Opening may lose viewers"
+    return _clamp(raw), reason
+
+
 def emotional_payoff(words: list[Word], lex: Lexicon = _EN) -> tuple[float, str]:
     toks = _tokens(words)
     if not toks:

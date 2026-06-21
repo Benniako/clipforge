@@ -1,8 +1,9 @@
 // Shapes mirroring the backend domain models (app/models.py).
 
-export type ProjectStatus = "created" | "queued" | "processing" | "ready" | "failed";
+export type ProjectStatus = "created" | "queued" | "processing" | "paused" | "ready" | "failed";
 export type ClipStatus = "pending" | "rendering" | "ready" | "failed";
 export type Platform = "tiktok" | "reels" | "shorts" | "generic";
+export type PowerMode = "balanced" | "max_gpu" | "quality";
 
 export interface ScoreFactor {
   label: string;
@@ -15,11 +16,15 @@ export interface CaptionWord {
   d: number;
   text: string;
   speaker: number | null;
+  // Marked by the backend's keyword-emphasis pass (caption_fx.annotate). Honoured
+  // at render time; the editor doesn't author these directly.
+  emphasis?: boolean;
+  emoji?: string | null;
 }
 
 export interface DetectedEvent {
   t: number;
-  source: "cue" | "ocr";
+  source: "cue" | "ocr" | "audio";
   label: string;
   detail: string;
   confidence: number;
@@ -30,6 +35,8 @@ export interface CaptionSet {
   words: CaptionWord[];
   style_id: string;
   max_words_per_line: number;
+  // Spoken language ("en"/"de"); drives the lexicon for keyword emphasis + emoji.
+  lang?: string;
 }
 
 export interface ReframeKeyframe {
@@ -84,7 +91,7 @@ export interface Clip {
 export interface StageView {
   name: string;
   label: string;
-  status: "pending" | "active" | "done";
+  status: "pending" | "active" | "paused" | "done";
   pct: number;
 }
 
@@ -111,6 +118,7 @@ export interface SourceMedia {
 
 export interface ImportSettings {
   platform: Platform;
+  power_mode: PowerMode;
   min_len: number;
   max_len: number;
   target_clips: number;
@@ -121,8 +129,17 @@ export interface ImportSettings {
   burn_captions: boolean;
   game_profile: string;
   tighten: boolean;
+  denoise: boolean;
   motion: string;
   facecam_layout: string;
+  use_ocr: boolean;
+  use_vlm: boolean;
+  use_cues: boolean;
+  use_audio_events: boolean;
+  cue_learning: boolean;
+  auto_length: boolean;
+  lead_seconds: number | null;
+  tail_seconds: number | null;
 }
 
 export interface Montage {
@@ -175,6 +192,13 @@ export interface StatusPayload {
   error: string | null;
   warnings: string[];
   content_type: string | null;
+  settings: Pick<ImportSettings, "power_mode" | "aspect">;
+  system?: {
+    cpu_pct: number | null;
+    gpu_pct: number | null;
+    gpu_mem_mb: number | null;
+    gpu_mem_total_mb: number | null;
+  };
   progress: JobProgress;
   clips: Array<
     Pick<Clip, "id" | "title" | "score" | "kind" | "status" | "thumb_url" | "export_url"> & {
@@ -193,6 +217,10 @@ export interface StyleTemplate {
   outline: string;
   y_frac: number;
   uppercase: boolean;
+  // Caption production-value flags — whether this preset enables keyword
+  // emphasis (power-word colour/scale across the line) and tasteful auto-emoji.
+  emphasis?: boolean;
+  emoji?: boolean;
 }
 
 export interface Health {
@@ -209,6 +237,8 @@ export interface Health {
     emotion: boolean;
     denoise: boolean;
     audio_events: boolean;
+    panns_audio: boolean;
+    clap_audio: boolean;
     reframe_engine: string;
     active_speaker: boolean;
     face_tracking: boolean;
@@ -221,9 +251,11 @@ export interface Health {
     vlm: boolean;
     vlm_model: string | null;
     whisper_model: string;
+    diarization_model: string | null;
     auto_model: boolean;
     vram_gb: number;
     cpu: number;
+    recommended_power_mode: PowerMode;
   };
   output: { width: number; height: number };
 }
