@@ -935,6 +935,50 @@ def test_status_ws_reports_missing_project():
         assert ws.receive_json() == {"error": "project not found"}
 
 
+def test_export_premiere_endpoint_zips_edl_and_srts():
+    """Integration: the premiere export returns a zip carrying a CMX 3600 EDL
+    and per-clip SRT sidecars built from the project's ready clips."""
+    import io
+    import zipfile
+    from starlette.testclient import TestClient
+    from app import store
+    from app.main import create_app
+    from app.models import CaptionSet, CaptionWord
+
+    store.init_db()
+    caps = CaptionSet(words=[CaptionWord(t=0.0, d=1.0, text="Hello"),
+                            CaptionWord(t=1.0, d=1.0, text="world")])
+    p = Project(
+        id="proj_edl",
+        status=ProjectStatus.ready,
+        source=SourceMedia(filename="src.mp4", path="proj_edl/src.mp4", fps=30),
+        clips=[
+            Clip(start=10.0, end=15.0, title="First", score=91,
+                 export_url="/media/proj_edl/a.mp4", captions=caps),
+            Clip(start=30.0, end=33.0, title="Second", score=72,
+                 export_url="/media/proj_edl/b.mp4", captions=caps),
+        ],
+    )
+    store.save(p)
+    c = TestClient(create_app(), raise_server_exceptions=False)
+
+    r = c.get(f"/api/projects/{p.id}/export/premiere")
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "application/zip"
+    zf = zipfile.ZipFile(io.BytesIO(r.content))
+    names = zf.namelist()
+    edl = next(n for n in names if n.endswith(".edl"))
+    assert "TITLE:" in zf.read(edl).decode()
+    assert "00:00:10:00 00:00:15:00 00:00:00:00 00:00:05:00" in zf.read(edl).decode()
+    assert sum(1 for n in names if n.startswith("captions/") and n.endswith(".srt")) == 2
+
+    # A project with no rendered clips is a 409, not a broken zip.
+    empty = Project(id="proj_edl_empty", status=ProjectStatus.ready,
+                    source=SourceMedia(filename="s.mp4", path="proj_edl_empty/s.mp4"))
+    store.save(empty)
+    assert c.get(f"/api/projects/{empty.id}/export/premiere").status_code == 409
+
+
 def test_pause_resume_project_endpoint():
     from starlette.testclient import TestClient
     from app import store
