@@ -14,7 +14,13 @@ export default function SwipeReviewScreen({
   onExit: () => void;
 }) {
   const clips = useMemo(
-    () => project.clips.filter((c) => c.export_url).sort((a, b) => b.score - a.score),
+    () =>
+      project.clips
+        .filter((c) => c.export_url)
+        // Tiebreak by id so equal scores keep a deterministic order across
+        // project refreshes — otherwise a refresh after rating could reorder
+        // the list under the fixed index and jump to a different card.
+        .sort((a, b) => b.score - a.score || a.id.localeCompare(b.id)),
     [project.clips],
   );
   const [idx, setIdx] = useState(0);
@@ -22,10 +28,13 @@ export default function SwipeReviewScreen({
   const [busy, setBusy] = useState(false);
   const startY = useRef<number | null>(null);
 
-  const active = clips[idx] ?? null;
-  const next = clips[(idx + 1) % Math.max(clips.length, 1)] ?? null;
-  const prev = () => setIdx((i) => (clips.length ? (i - 1 + clips.length) % clips.length : 0));
-  const forward = () => setIdx((i) => (clips.length ? (i + 1) % clips.length : 0));
+  // Clamp so a shrinking list (a clip losing its render) can't strand the index
+  // past the end.
+  const safeIdx = clips.length ? Math.min(idx, clips.length - 1) : 0;
+  const active = clips[safeIdx] ?? null;
+  const next = clips[(safeIdx + 1) % Math.max(clips.length, 1)] ?? null;
+  const prev = () => setIdx((i) => (clips.length ? (Math.min(i, clips.length - 1) - 1 + clips.length) % clips.length : 0));
+  const forward = () => setIdx((i) => (clips.length ? (Math.min(i, clips.length - 1) + 1) % clips.length : 0));
 
   const rate = async (rating: "up" | "down" | "none") => {
     if (!active) return;
