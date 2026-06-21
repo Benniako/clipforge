@@ -4,6 +4,7 @@ import { api } from "../lib/api";
 import type { Project } from "../lib/types";
 import { fmtDuration, scoreColor } from "../lib/format";
 import { orderReviewClips } from "../lib/reviewOrder";
+import { useT } from "../lib/i18n";
 
 export default function SwipeReviewScreen({
   project,
@@ -14,6 +15,7 @@ export default function SwipeReviewScreen({
   onChange: (p: Project) => void;
   onExit: () => void;
 }) {
+  const { t } = useT();
   const clips = useMemo(() => orderReviewClips(project.clips), [project.clips]);
   const [idx, setIdx] = useState(0);
   const [dragY, setDragY] = useState(0);
@@ -52,8 +54,8 @@ export default function SwipeReviewScreen({
     return (
       <div className="container">
         <div className="empty">
-          <h3>Noch keine gerenderten Clips</h3>
-          <button className="btn" onClick={onExit}>Zur Grid-Ansicht</button>
+          <h3>{t("swipe.emptyTitle")}</h3>
+          <button className="btn" onClick={onExit}>{t("swipe.toGrid")}</button>
         </div>
       </div>
     );
@@ -64,9 +66,9 @@ export default function SwipeReviewScreen({
   return (
     <div className="swipe-review">
       <div className="swipe-topbar">
-        <button className="btn ghost sm" onClick={onExit}>Grid</button>
+        <button className="btn ghost sm" onClick={onExit}>{t("swipe.grid")}</button>
         <span className="pill">{safeIdx + 1} / {clips.length}</span>
-        <a className="btn ghost sm" href={api.exportPremiereUrl(project.id)}>Premiere EDL</a>
+        <a className="btn ghost sm" href={api.exportPremiereUrl(project.id)}>{t("swipe.premiereEdl")}</a>
       </div>
 
       <div
@@ -96,7 +98,7 @@ export default function SwipeReviewScreen({
         <div className="swipe-overlay">
           <div className="swipe-score" style={{ color: scoreColor(active.score) }}>{active.score}</div>
           <div>
-            <h2>{active.title || "Unbenannter Clip"}</h2>
+            <h2>{active.title || t("swipe.untitled")}</h2>
             <p>{fmtDuration(active.tightened_duration ?? active.end - active.start)} - {active.kind}</p>
             <div className="swipe-reasons">
               {reasons.map((f, i) => (
@@ -110,12 +112,12 @@ export default function SwipeReviewScreen({
       {next?.export_url && <video className="preload-video" src={next.export_url} preload="auto" muted />}
 
       <div className="swipe-actions">
-        <button className="btn ghost" onClick={prev}>Zurück</button>
-        <button className="btn ghost" disabled={busy} onClick={() => rate("down")}>Schlecht</button>
-        <button className="btn primary" disabled={busy} onClick={() => rate("up")}>Gut</button>
-        <button className="btn ghost" onClick={forward}>Weiter</button>
-        <Link className="btn ghost" to={`/p/${project.id}/clip/${active.id}`}>Bearbeiten</Link>
-        <a className="btn ghost" href={api.downloadClipUrl(project.id, active.id)} download>Download</a>
+        <button className="btn ghost" onClick={prev}>{t("swipe.back")}</button>
+        <button className="btn ghost" disabled={busy} onClick={() => rate("down")}>{t("swipe.bad")}</button>
+        <button className="btn primary" disabled={busy} onClick={() => rate("up")}>{t("swipe.good")}</button>
+        <button className="btn ghost" onClick={forward}>{t("swipe.next")}</button>
+        <Link className="btn ghost" to={`/p/${project.id}/clip/${active.id}`}>{t("swipe.edit")}</Link>
+        <a className="btn ghost" href={api.downloadClipUrl(project.id, active.id)} download>{t("swipe.download")}</a>
       </div>
     </div>
   );

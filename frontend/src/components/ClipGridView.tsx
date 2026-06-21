@@ -4,6 +4,7 @@ import { api } from "../lib/api";
 import type { ImportSettings, PowerMode, Project } from "../lib/types";
 import { fmtClock, fmtDuration, scoreColor } from "../lib/format";
 import { mediaTimeUrl } from "../lib/media";
+import { useT } from "../lib/i18n";
 import ClipCard from "./ClipCard";
 import CueModal from "./CueModal";
 import VisualCueCalibration from "./VisualCueCalibration";
@@ -39,6 +40,7 @@ export default function ClipGridView({
   project: Project;
   onChange: (p: Project) => void;
 }) {
+  const { t } = useT();
   const [sort, setSort] = useState<Sort>("score");
   const [minScore, setMinScore] = useState(0);
   const [selected, setSelected] = useState<string[]>([]); // selection order = montage order
@@ -312,10 +314,10 @@ export default function ClipGridView({
             const message = typeof w === "string" ? w : w.message;
             const palette =
               sev === "error"
-                ? { border: "#6b2f2f", background: "#2a1414", color: "#f5a8a8", tag: "Fehler" }
+                ? { border: "#6b2f2f", background: "#2a1414", color: "#f5a8a8", tag: t("notice.error") }
                 : sev === "info"
-                ? { border: "#2b4a5a", background: "#142028", color: "#8ad0f5", tag: "Info" }
-                : { border: "#5a4a2b", background: "#2a2414", color: "#f5d98a", tag: "Hinweis" };
+                ? { border: "#2b4a5a", background: "#142028", color: "#8ad0f5", tag: t("notice.info") }
+                : { border: "#5a4a2b", background: "#2a2414", color: "#f5d98a", tag: t("notice.warn") };
             return (
               <div
                 key={i}

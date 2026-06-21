@@ -3,6 +3,7 @@ import { Link, Route, Routes } from "react-router-dom";
 import { api } from "./lib/api";
 import type { Health } from "./lib/types";
 import CueModal from "./components/CueModal";
+import { useT, LanguageToggle } from "./lib/i18n";
 import ClipEditor from "./screens/ClipEditor";
 import ProjectView from "./screens/ProjectView";
 import Upload from "./screens/Upload";
@@ -68,6 +69,7 @@ function Caps({ health }: { health: Health | null }) {
 }
 
 export default function App() {
+  const { t } = useT();
   const [health, setHealth] = useState<Health | null>(null);
   const [showCues, setShowCues] = useState(false);
 
@@ -83,15 +85,16 @@ export default function App() {
         </Link>
         <div className="spacer" />
         <Caps health={health} />
+        <LanguageToggle />
         <button
           className="btn ghost sm"
           onClick={() => setShowCues(true)}
-          title="Referenzsounds oder OCR-Begriffe für Spielereignisse hinzufügen und testen"
+          title={t("nav.cuesTitle")}
         >
-          Spiel-Cues
+          {t("nav.cues")}
         </button>
         <Link to="/" className="btn primary sm">
-          + Neues Projekt
+          {t("nav.newProject")}
         </Link>
       </nav>
       {showCues && <CueModal onClose={() => setShowCues(false)} />}
