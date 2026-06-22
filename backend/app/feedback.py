@@ -168,12 +168,17 @@ def _logistic_importance(rows, keys: list[str]) -> dict[str, float] | None:
     w = np.zeros(len(keys))
     b = 0.0
     lam, lr = 0.5, 0.5
+    sw_total = max(float(sw.sum()), 1e-9)
     for _ in range(300):
         z = X @ w + b
         p = 1.0 / (1.0 + np.exp(-np.clip(z, -30, 30)))
         g = (sw * (p - y))
-        gw = X.T @ g / max(sw.sum(), 1e-9) + lam * w / max(len(rows), 1)
-        gb = float(g.sum() / max(sw.sum(), 1e-9))
+        # Regularization and gradient share the same weight-total denominator so
+        # the L2 strength tracks the *evidence* (sum of sample weights) rather
+        # than the raw row count — otherwise mixing 0.5-weight downloads with
+        # 1.0-weight explicit ratings silently shifts the regularization.
+        gw = X.T @ g / sw_total + lam * w / sw_total
+        gb = float(g.sum() / sw_total)
         w -= lr * gw
         b -= lr * gb
     imp = {k: max(float(wi), 0.0) for k, wi in zip(keys, w)}
