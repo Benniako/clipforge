@@ -134,8 +134,10 @@ Format: Layer, Start, End, Style, MarginL, MarginR, MarginV, Effect, Text
             # gap — clear it shortly after it's spoken instead.
             if end - (w.t + w.d) > SILENCE_GAP:
                 end = w.t + w.d + LINGER_PAD
-            if end <= start:
-                end = start + 0.08
+            # Unconditional floor: a zero/negative-duration Dialogue (words that
+            # share a timestamp, a near-zero w.d) would be dropped by libass and
+            # the highlight flickers off. Always keep a visible minimum span.
+            end = max(end, start + 0.08)
             events.append(_dialogue(line, idx, start, end, primary, highlight,
                                     style.uppercase))
 
