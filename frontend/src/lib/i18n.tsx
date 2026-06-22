@@ -47,6 +47,40 @@ const STRINGS: Record<Lang, Record<string, string>> = {
     "cues.close": "Schließen",
     "cues.intro":
       "Teste hier Sounds und Texterkennung im Bild und speichere nützliche Cues für spätere Renderings. Visuelle Cues sind OCR-Begriffe. Audio-Cues sind saubere Referenzsounds.",
+    "cm.heading": "Eigene Sound-Cues - {label}",
+    "cm.configured": "({done}/{total} konfiguriert)",
+    "cm.toggleNote":
+      "Das steuert nur, ob diese gespeicherten Sounds für die Clip-Erkennung genutzt werden.",
+    "cm.useToggleTitle":
+      "Eigene Referenzsounds für die nächste Erkennung ein- oder ausschalten",
+    "cm.useInClips": "In Clips nutzen",
+    "cm.on": "An",
+    "cm.off": "Aus",
+    "cm.intro":
+      "Optional: Füge eine Sound-URL ein oder lade einen sauberen Referenzsound hoch. ClipForge nutzt diese Sounds als zusätzliches Signal, nicht als garantiertes Highlight.",
+    "cm.introSave":
+      " Eingegebene URLs werden erst gespeichert, wenn du Hinzufügen oder Alle speichern klickst.",
+    "cm.offNote":
+      "Eigene Sound-Erkennung ist für neue Clips aus. Du kannst hier trotzdem Sounds verwalten.",
+    "cm.active": "aktiv",
+    "cm.new": "neu",
+    "cm.urlPlaceholder": "{label} - URL einfügen",
+    "cm.findTitle": "MyInstants nach {label} durchsuchen",
+    "cm.find": "Finden",
+    "cm.add": "Hinzufügen",
+    "cm.fileTitle": "Sounddatei hochladen",
+    "cm.file": "Datei",
+    "cm.remove": "Entfernen",
+    "cm.saveAllTitle": "Alle oben eingefügten URLs herunterladen und installieren",
+    "cm.saving": "Speichert...",
+    "cm.saveAll": "Alle speichern ({count})",
+    "cm.addFailed":
+      "Cue \"{event}\" konnte nicht hinzugefügt werden: {error}",
+    "cm.removeFailed":
+      "Cue \"{event}\" konnte nicht entfernt werden: {error}",
+    "cm.someFailed": "Einige Cues sind fehlgeschlagen: {errors}",
+    "cm.unknownError": "unbekannter Fehler",
+    "cm.failed": "fehlgeschlagen",
   },
   en: {
     "lang.name": "English",
@@ -85,6 +119,38 @@ const STRINGS: Record<Lang, Record<string, string>> = {
     "cues.close": "Close",
     "cues.intro":
       "Test sounds and on-screen text recognition here, and save useful cues for later renders. Visual cues are OCR terms. Audio cues are clean reference sounds.",
+    "cm.heading": "Custom sound cues - {label}",
+    "cm.configured": "({done}/{total} configured)",
+    "cm.toggleNote":
+      "This only controls whether these saved sounds are used for clip detection.",
+    "cm.useToggleTitle":
+      "Turn your own reference sounds on or off for the next detection run",
+    "cm.useInClips": "Use in clips",
+    "cm.on": "On",
+    "cm.off": "Off",
+    "cm.intro":
+      "Optional: paste a sound URL or upload a clean reference sound. ClipForge uses these sounds as an extra signal, not as a guaranteed highlight.",
+    "cm.introSave":
+      " URLs you enter are only saved once you click Add or Save all.",
+    "cm.offNote":
+      "Custom sound detection is off for new clips. You can still manage sounds here.",
+    "cm.active": "active",
+    "cm.new": "new",
+    "cm.urlPlaceholder": "{label} - paste URL",
+    "cm.findTitle": "Search MyInstants for {label}",
+    "cm.find": "Find",
+    "cm.add": "Add",
+    "cm.fileTitle": "Upload a sound file",
+    "cm.file": "File",
+    "cm.remove": "Remove",
+    "cm.saveAllTitle": "Download and install every URL pasted above",
+    "cm.saving": "Saving...",
+    "cm.saveAll": "Save all ({count})",
+    "cm.addFailed": "Couldn't add cue \"{event}\": {error}",
+    "cm.removeFailed": "Couldn't remove cue \"{event}\": {error}",
+    "cm.someFailed": "Some cues failed: {errors}",
+    "cm.unknownError": "unknown error",
+    "cm.failed": "failed",
   },
 };
 
@@ -103,10 +169,17 @@ function initialLang(): Lang {
 interface I18n {
   lang: Lang;
   setLang: (l: Lang) => void;
-  t: (key: string) => string;
+  t: (key: string, vars?: Record<string, string | number>) => string;
 }
 
 const I18nContext = createContext<I18n | null>(null);
+
+function format(template: string, vars?: Record<string, string | number>): string {
+  if (!vars) return template;
+  return template.replace(/\{(\w+)\}/g, (m, k) =>
+    k in vars ? String(vars[k]) : m,
+  );
+}
 
 export function LanguageProvider({ children }: { children: ReactNode }) {
   const [lang, setLangState] = useState<Lang>(initialLang);
@@ -119,7 +192,8 @@ export function LanguageProvider({ children }: { children: ReactNode }) {
     }
   }, []);
   const t = useCallback(
-    (key: string) => STRINGS[lang][key] ?? STRINGS.en[key] ?? key,
+    (key: string, vars?: Record<string, string | number>) =>
+      format(STRINGS[lang][key] ?? STRINGS.en[key] ?? key, vars),
     [lang],
   );
   const value = useMemo(() => ({ lang, setLang, t }), [lang, setLang, t]);
@@ -133,7 +207,8 @@ export function useT(): I18n {
     return {
       lang: "de",
       setLang: () => {},
-      t: (key: string) => STRINGS.de[key] ?? STRINGS.en[key] ?? key,
+      t: (key: string, vars?: Record<string, string | number>) =>
+        format(STRINGS.de[key] ?? STRINGS.en[key] ?? key, vars),
     };
   }
   return ctx;
