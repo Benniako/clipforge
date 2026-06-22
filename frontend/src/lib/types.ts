@@ -109,6 +109,8 @@ export interface StageView {
   label: string;
   status: "pending" | "active" | "paused" | "done";
   pct: number;
+  /** Seconds the active stage has run / a completed stage took (optional). */
+  elapsed_seconds?: number | null;
 }
 
 export interface JobProgress {

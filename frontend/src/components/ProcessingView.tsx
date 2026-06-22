@@ -102,6 +102,17 @@ export default function ProcessingView({
             {timing?.source_duration != null && (
               <span className="pill">{t("proc.sourceLen", { time: fmtHMS(timing.source_duration) })}</span>
             )}
+            {/* Throughput: how much faster (or slower) than realtime we're
+                processing. A 10-min video done in 5 min = 2× realtime. Useful
+                for users to gauge whether to wait or walk away. */}
+            {timing?.elapsed_seconds != null && timing?.source_duration != null
+              && timing.elapsed_seconds > 2 && (
+              <span className="pill" title={t("proc.throughputLabel")}>
+                {t("proc.throughput", {
+                  rate: (timing.source_duration / timing.elapsed_seconds).toFixed(1),
+                })}
+              </span>
+            )}
             {status.target_clips != null && (
               <span className="pill">
                 {t("proc.clipsProgress", { done: status.rendered_count ?? renderedClips.length, target: status.target_clips })}
@@ -123,8 +134,23 @@ export default function ProcessingView({
               </span>
               <span className="label">{s.label}</span>
               <div className="spacer" style={{ flex: 1 }} />
-              {(s.status === "active" || s.status === "paused") && (
-                <span className="tiny muted">{Math.round(s.pct * 100)}%</span>
+              {s.status === "active" && (
+                <span className="tiny muted" style={{ marginRight: 8 }}>
+                  {Math.round(s.pct * 100)}%
+                </span>
+              )}
+              {/* Per-stage elapsed: how long the active stage has run, or how
+                  long a completed stage took. The anchor for repeat-run
+                  expectations ("transcribe always takes ~40s on my machine"). */}
+              {s.status === "active" && s.elapsed_seconds != null && (
+                <span className="tiny muted">
+                  {t("proc.stageElapsed", { time: fmtHMS(s.elapsed_seconds) })}
+                </span>
+              )}
+              {s.status === "done" && s.elapsed_seconds != null && (
+                <span className="tiny muted">
+                  {t("proc.stageDone", { time: fmtHMS(s.elapsed_seconds) })}
+                </span>
               )}
             </div>
           ))}
