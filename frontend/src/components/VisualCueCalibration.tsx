@@ -4,6 +4,7 @@ import { api, type VisualCueMeta } from "../lib/api";
 import type { DetectedEvent, Project } from "../lib/types";
 import { fmtClock } from "../lib/format";
 import { mediaUrl } from "../lib/media";
+import { useT } from "../lib/i18n";
 
 type Box = { x: number; y: number; w: number; h: number };
 type OcrResult = {
@@ -51,6 +52,7 @@ const waitForSeek = (video: HTMLVideoElement, t: number) =>
   });
 
 export default function VisualCueCalibration({ project }: { project: Project }) {
+  const { t } = useT();
   const game = project.settings.game_profile || "generic";
   const videoSrc = mediaUrl(project.source?.path) ?? "";
   const ocrEvents = useMemo(
@@ -142,7 +144,7 @@ export default function VisualCueCalibration({ project }: { project: Project }) 
   const captureFrame = async (time?: number) => {
     const video = videoRef.current;
     if (!video || !videoSrc) {
-      setErr("Kein Quellvideo für die Kalibrierung gefunden.");
+      setErr(t("vc.noSource"));
       return;
     }
     setBusy("frame");
@@ -153,22 +155,22 @@ export default function VisualCueCalibration({ project }: { project: Project }) 
         await waitForSeek(video, time);
       }
       if (!video.videoWidth || !video.videoHeight) {
-        throw new Error("Videoframe ist noch nicht bereit. Kurz abspielen oder erneut versuchen.");
+        throw new Error(t("vc.frameNotReady"));
       }
       const canvas = document.createElement("canvas");
       canvas.width = video.videoWidth;
       canvas.height = video.videoHeight;
       const ctx = canvas.getContext("2d");
-      if (!ctx) throw new Error("Frame konnte nicht gelesen werden.");
+      if (!ctx) throw new Error(t("vc.frameReadFail"));
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
       const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png"));
-      if (!blob) throw new Error("Frame konnte nicht gespeichert werden.");
+      if (!blob) throw new Error(t("vc.frameStoreFail"));
       const ms = Math.round((video.currentTime || 0) * 1000);
       setFrameFile(new File([blob], `visual-cue-${ms}.png`, { type: "image/png" }));
       setOcrResult(null);
-      setOk(`Frame bei ${fmtClock(video.currentTime || 0)} geladen.`);
+      setOk(t("vc.frameLoaded", { time: fmtClock(video.currentTime || 0) }));
     } catch (e: any) {
-      setErr(e?.message ?? "Frame konnte nicht geladen werden.");
+      setErr(e?.message ?? t("vc.frameLoadFail"));
     } finally {
       setBusy(null);
     }
@@ -176,7 +178,7 @@ export default function VisualCueCalibration({ project }: { project: Project }) 
 
   const testBox = async () => {
     if (!frameFile) {
-      setErr("Lade zuerst einen Frame und ziehe die Box auf den genauen HUD-Bereich.");
+      setErr(t("vc.testNeedFrame"));
       return;
     }
     setBusy("ocr");
@@ -187,7 +189,7 @@ export default function VisualCueCalibration({ project }: { project: Project }) 
       setOcrResult(result);
       if (result.text.trim()) setPhrase((p) => p || result.text.trim());
     } catch (e: any) {
-      setErr(e?.message ?? "OCR-Test fehlgeschlagen.");
+      setErr(e?.message ?? t("vc.testFail"));
     } finally {
       setBusy(null);
     }
@@ -195,12 +197,12 @@ export default function VisualCueCalibration({ project }: { project: Project }) 
 
   const saveRegion = async () => {
     if (!frameFile) {
-      setErr("Lade zuerst einen Frame, damit die Box wirklich kalibriert ist.");
+      setErr(t("vc.saveNeedFrame"));
       return;
     }
     const cueLabel = cleanLabel(label);
     if (!cueLabel) {
-      setErr("Bitte gib dem visuellen Cue einen Namen.");
+      setErr(t("vc.saveNeedName"));
       return;
     }
     setBusy("save");
@@ -212,9 +214,9 @@ export default function VisualCueCalibration({ project }: { project: Project }) 
         phrase: phrase.trim() || undefined,
       });
       setMeta(next);
-      setOk("Visueller Cue und Pixelbereich gespeichert. Beim nächsten Scan wird diese Box mitgelesen.");
+      setOk(t("vc.saved"));
     } catch (e: any) {
-      setErr(e?.message ?? "Visueller Cue konnte nicht gespeichert werden.");
+      setErr(e?.message ?? t("vc.saveFail"));
     } finally {
       setBusy(null);
     }
@@ -224,7 +226,7 @@ export default function VisualCueCalibration({ project }: { project: Project }) 
     const cueLabel = cleanLabel(label || selectedEvent?.label || "ocr");
     const falsePhrase = phrase.trim() || detailPhrase(selectedEvent) || selectedEvent?.label || "";
     if (!cueLabel || !falsePhrase.trim()) {
-      setErr("Zum Markieren brauche ich Cue-Name und den falschen OCR-Text.");
+      setErr(t("vc.markNeedBoth"));
       return;
     }
     setBusy("false");
@@ -233,9 +235,9 @@ export default function VisualCueCalibration({ project }: { project: Project }) 
     try {
       const next = await api.markVisualCueFalse(game, cueLabel, falsePhrase);
       setMeta(next);
-      setOk("False Recognition gespeichert. Dieser Text wird künftig für diesen Cue ignoriert.");
+      setOk(t("vc.marked"));
     } catch (e: any) {
-      setErr(e?.message ?? "False Recognition konnte nicht gespeichert werden.");
+      setErr(e?.message ?? t("vc.markFail"));
     } finally {
       setBusy(null);
     }
@@ -248,10 +250,10 @@ export default function VisualCueCalibration({ project }: { project: Project }) 
     <div className="visual-calibration">
       <div className="visual-calibration-grid">
         <div className="calibration-events">
-          <h4>OCR-Treffer aus diesem Scan</h4>
+          <h4>{t("vc.eventsTitle")}</h4>
           {ocrEvents.length === 0 ? (
             <p className="muted tiny">
-              Noch keine OCR-Treffer im Projekt. Du kannst trotzdem im Video zu einer Stelle springen und manuell einen Frame laden.
+              {t("vc.noEvents")}
             </p>
           ) : (
             <div className="calibration-event-list">
@@ -264,7 +266,7 @@ export default function VisualCueCalibration({ project }: { project: Project }) 
                 >
                   <b>{event.label}</b>
                   <span>{fmtClock(event.t)}</span>
-                  <small>{detailPhrase(event) || "OCR"}</small>
+                  <small>{detailPhrase(event) || t("vc.ocr")}</small>
                 </button>
               ))}
             </div>
@@ -276,7 +278,7 @@ export default function VisualCueCalibration({ project }: { project: Project }) 
             {videoSrc ? (
               <video ref={videoRef} src={videoSrc} controls preload="metadata" playsInline />
             ) : (
-              <div className="empty">Kein Quellvideo gefunden.</div>
+              <div className="empty">{t("vc.noVideo")}</div>
             )}
             <div className="row" style={{ flexWrap: "wrap" }}>
               <button
@@ -284,10 +286,10 @@ export default function VisualCueCalibration({ project }: { project: Project }) 
                 disabled={!selectedEvent || busy === "frame"}
                 onClick={() => selectedEvent && captureFrame(selectedEvent.t)}
               >
-                Frame vom OCR-Treffer laden
+                {t("vc.loadHitFrame")}
               </button>
               <button className="btn ghost sm" disabled={!videoSrc || busy === "frame"} onClick={() => captureFrame()}>
-                Aktuellen Videoframe laden
+                {t("vc.loadCurrentFrame")}
               </button>
             </div>
           </div>
@@ -303,7 +305,7 @@ export default function VisualCueCalibration({ project }: { project: Project }) 
             {frameUrl ? (
               <img src={frameUrl} alt="" draggable={false} />
             ) : (
-              <span>Frame laden, dann die Box exakt um Killfeed, Banner oder HUD-Text ziehen.</span>
+              <span>{t("vc.previewEmpty")}</span>
             )}
             {frameUrl && (
               <i
@@ -323,48 +325,48 @@ export default function VisualCueCalibration({ project }: { project: Project }) 
               className="input"
               value={label}
               onChange={(ev) => setLabel(ev.target.value)}
-              placeholder="Cue-Name, z. B. killfeed"
+              placeholder={t("vc.cueNamePlaceholder")}
             />
             <textarea
               className="input cue-textarea"
               value={phrase}
               onChange={(ev) => setPhrase(ev.target.value)}
-              placeholder="OCR-Text oder Korrektur, z. B. Spike entschärft"
+              placeholder={t("vc.phrasePlaceholder")}
             />
             <div className="range-label">
               <span>
                 Box: x {(box.x * 100).toFixed(1)}%, y {(box.y * 100).toFixed(1)}%, w{" "}
                 {(box.w * 100).toFixed(1)}%, h {(box.h * 100).toFixed(1)}%
               </span>
-              <b>{savedRegions} Regionen / {savedFalse} False</b>
+              <b>{t("vc.regionsCount", { regions: savedRegions, false: savedFalse })}</b>
             </div>
             <div className="row" style={{ flexWrap: "wrap" }}>
               <button className="btn sm" disabled={!frameFile || busy === "ocr"} onClick={testBox}>
-                OCR in Box testen
+                {t("vc.testInBox")}
               </button>
               <button className="btn primary sm" disabled={!frameFile || busy === "save"} onClick={saveRegion}>
-                Cue + Region speichern
+                {t("vc.saveCueRegion")}
               </button>
               <button className="btn danger sm" disabled={busy === "false"} onClick={markFalse}>
-                Als False Recognition markieren
+                {t("vc.markFalse")}
               </button>
             </div>
           </div>
 
           {ocrResult && (
             <div className="cue-result">
-              <b>OCR gelesen</b>
-              <span>{ocrResult.text || "Kein Text in dieser Box erkannt."}</span>
+              <b>{t("vc.ocrRead")}</b>
+              <span>{ocrResult.text || t("vc.ocrNoText")}</span>
               {ocrResult.matches.length > 0 && (
                 <small>
-                  Treffer: {ocrResult.matches.map((m) => `${m.label} (${m.phrase})`).join(", ")}
+                  {t("vc.matches", { matches: ocrResult.matches.map((m) => `${m.label} (${m.phrase})`).join(", ") })}
                 </small>
               )}
             </div>
           )}
           {err && <p className="tiny calibration-message bad">{err}</p>}
           {ok && <p className="tiny calibration-message good">{ok}</p>}
-          {busy && <span className="pill">Arbeitet</span>}
+          {busy && <span className="pill">{t("vc.working")}</span>}
         </div>
       </div>
     </div>
