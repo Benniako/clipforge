@@ -140,9 +140,22 @@ _PROMPTS = {
 }
 
 
+_CUE_ALLOWLIST_RE = re.compile(r"^[A-Za-z0-9 _\-]{1,24}$")
+
+
 def _prompt_for(lang: str | None, cues: list[str] | None = None) -> str:
     base = _PROMPTS.get((lang or "en")[:2].lower(), _PROMPTS["en"])
-    hints = [c.strip() for c in (cues or []) if c and c.strip()]
+    # Sanitise learned OCR labels before they touch the prompt. These come from
+    # on-screen text the user calibrated (or that OCR auto-detected), so they're
+    # untrusted input — a crafted overlay could otherwise inject prompt text that
+    # persists across every future scan of this game profile. Only short, plain
+    # label-like strings make it through; anything that looks like a sentence or
+    # an instruction is dropped.
+    hints = []
+    for c in (cues or []):
+        c = (c or "").strip()
+        if c and _CUE_ALLOWLIST_RE.match(c):
+            hints.append(c)
     if hints:
         # Steer the read toward the project's own visual cues (kill feed,
         # victory screen, …) without overriding the scoring rubric.
