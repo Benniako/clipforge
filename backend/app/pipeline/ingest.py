@@ -52,23 +52,61 @@ def attach_source_url(project: Project, url: str) -> SourceMedia:
 def _download_ytdlp(url: str, dest_stem: Path) -> Path:
     import yt_dlp
 
+    # Robust download options. The previous single format string + quiet mode
+    # failed opaquely on age-gated/member/region-locked videos and on anything
+    # YouTube throttled (no player_client set). These options survive the common
+    # "sometimes doesn't work" cases: throttling, transient 429s, playlists, and
+    # videos with no separate audio stream.
     opts = {
         "outtmpl": str(dest_stem) + ".%(ext)s",
-        "format": "bv*[height<=1080]+ba/b[height<=1080]/b",
+        # Progressive fallback first: a single pre-merged file always exists and
+        # needs no ffmpeg merge, so it works even when separate audio is missing
+        # (older uploads, some livestream VODs). Then try the best A/V merge.
+        "format": (
+            "best[height<=1080]/"
+            "bv*[height<=1080]+ba/b[height<=1080]/b"
+        ),
         "merge_output_format": "mp4",
-        "quiet": True,
+        # Dodge YouTube's per-client throttling/blocking. android + web give the
+        # extractor two shots at a playable stream; this is the standard fix for
+        # the "no video formats found" / slow-download regressions yt-dlp ships
+        # hotfixes for between releases.
+        "extractor_args": {"youtube": {"player_client": ["android", "web"]}},
+        "noplaylist": True,           # never silently grab a whole playlist
+        "retries": 5,                 # transient network/HTTP errors
+        "fragment_retries": 5,        # DASH/HLS segment fetches
+        "concurrent_fragment_downloads": 4,
+        "http_chunk_size": 10485760,  # 10 MB — dodges the 503 throttle wall
+        # Surface real errors so the UI can show "age-restricted" instead of
+        # "didn't work". We keep noprogress to avoid log spam.
         "noprogress": True,
+        "no_warnings": False,
+        "ignoreerrors": False,
     }
     if get_settings().ffmpeg:
         opts["ffmpeg_location"] = str(Path(get_settings().ffmpeg).parent)
-    with yt_dlp.YoutubeDL(opts) as ydl:
-        info = ydl.extract_info(url, download=True)
-        path = Path(ydl.prepare_filename(info))
-    if not path.exists():  # merged file may carry a different ext
-        cands = sorted(dest_stem.parent.glob(dest_stem.name + ".*"))
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+            path = Path(ydl.prepare_filename(info))
+    except yt_dlp.utils.DownloadError as e:
+        # yt-dlp nests the real cause; unwrap it so the caller's error message is
+        # actually useful ("Sign in to confirm you're not a bot", "Video unavailable",
+        # "Private video", etc.) rather than a bare DownloadError.
+        cause = e
+        while cause.__cause__ is not None and isinstance(cause.__cause__, Exception):
+            cause = cause.__cause__
+        msg = str(cause).strip() or str(e)
+        raise RuntimeError(f"YouTube/import failed: {msg}") from e
+    if not path.exists():  # merged file may carry a different ext than prepare_filename guessed
+        cands = sorted(
+            (p for p in dest_stem.parent.glob(dest_stem.name + ".*")
+             if p.suffix.lower() in VIDEO_EXTS and not p.name.endswith(".part")),
+            key=lambda p: p.stat().st_size, reverse=True,
+        )
         if not cands:
             raise RuntimeError("yt-dlp produced no output file")
-        path = cands[0]
+        path = cands[0]  # largest real video file (skip .part fragments)
     return path
 
 
