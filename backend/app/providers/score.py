@@ -57,6 +57,52 @@ def extract_features(words: list[Word], duration: float, settings: ImportSetting
     }
 
 
+def hook_analysis(words: list[Word], *, lang: str = "en",
+                  threshold: float = 0.5) -> dict:
+    """Score the opening ~3 seconds and return a verdict + actionable suggestion.
+
+    The first three seconds decide whether a short gets watched or scrolled.
+    This isolates that window from the overall score and returns:
+    - ``strength``: 0..1 hook power (from instant_hook + first-3s emotion)
+    - ``verdict``: "strong" | "ok" | "weak"
+    - ``suggestion``: a concrete opener rewrite hint the UI can surface
+    - ``first_words``: the actual opening text, for context
+
+    The suggestion is a *template*, not an LLM call — it's deterministic and
+    language-aware so it's always available (no Ollama dependency).
+    """
+    if not words:
+        return {"strength": 0.0, "verdict": "weak",
+                "suggestion": "", "first_words": ""}
+    lex = signals.get_lexicon(lang) if hasattr(signals, "get_lexicon") else signals._EN
+    score_val, _ = signals.instant_hook(words, lex)
+    start = words[0].t
+    head = [w for w in words if w.t - start < 3.0] or words[:6]
+    first_words = " ".join(w.text for w in head).strip()
+    # Strong = scroll-stopping hook; weak = the opener won't hold attention.
+    if score_val >= threshold + 0.2:
+        verdict = "strong"
+    elif score_val >= threshold:
+        verdict = "ok"
+    else:
+        verdict = "weak"
+    # Deterministic suggestion keyed off what's missing in the opener.
+    toks = {w.text.lower() for w in head}
+    has_question = any(w.text.rstrip("?!,.") in lex.quote for w in head)
+    if verdict == "strong":
+        suggestion = ""
+    elif not first_words:
+        suggestion = "Open on speech in the first second — silence kills retention."
+    elif not has_question and not (toks & lex.payoff):
+        suggestion = ("Lead with a question or a payoff promise in the first "
+                      "two seconds (e.g. 'The reason this works…' / 'Nobody tells you…').")
+    else:
+        suggestion = ("Tighten the opener — cut any warm-up and land the hook "
+                      "inside the first 1.5 seconds.")
+    return {"strength": round(score_val, 2), "verdict": verdict,
+            "suggestion": suggestion, "first_words": first_words[:120]}
+
+
 def score_from_features(feats: dict[str, tuple[float, str]],
                         weights: dict[str, float]) -> tuple[int, list[ScoreFactor]]:
     """Combine features with weights into a 0-100 score + top reasons."""
