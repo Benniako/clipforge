@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../lib/api";
 import type { VisualCuesStatus } from "../lib/api";
+import { useT } from "../lib/i18n";
 
 type Box = { x: number; y: number; w: number; h: number };
 type OcrResult = {
@@ -35,6 +36,7 @@ export default function CueLab({
   onVisualChange: (visual: VisualCuesStatus) => void;
   onAudioChange: () => void;
 }) {
+  const { t } = useT();
   const previewRef = useRef<HTMLDivElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const dragStart = useRef<{ x: number; y: number } | null>(null);
@@ -120,11 +122,11 @@ export default function CueLab({
   const captureVideoFrame = async () => {
     const video = videoRef.current;
     if (!video || !sourceFile) {
-      setErr("Wähle zuerst ein Video aus.");
+      setErr(t("lab.errSelectVideo"));
       return;
     }
     if (!video.videoWidth || !video.videoHeight) {
-      setErr("Der Videoframe ist noch nicht bereit. Spiele kurz ab und stoppe dann.");
+      setErr(t("lab.errFrameNotReady"));
       return;
     }
     const canvas = document.createElement("canvas");
@@ -132,13 +134,13 @@ export default function CueLab({
     canvas.height = video.videoHeight;
     const ctx = canvas.getContext("2d");
     if (!ctx) {
-      setErr("Dieser Frame konnte nicht erfasst werden.");
+      setErr(t("lab.errFrameCapture"));
       return;
     }
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
     const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png"));
     if (!blob) {
-      setErr("Dieser Frame konnte nicht erfasst werden.");
+      setErr(t("lab.errFrameCapture"));
       return;
     }
     const ms = Math.round((video.currentTime || 0) * 1000);
@@ -149,12 +151,12 @@ export default function CueLab({
 
   const testOcr = async (save: boolean) => {
     if (!imageFile) {
-      setErr("Erfasse erst einen Frame aus dem Video oder lade ein Bild hoch.");
+      setErr(t("lab.errCaptureFirst"));
       return;
     }
     const label = cleanLabel(visualLabel);
     if (save && !label) {
-      setErr("Benenne den visuellen Cue vor dem Speichern.");
+      setErr(t("lab.errNameVisual"));
       return;
     }
     setBusy(save ? "save-ocr" : "test-ocr");
@@ -171,7 +173,7 @@ export default function CueLab({
         if (save) onVisualChange(result.visual);
       }
     } catch (e: any) {
-      setErr(e?.message ?? "Cue-Lab fehlgeschlagen.");
+      setErr(e?.message ?? t("lab.errCueLabFailed"));
     } finally {
       setBusy(null);
     }
@@ -179,7 +181,7 @@ export default function CueLab({
 
   const testAudio = async () => {
     if (!audioFile) {
-      setErr("Füge zuerst ein Audio- oder Video-Beispiel hinzu.");
+      setErr(t("lab.errAddAudioSample"));
       return;
     }
     setBusy("test-audio");
@@ -187,7 +189,7 @@ export default function CueLab({
     try {
       setAudioResult(await api.testAudioCues(game, audioFile));
     } catch (e: any) {
-      setErr(e?.message ?? "Audio-Test fehlgeschlagen.");
+      setErr(e?.message ?? t("lab.errAudioTestFailed"));
     } finally {
       setBusy(null);
     }
@@ -195,12 +197,12 @@ export default function CueLab({
 
   const useAudioWindow = async (save: boolean) => {
     if (!sourceFile || !videoRef.current) {
-      setErr("Wähle ein Video und gehe zuerst zur Cue-Stelle.");
+      setErr(t("lab.errSelectVideoSeek"));
       return;
     }
     const label = cleanLabel(audioLabel);
     if (save && !label) {
-      setErr("Benenne den Audio-Cue vor dem Speichern.");
+      setErr(t("lab.errNameAudio"));
       return;
     }
     const start = Math.max(0, (videoRef.current.currentTime || 0) - audioWindowSeconds / 2);
@@ -214,7 +216,7 @@ export default function CueLab({
       setAudioResult(result);
       if (save) onAudioChange();
     } catch (e: any) {
-      setErr(e?.message ?? "Audio-Fenster fehlgeschlagen.");
+      setErr(e?.message ?? t("lab.errAudioWindowFailed"));
     } finally {
       setBusy(null);
     }
@@ -222,12 +224,12 @@ export default function CueLab({
 
   const saveAudio = async () => {
     if (!audioFile) {
-      setErr("Füge zuerst einen sauberen Referenzsound hinzu.");
+      setErr(t("lab.errAddCleanReference"));
       return;
     }
     const label = cleanLabel(audioLabel);
     if (!label) {
-      setErr("Benenne den Audio-Cue vor dem Speichern.");
+      setErr(t("lab.errNameAudio"));
       return;
     }
     setBusy("save-audio");
@@ -236,7 +238,7 @@ export default function CueLab({
       await api.addCue(game, label, { file: audioFile });
       onAudioChange();
     } catch (e: any) {
-      setErr(e?.message ?? "Audio-Cue konnte nicht gespeichert werden.");
+      setErr(e?.message ?? t("lab.errAudioCueSaveFailed"));
     } finally {
       setBusy(null);
     }
@@ -248,7 +250,7 @@ export default function CueLab({
     try {
       onVisualChange(await api.removeVisualCue(game, label, phrase));
     } catch (e: any) {
-      setErr(e?.message ?? "Visueller Cue konnte nicht entfernt werden.");
+      setErr(e?.message ?? t("lab.errVisualCueRemoveFailed"));
     } finally {
       setBusy(null);
     }
@@ -258,12 +260,12 @@ export default function CueLab({
     <div className="panel section cue-lab">
       <div className="row" style={{ justifyContent: "space-between", alignItems: "flex-start" }}>
         <div>
-          <h3>Cue-Testlabor</h3>
+          <h3>{t("lab.heading")}</h3>
           <p className="muted tiny" style={{ margin: "6px 0 0" }}>
-            Gehe durch das importierte Video, erfasse einen Frame, teste OCR/Audio und speichere dann nützliche Cues.
+            {t("lab.intro")}
           </p>
         </div>
-        {busy && <span className="pill">Arbeitet</span>}
+        {busy && <span className="pill">{t("lab.working")}</span>}
       </div>
       {err && (
         <p className="tiny" style={{ color: "var(--bad)", marginBottom: 0 }}>
@@ -273,18 +275,18 @@ export default function CueLab({
 
       <div className="cue-lab-grid">
         <div className="cue-lab-card">
-          <h4>Visuell / OCR</h4>
+          <h4>{t("lab.visualOcr")}</h4>
           {sourceVideoUrl && (
             <div className="cue-video-source">
               <video ref={videoRef} src={sourceVideoUrl} controls preload="metadata" />
               <button className="btn primary sm" onClick={captureVideoFrame}>
-                Aktuellen Frame erfassen
+                {t("lab.captureCurrentFrame")}
               </button>
             </div>
           )}
           <div className="row" style={{ flexWrap: "wrap" }}>
             <label className="btn sm ghost cue-file-btn">
-              Bild-Alternative
+              {t("lab.imageAlternative")}
               <input
                 type="file"
                 accept="image/*"
@@ -295,7 +297,7 @@ export default function CueLab({
                 }}
               />
             </label>
-            {imageFile && <span className="muted tiny">Frame: {imageFile.name}</span>}
+            {imageFile && <span className="muted tiny">{t("lab.frame", { name: imageFile.name })}</span>}
           </div>
           <div
             ref={previewRef}
@@ -305,7 +307,7 @@ export default function CueLab({
             onPointerUp={stopBox}
             onPointerCancel={stopBox}
           >
-            {imageUrl ? <img src={imageUrl} alt="" draggable={false} /> : <span>Erfasse einen Videoframe und ziehe dann die OCR-Box auf.</span>}
+            {imageUrl ? <img src={imageUrl} alt="" draggable={false} /> : <span>{t("lab.previewHint")}</span>}
             {imageUrl && (
               <i
                 className="cue-ocr-box"
@@ -323,28 +325,28 @@ export default function CueLab({
               className="input"
               value={visualLabel}
               onChange={(ev) => setVisualLabel(ev.target.value)}
-              placeholder="Cue-Name, z. B. killfeed"
+              placeholder={t("lab.cueNameVisualPlaceholder")}
             />
             <button className="btn sm" disabled={busy === "test-ocr"} onClick={() => testOcr(false)}>
-              OCR testen
+              {t("lab.testOcr")}
             </button>
           </div>
           <textarea
             className="input cue-textarea"
             value={manualPhrase}
             onChange={(ev) => setManualPhrase(ev.target.value)}
-            placeholder="Optional: korrigierten OCR-Text vor dem Speichern hier eintragen"
+            placeholder={t("lab.manualPhrasePlaceholder")}
           />
           <button className="btn primary sm" disabled={!phraseToSave || busy === "save-ocr"} onClick={() => testOcr(true)}>
-            Visuellen Cue speichern
+            {t("lab.saveVisualCue")}
           </button>
           {ocrResult && (
             <div className="cue-result">
-              <b>OCR gelesen:</b>
-              <span>{ocrResult.text || "In dieser Box wurde kein Text gefunden."}</span>
+              <b>{t("lab.ocrRead")}</b>
+              <span>{ocrResult.text || t("lab.ocrNoText")}</span>
               {ocrResult.matches.length > 0 && (
                 <small>
-                  Treffer: {ocrResult.matches.map((m) => `${m.label} (${m.phrase})`).join(", ")}
+                  {t("lab.matches", { matches: ocrResult.matches.map((m) => `${m.label} (${m.phrase})`).join(", ") })}
                 </small>
               )}
             </div>
@@ -352,7 +354,7 @@ export default function CueLab({
         </div>
 
         <div className="cue-lab-card">
-          <h4>Audio</h4>
+          <h4>{t("lab.audio")}</h4>
           {sourceFile && (
             <button
               className="btn sm ghost cue-file-btn"
@@ -361,11 +363,11 @@ export default function CueLab({
                 setAudioResult(null);
               }}
             >
-              Importiertes Video nutzen
+              {t("lab.useImportedVideo")}
             </button>
           )}
           <label className="btn sm ghost cue-file-btn">
-            Anderes Audio-/Video-Beispiel
+            {t("lab.otherAudioSample")}
             <input
               type="file"
               accept="audio/*,video/*"
@@ -376,18 +378,18 @@ export default function CueLab({
               }}
             />
           </label>
-          <p className="muted tiny cue-file-name">{audioFile?.name || "Noch kein Beispiel ausgewählt"}</p>
+          <p className="muted tiny cue-file-name">{audioFile?.name || t("lab.noSampleSelected")}</p>
           <input
             className="input"
             value={audioLabel}
             onChange={(ev) => setAudioLabel(ev.target.value)}
-            placeholder="Cue-Name, z. B. spike_planted"
+            placeholder={t("lab.cueNameAudioPlaceholder")}
           />
           {sourceVideoUrl && (
             <div className="cue-window-tools">
-              <label className="muted tiny">Audiofenster an der aktuellen Stelle</label>
+              <label className="muted tiny">{t("lab.audioWindowAtPosition")}</label>
               <div className="range-label">
-                <span>Länge des Ausschnitts</span>
+                <span>{t("lab.clipLength")}</span>
                 <b>{audioWindowSeconds.toFixed(1)}s</b>
               </div>
               <input
@@ -400,36 +402,36 @@ export default function CueLab({
               />
               <div className="row" style={{ flexWrap: "wrap" }}>
                 <button className="btn sm" disabled={busy === "test-audio-window"} onClick={() => useAudioWindow(false)}>
-                  Aktuelles Fenster testen
+                  {t("lab.testCurrentWindow")}
                 </button>
                 <button className="btn primary sm" disabled={busy === "save-audio-window"} onClick={() => useAudioWindow(true)}>
-                  Aktuelles Fenster speichern
+                  {t("lab.saveCurrentWindow")}
                 </button>
               </div>
             </div>
           )}
           <div className="row" style={{ flexWrap: "wrap" }}>
             <button className="btn sm" disabled={busy === "test-audio"} onClick={testAudio}>
-              Installierte Cues testen
+              {t("lab.testInstalledCues")}
             </button>
             <button
               className="btn primary sm"
               disabled={!audioFile || (!!sourceVideoUrl && audioFile === sourceFile) || busy === "save-audio"}
               onClick={saveAudio}
-              title={!!sourceVideoUrl && audioFile === sourceFile ? "Nutze Aktuelles Fenster speichern statt die ganze Gameplay-Datei zu speichern" : undefined}
+              title={!!sourceVideoUrl && audioFile === sourceFile ? t("lab.saveAudioCueTitle") : undefined}
             >
-              Als Audio-Cue speichern
+              {t("lab.saveAsAudioCue")}
             </button>
           </div>
           {audioResult && (
             <div className="cue-result">
-              <b>{audioResult.count} Cue-Treffer</b>
+              <b>{t("lab.cueHits", { count: audioResult.count })}</b>
               {audioResult.events.slice(0, 8).map((e, idx) => (
                 <span key={`${e.source}-${e.label}-${e.t}-${idx}`}>
                   {e.t.toFixed(1)}s - {e.label} - {(e.similarity * 100).toFixed(0)}%
                 </span>
               ))}
-              {audioResult.events.length > 8 && <small>Es werden die ersten 8 Treffer gezeigt.</small>}
+              {audioResult.events.length > 8 && <small>{t("lab.first8Shown")}</small>}
             </div>
           )}
         </div>
@@ -437,7 +439,7 @@ export default function CueLab({
 
       {Object.keys(currentVisual).length > 0 && (
         <div className="cue-saved-list">
-          <h4>Gespeicherte visuelle Cues</h4>
+          <h4>{t("lab.savedVisualCues")}</h4>
           {Object.entries(currentVisual).map(([label, phrases]) => (
             <div key={label} className="cue-saved-group">
               <b>{label}</b>
@@ -447,7 +449,7 @@ export default function CueLab({
                   className="cue-chip"
                   disabled={busy === `visual-${label}`}
                   onClick={() => removeVisual(label, phrase)}
-                  title="Diesen gespeicherten OCR-Begriff entfernen"
+                  title={t("lab.removeOcrTermTitle")}
                 >
                   {phrase} <span>x</span>
                 </button>
