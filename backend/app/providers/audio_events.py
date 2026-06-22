@@ -374,6 +374,73 @@ def reduce_clap_window(pos_sims: dict[str, float],
     return hype, reason
 
 
+def enrich_prompts(prompts: list[str] | tuple[str, ...] | None,
+                   *, min_words: int = 3) -> list[str]:
+    """Expand short user cues into attribute-style CLAP descriptions.
+
+    Zero-shot audio classification (CLAP) accuracy swings 20%+ with prompt
+    phrasing (see arXiv 2409.09213, INTERSPEECH 2024 attribute-prompt work): a
+    bare label like ``"gunfire"`` underperforms a descriptive phrase because the
+    text encoder gets no acoustic-attribute signal. We keep the user's words
+    verbatim (their cue is always tried as-is) and, for any prompt shorter than
+    ``min_words``, also add an expanded variant that names the sound's qualities.
+
+    Prompts that are already descriptive (≥ min_words) are passed through
+    untouched — we don't dilute rich user wording. Pure, so unit-testable.
+    """
+    out: list[str] = []
+    seen: set[str] = set()
+
+    def add(p: str) -> None:
+        p = (p or "").strip()
+        if p and p.lower() not in seen:
+            seen.add(p.lower())
+            out.append(p)
+
+    for raw in prompts or ():
+        p = (raw or "").strip()
+        if not p:
+            continue
+        add(p)  # always try the user's exact wording first
+        toks = p.split()
+        if len(toks) >= min_words:
+            continue
+        # Build an attribute-style expansion. The keyword map names the acoustic
+        # qualities the text encoder responds to; unknown cues get a generic
+        # "sound effect" expansion that still beats a one-word label.
+        key = p.lower().rstrip(".,;:!?")
+        expansion = _PROMPT_EXPANSIONS.get(key)
+        if expansion is None:
+            expansion = f"{p} sound effect, a clear and distinct {p}"
+        add(expansion)
+    return out
+
+
+# Attribute-style expansions for common short game/action cues. Keys are matched
+# case-insensitively against the trimmed user prompt; values name the acoustic
+# qualities (transient, sustained, harmonic, etc.) CLAP's text encoder keys on.
+_PROMPT_EXPANSIONS: dict[str, str] = {
+    "gunfire": "gunfire, sharp transient burst of automatic weapons fire",
+    "gunshot": "gunshot, single sharp ballistic impact sound",
+    "explosion": "explosion, deep sustained boom with long decay",
+    "goal": "goal celebration, crowd cheering and commentator screaming goal",
+    "ace": "ace call, triumphant announcer line after a clean round win",
+    "kill": "kill confirmation sound, short metallic ding after an elimination",
+    "headshot": "headshot sound, sharp metallic ping on a precision kill",
+    "cheer": "crowd cheering, sustained applause and excited shouting",
+    "applause": "applause, rhythmic clapping from a crowd",
+    "laughter": "laughter, people laughing loudly at a funny moment",
+    "whistle": "referee whistle, sharp trilling blast",
+    "siren": "siren, long sustained wailing tone",
+    "bell": "bell, resonant metallic ring",
+    "buzz": "buzzer, harsh sustained electric vibration",
+    "scream": "scream, loud excited human vocal reaction",
+    "roar": "crowd roar, sustained loud cheering after a big moment",
+    "ding": "metallic ding, short high-pitched confirmation tone",
+    "fanfare": "victory fanfare, triumphant brass musical sting",
+}
+
+
 def _normalize_profile(profile: str | None) -> str:
     name = (profile or "generic").lower().replace(" ", "")
     return _PROFILE_ALIAS.get(name, name)
@@ -400,7 +467,7 @@ def _prompt_sets(profile: str | None = None, language: str | None = None,
                 "German streamer gasps in surprise",
                 "German voice shocked by a gameplay moment",
             )))
-    custom_pos = tuple(p.strip() for p in positive_prompts or () if p and p.strip())
+    custom_pos = tuple(enrich_prompts(positive_prompts))
     custom_neg = tuple(p.strip() for p in negative_prompts or () if p and p.strip())
     if custom_pos:
         pos["custom cue"] = tuple(dict.fromkeys(pos.get("custom cue", ()) + custom_pos))
