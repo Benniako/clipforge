@@ -7,6 +7,7 @@ import { fmtDuration, timeAgo } from "../lib/format";
 import { useT } from "../lib/i18n";
 import CueLab from "../components/CueLab";
 import CueManager from "../components/CueManager";
+import Toggle from "../components/Toggle";
 
 const PLATFORMS: { id: string; label?: string; labelKey?: string }[] = [
   { id: "tiktok", label: "TikTok" },
@@ -44,6 +45,18 @@ export default function Upload({ health }: { health: Health | null }) {
   const [contentType, setContentType] = useState("auto");
   const [aspect, setAspect] = useState("9:16");
   const [burnCaptions, setBurnCaptions] = useState(true);
+  // AI Boost — the viral-effect toggles, grouped for discoverability. These map
+  // to the production-value passes: emphasis (caption_fx), emoji, speaker
+  // colours, auto-zoom (zoom.py), B-roll cutaways (broll.py). Each is on by
+  // default for the "looks professionally edited" feel Submagic/OpusClip ship.
+  const [aiBoost, setAiBoost] = useState({
+    emphasis: true,
+    emoji: true,
+    speakerColors: true,
+    autoZoom: true,
+    broll: false,        // opt-in — B-roll changes the cut, more invasive
+    hookCheck: true,
+  });
   const [gameProfile, setGameProfile] = useState("auto");
   const [detectionMode, setDetectionMode] = useState("zero_shot");
   const [audioCues, setAudioCues] = useState("");
@@ -150,6 +163,9 @@ export default function Upload({ health }: { health: Health | null }) {
         tighten,
         denoise,
         motion,
+        // AI Boost toggles — drive the production-value passes (caption_fx
+        // emphasis/emoji, speaker colours, zoom, B-roll, hook check).
+        ai_boost: aiBoost,
         facecam_layout: facecamLayout,
         use_ocr: useOcr,
         use_vlm: useVlm,
@@ -612,6 +628,53 @@ export default function Upload({ health }: { health: Health | null }) {
               </option>
             ))}
           </select>
+        </div>
+        {/* AI Boost — the viral-effect toggles, grouped so the user sees the
+            whole "make it look pro" surface in one place instead of hunting
+            across panels. Maps to the backend caption_fx / zoom / broll passes. */}
+        <div className="field ai-boost">
+          <label>{t("ai.title")}</label>
+          <p className="muted tiny" style={{ marginTop: -4, marginBottom: 8 }}>
+            {t("ai.subtitle")}
+          </p>
+          <div className="ai-boost-grid">
+            <Toggle
+              checked={aiBoost.emphasis}
+              onChange={(v) => setAiBoost({ ...aiBoost, emphasis: v })}
+              label={t("ai.emphasis")}
+              hint={t("ai.emphasisHint")}
+            />
+            <Toggle
+              checked={aiBoost.emoji}
+              onChange={(v) => setAiBoost({ ...aiBoost, emoji: v })}
+              label={t("ai.emoji")}
+              hint={t("ai.emojiHint")}
+            />
+            <Toggle
+              checked={aiBoost.speakerColors}
+              onChange={(v) => setAiBoost({ ...aiBoost, speakerColors: v })}
+              label={t("ai.speakerColors")}
+              hint={t("ai.speakerColorsHint")}
+            />
+            <Toggle
+              checked={aiBoost.autoZoom}
+              onChange={(v) => setAiBoost({ ...aiBoost, autoZoom: v })}
+              label={t("ai.zoom")}
+              hint={t("ai.zoomHint")}
+            />
+            <Toggle
+              checked={aiBoost.broll}
+              onChange={(v) => setAiBoost({ ...aiBoost, broll: v })}
+              label={t("ai.broll")}
+              hint={t("ai.brollHint")}
+            />
+            <Toggle
+              checked={aiBoost.hookCheck}
+              onChange={(v) => setAiBoost({ ...aiBoost, hookCheck: v })}
+              label={t("ai.hook")}
+              hint={t("ai.hookHint")}
+            />
+          </div>
         </div>
       </div>
 

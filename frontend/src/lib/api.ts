@@ -1,5 +1,6 @@
 // Tiny typed API client. All paths are same-origin (dev proxy / prod static).
 import type {
+  AiBoostSettings,
   Clip,
   CapabilityDetail,
   GameProfileConfig,
@@ -70,6 +71,7 @@ export interface CreateProjectInput {
   tighten: boolean;
   denoise: boolean;
   motion: string;
+  ai_boost: AiBoostSettings;
   facecam_layout: string;
   use_ocr: boolean;
   use_vlm: boolean;

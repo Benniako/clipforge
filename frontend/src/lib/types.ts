@@ -135,6 +135,21 @@ export interface SourceMedia {
   size_bytes: number;
 }
 
+export interface AiBoostSettings {
+  /** Keyword emphasis: colour + enlarge power words for the whole line. */
+  emphasis: boolean;
+  /** Auto-emoji: 1-2 fitting emojis per line next to power words. */
+  emoji: boolean;
+  /** Speaker-aware caption colours (podcast look). */
+  speakerColors: boolean;
+  /** Auto zoom/punch-in on emphasis words and scene cuts. */
+  autoZoom: boolean;
+  /** B-roll smart cutaways during static voiceover spans. */
+  broll: boolean;
+  /** Hook/first-3s analysis with a warning + suggestion. */
+  hookCheck: boolean;
+}
+
 export interface ImportSettings {
   platform: Platform;
   power_mode: PowerMode;
@@ -150,6 +165,8 @@ export interface ImportSettings {
   tighten: boolean;
   denoise: boolean;
   motion: string;
+  /** AI Boost — the viral-effect toggles grouped in the upload panel. */
+  ai_boost: AiBoostSettings;
   facecam_layout: string;
   use_ocr: boolean;
   use_vlm: boolean;
