@@ -2573,6 +2573,55 @@ def test_reframe_switch_decision_requires_margin_and_dwell():
     assert decision == "hold"
 
 
+# --------------------------------------------------------------------------- #
+# System detector tests — the capability inventory surfaced in the diagnostics
+# panel (/api/capabilities). Pins the contract: both report shapes exist, every
+# item carries an impact line, and the new optional-tool fields are present.
+# --------------------------------------------------------------------------- #
+def test_capability_detail_has_all_categories_and_impact():
+    from app.config import get_settings
+    s = get_settings()
+    detail = s.capability_detail()
+    cats = {c["name"] for c in detail["categories"]}
+    expected = {"core", "transcription", "vision", "ocr", "audio", "gpu", "scenework"}
+    assert expected <= cats, f"missing categories: {expected - cats}"
+    for cat in detail["categories"]:
+        assert cat["items"], f"category {cat['name']} has no items"
+        for it in cat["items"]:
+            # Every item must declare availability + a non-empty impact line so
+            # the panel is actionable ("install X to unlock Y"), not a bare flag.
+            assert isinstance(it["available"], bool)
+            assert it["label"] and it["impact"], f"item {it['key']} missing label/impact"
+
+
+def test_capability_report_includes_new_detector_fields():
+    """The flat report carries the new deno/ollama/torchaudio/ocr-engine flags."""
+    from app.config import get_settings
+    flat = get_settings().capability_report()
+    for key in ("deno", "ollama", "torchaudio", "paddleocr", "easyocr", "tesseract"):
+        assert key in flat, f"flat report missing new field '{key}'"
+        assert isinstance(flat[key], bool), f"{key} should be bool"
+
+
+def test_capabilities_endpoint_returns_both_views():
+    """/api/capabilities returns the flat map + the grouped detail together."""
+    from starlette.testclient import TestClient
+    from app.main import app
+    r = TestClient(app).get("/api/capabilities")
+    assert r.status_code == 200
+    body = r.json()
+    assert "flat" in body and "detail" in body
+    assert "deno" in body["flat"]
+    names = {c["name"] for c in body["detail"]["categories"]}
+    assert "core" in names and "ocr" in names
+
+
+def test_ollama_detection_never_raises():
+    """_detect_ollama must return a bool in any environment (socket/port probe)."""
+    from app.config import _detect_ollama
+    assert isinstance(_detect_ollama(), bool)
+
+
 if __name__ == "__main__":
     import sys
     # Windows consoles default to a legacy code page that can't print "✓".
