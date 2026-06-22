@@ -56,6 +56,40 @@ _TEMPLATES: dict[str, StyleTemplate] = {
             primary="F4F4F8", highlight="FF8FB1", outline="14101A",
             outline_w=4, y_frac=0.82, uppercase=False, emphasis=True,
         ),
+        # The MrBeast signature: huge white text, thick black outline, every
+        # power word punched in yellow. Maximum contrast, maximum readability —
+        # the look that survives being thumb-stopped at 10% screen size.
+        StyleTemplate(
+            id="beast-outline", name="MrBeast Outline",
+            font="FreeSans", font_size=112,
+            primary="FFFFFF", highlight="FFE000", outline="000000",
+            outline_w=10, y_frac=0.74, uppercase=True, emphasis=True, emoji=True,
+        ),
+        # TikTok bubble: rounded, all-white, soft drop shadow (no hard outline).
+        # The native-TikTok look — reads clean over any background because the
+        # shadow does the separation work instead of a stroke.
+        StyleTemplate(
+            id="tiktok-bubble", name="TikTok Bubble",
+            font="DejaVu Sans", font_size=88,
+            primary="FFFFFF", highlight="25F4EE", outline="000000",
+            outline_w=0, y_frac=0.80, uppercase=False, emphasis=True, emoji=True,
+        ),
+        # Hormozi: the dense all-caps yellow wall. Very high information density,
+        # aggressive emphasis, minimal whitespace. Signature Alex Hormozi hook look.
+        StyleTemplate(
+            id="hormozi-yellow", name="Hormozi",
+            font="FreeSans", font_size=100,
+            primary="FFE45C", highlight="FF3B3B", outline="0D0D0D",
+            outline_w=8, y_frac=0.72, uppercase=True, emphasis=True, emoji=True,
+        ),
+        # Subtle/news: restrained, mixed-case, thin outline. For interview B-roll
+        # and serious content where hype captions would undermine credibility.
+        StyleTemplate(
+            id="subtle-news", name="Subtle",
+            font="DejaVu Sans", font_size=72,
+            primary="FFFFFF", highlight="FFD166", outline="000000",
+            outline_w=3, y_frac=0.84, uppercase=False, emphasis=False, emoji=False,
+        ),
     ]
 }
 
