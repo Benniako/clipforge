@@ -1012,6 +1012,34 @@ def test_export_premiere_endpoint_zips_edl_and_srts():
     assert c.get(f"/api/projects/{empty.id}/export/premiere").status_code == 409
 
 
+def test_progress_timing_eta_extrapolates_from_percent():
+    """The render screen's ETA is elapsed * (100-pct)/pct, only once a few
+    percent in, and only while processing."""
+    import time
+    from app.api.routes_projects import _progress_timing
+    from app.models import Project, JobProgress, SourceMedia, ProjectStatus
+
+    p = Project(
+        status=ProjectStatus.processing,
+        source=SourceMedia(filename="s.mp4", path="p/s.mp4", duration=600.0),
+        progress=JobProgress(pct=25.0, started_at=time.time() - 10.0),
+    )
+    out = _progress_timing(p)
+    assert 9.0 <= out["elapsed_seconds"] <= 12.0
+    assert 28.0 <= out["eta_seconds"] <= 32.0     # ~30s remaining at 25%
+    assert out["source_duration"] == 600.0
+
+    # Too early (pct < 3) → no wild guess.
+    early = Project(status=ProjectStatus.processing,
+                    progress=JobProgress(pct=1.0, started_at=time.time() - 2.0))
+    assert _progress_timing(early)["eta_seconds"] is None
+
+    # Not processing (queued, no start) → no elapsed/eta.
+    queued = Project(status=ProjectStatus.queued)
+    timing = _progress_timing(queued)
+    assert timing["eta_seconds"] is None and timing["elapsed_seconds"] is None
+
+
 def test_pause_resume_project_endpoint():
     from starlette.testclient import TestClient
     from app import store

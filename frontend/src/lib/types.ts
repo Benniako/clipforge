@@ -118,6 +118,7 @@ export interface JobProgress {
   message: string;
   pct: number;
   stages: StageView[];
+  started_at?: number | null;
   updated_at: number;
 }
 
@@ -216,6 +217,13 @@ export interface StatusPayload {
     gpu_mem_mb: number | null;
     gpu_mem_total_mb: number | null;
   };
+  timing?: {
+    elapsed_seconds: number | null;
+    eta_seconds: number | null;
+    source_duration: number | null;
+  };
+  target_clips?: number;
+  rendered_count?: number;
   progress: JobProgress;
   clips: Array<
     Pick<Clip, "id" | "title" | "score" | "kind" | "status" | "thumb_url" | "export_url"> & {

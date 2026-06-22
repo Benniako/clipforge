@@ -380,6 +380,7 @@ class JobProgress(BaseModel):
     message: str = ""
     pct: float = 0.0            # overall 0-100
     stages: list[dict] = Field(default_factory=list)  # per-stage status timeline
+    started_at: float | None = None   # when real processing began (for ETA)
     updated_at: float = Field(default_factory=now)
 
 
