@@ -285,6 +285,32 @@ def _easyocr_available() -> bool:
     return _easyocr_ok
 
 
+def _crop_hash(path: str) -> str | None:
+    """Fast perceptual fingerprint of a crop for inter-frame diffing.
+
+    Returns a small hash of a downscaled grayscale thumbnail, or None when the
+    image can't be read. Two crops with the same hash are effectively identical
+    pixels (a static 'MATCH WON' screen), so the OCR result can be reused
+    instead of re-running the neural net on the same image.
+    """
+    try:
+        from PIL import Image
+        im = Image.open(path).convert("L").resize((9, 8))
+        pixels = list(im.getdata())
+        return "".join("1" if pixels[i] > pixels[i + 1] else "0"
+                       for i in range(len(pixels) - 1))
+    except Exception:
+        return None
+
+
+def _hashes_match(a: str | None, b: str | None) -> bool:
+    """True when two perceptual hashes are >=95% similar (static frame)."""
+    if not a or not b or len(a) != len(b):
+        return False
+    diff = sum(1 for x, y in zip(a, b) if x != y)
+    return (diff / len(a)) <= 0.05
+
+
 def _make_paddle(gpu: bool):
     """Construct a PaddleOCR reader across the 2.x and 3.x APIs.
 
@@ -444,10 +470,45 @@ def _ocr_image_conf(path: str, engine: str) -> tuple[str, float]:
             import pytesseract
             from PIL import Image
 
-            return pytesseract.image_to_string(Image.open(path)), 0.0
+            # --psm 11: sparse text in any order. Game HUDs are isolated words
+            # ("VICTORY", "MATCH WON") and short banners, not dense paragraphs.
+            # The default PSM 3 assumes a book page and hallucinates punctuation/
+            # garbage trying to find sentence structure where there is none.
+            return (pytesseract.image_to_string(Image.open(path), config="--psm 11"),
+                    0.0)
     except Exception as e:  # one bad frame mustn't sink detection
         log.warning("ocr read failed for %s: %s", path, e)
     return "", 0.0
+
+
+def _ocr_batch(paths: list[str], engine: str) -> list[tuple[str, float]]:
+    """Read text for many images in one engine call (GPU batching).
+
+    EasyOCR and PaddleOCR both accept list inputs and run them through the net
+    in a single batched forward pass, saturating the GPU instead of paying
+    Python-loop overhead per tiny crop. Falls back to sequential reads when the
+    engine doesn't expose a batch API or any error occurs — batching is an
+    optimisation, never a correctness dependency.
+    """
+    if len(paths) <= 1:
+        return [_ocr_image_conf(p, engine) for p in paths]
+    kind, reader = _get_reader(engine)
+    try:
+        if kind == "easyocr" and reader is not None:
+            results = reader.readtext(paths, detail=1, batch_size=len(paths))
+            out: list[tuple[str, float]] = []
+            for r in results:
+                texts = [b[1] for b in (r or [])]
+                confs = [float(b[2]) for b in (r or []) if len(b) > 2]
+                txt = " ".join(t for t in texts if t).strip()
+                conf = (sum(confs) / len(confs)) if confs else 0.0
+                out.append((txt, conf))
+            return out
+        # PaddleOCR batch + tesseract: fall through to sequential (their batch
+        # APIs are less stable across versions; sequential is correct everywhere).
+    except Exception as e:
+        log.debug("ocr batch failed (%s); sequential", e)
+    return [_ocr_image_conf(p, engine) for p in paths]
 
 
 def _easyocr_text(reader, path: str) -> str:
@@ -551,8 +612,30 @@ def _ocr_frame_images(frame: Path, tmpd: Path, idx: int,
                 continue
             scale = 2 if crop.width < 900 else 1
             if scale > 1:
-                crop = crop.resize((crop.width * scale, crop.height * scale))
-            crop = ImageOps.autocontrast(crop)
+                # Lanczos preserves hard text edges on small killfeeds far better
+                # than bicubic (the default), which blurs sub-pixel glyph strokes.
+                crop = crop.resize((crop.width * scale, crop.height * scale),
+                                   resample=Image.Resampling.LANCZOS)
+            # Binarize: game HUD text (killfeeds, scorelines, banners) sits on
+            # translucent backgrounds with gameplay moving behind it. autocontrast
+            # left that background noise through, confusing EasyOCR/Tesseract.
+            # Otsu's threshold isolates the bright text band into pure B/W so the
+            # engine reads glyphs, not motion smear. A full-frame read keeps the
+            # original (binarizing the whole frame destroys too much context).
+            if roi != "full":
+                try:
+                    import cv2
+                    import numpy as np
+                    gray = cv2.cvtColor(np.array(crop), cv2.COLOR_RGB2GRAY)
+                    _, binarized = cv2.threshold(
+                        gray, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
+                    crop = Image.fromarray(binarized)
+                except Exception:
+                    # cv2 absent or the crop is degenerate — fall back to the
+                    # legacy contrast stretch rather than dropping the ROI.
+                    crop = ImageOps.autocontrast(crop)
+            else:
+                crop = ImageOps.autocontrast(crop)
             p = tmpd / f"f{idx}_{roi}.png"
             crop.save(p)
             out.append((roi, p))
@@ -617,20 +700,31 @@ def find_text_events(src_path: str, info: MediaInfo,
                     log.warning("ocr frame grab failed at %.1fs: %s", t, e)
                     continue
                 roi_texts = []
+                # Inter-frame diffing: a static "MATCH WON" screen sitting for 10s
+                # would otherwise be OCR'd 5 times on identical pixels. We hash
+                # each crop and reuse the previous result when it hasn't changed
+                # (>=95% similar), bypassing the engine entirely.
+                prev_crops: dict[str, tuple[str | None, str, float]] = {}
                 for roi, img in _ocr_frame_images(
                         frame, tmpd, i, profile, extra_regions=extra_regions):
-                    text, rconf = _ocr_image_conf(str(img), engine)
-                    # PaddleOCR misses text that EasyOCR catches on noisy/bitrate-
-                    # starved streamer VODs (per the 2025 real-world OCR shootouts:
-                    # on heavy noise EasyOCR beat PaddleOCR). When the primary
-                    # engine was PaddleOCR and this ROI came back empty or very low
-                    # confidence, retry the same image with EasyOCR before giving up.
-                    # Cheap by construction: only fires on weak frames, so clean
-                    # footage pays nothing.
-                    if (not text or rconf < 0.5) and engine == "paddleocr" and _easyocr_available():
-                        etext, econf = _ocr_image_conf(str(img), "easyocr")
-                        if len(etext) > len(text) or econf > rconf:
-                            text, rconf = etext, econf
+                    h = _crop_hash(str(img))
+                    cached = prev_crops.get(roi)
+                    if cached and _hashes_match(h, cached[0]):
+                        text, rconf = cached[1], cached[2]
+                    else:
+                        text, rconf = _ocr_image_conf(str(img), engine)
+                        # PaddleOCR misses text that EasyOCR catches on noisy/bitrate-
+                        # starved streamer VODs (per the 2025 real-world OCR shootouts:
+                        # on heavy noise EasyOCR beat PaddleOCR). When the primary
+                        # engine was PaddleOCR and this ROI came back empty or very low
+                        # confidence, retry the same image with EasyOCR before giving up.
+                        # Cheap by construction: only fires on weak frames, so clean
+                        # footage pays nothing.
+                        if (not text or rconf < 0.5) and engine == "paddleocr" and _easyocr_available():
+                            etext, econf = _ocr_image_conf(str(img), "easyocr")
+                            if len(etext) > len(text) or econf > rconf:
+                                text, rconf = etext, econf
+                        prev_crops[roi] = (h, text, rconf)
                     if text:
                         roi_texts.append((roi, text, rconf))
                 for roi, text, rconf in roi_texts:
