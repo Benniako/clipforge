@@ -8,17 +8,17 @@ import { useT } from "../lib/i18n";
 import CueLab from "../components/CueLab";
 import CueManager from "../components/CueManager";
 
-const PLATFORMS = [
+const PLATFORMS: { id: string; label?: string; labelKey?: string }[] = [
   { id: "tiktok", label: "TikTok" },
   { id: "reels", label: "Reels" },
   { id: "shorts", label: "Shorts" },
-  { id: "generic", label: "Beliebig" },
+  { id: "generic", labelKey: "up.platformGeneric" },
 ];
 
 const POWER_MODES = [
-  { id: "balanced", label: "Ausgewogen", hint: "Schneller Standardmodus und dein PC bleibt reaktionsfreudig" },
-  { id: "max_gpu", label: "Max GPU", hint: "Nutzt größere Batches, mehr Render-Worker und mehr Budget für KI-Bildanalyse" },
-  { id: "quality", label: "Qualität", hint: "Langsamer, aber mit mehr visuellem Kontext für die KI-Bewertung" },
+  { id: "balanced", labelKey: "up.powerBalanced", hintKey: "up.powerBalancedHint" },
+  { id: "max_gpu", labelKey: "up.powerMaxGpu", hintKey: "up.powerMaxGpuHint" },
+  { id: "quality", labelKey: "up.powerQuality", hintKey: "up.powerQualityHint" },
 ];
 
 const LENGTHS = [
@@ -106,7 +106,7 @@ export default function Upload({ health }: { health: Health | null }) {
 
   const submit = async () => {
     if (!file && !url.trim()) {
-      setErr("Füge zuerst eine Videodatei hinzu oder füge einen Link ein.");
+      setErr(t("up.errNoSource"));
       return;
     }
     setErr(null);
@@ -164,7 +164,7 @@ export default function Upload({ health }: { health: Health | null }) {
       });
       nav(`/p/${project.id}`);
     } catch (e: any) {
-      setErr(e.message ?? "Etwas ist schiefgelaufen.");
+      setErr(e.message ?? t("up.errGeneric"));
       setBusy(false);
     }
   };
@@ -181,7 +181,7 @@ export default function Upload({ health }: { health: Health | null }) {
       if (!prev) return prev;
       const next = { ...prev };
       const pack = next[cueLabGame] ?? {
-          label: cueLabGame === "common" ? "Allgemein (alle Spiele)" : cueLabGame,
+          label: cueLabGame === "common" ? t("up.cueLabCommonLabel") : cueLabGame,
         configured: 0,
         total: 0,
         events: [],
@@ -194,28 +194,24 @@ export default function Upload({ health }: { health: Health | null }) {
   const caps = health?.capabilities;
   const status = {
     captions: caps?.transcription && caps.transcription !== "synthetic" ? caps.transcription : "synthetic",
-    cleanVoice: caps?.denoise ? "Bereit" : "Nicht verfügbar",
-    ocr: caps?.ocr ? String(caps.ocr) : "Nicht verfügbar",
-    vlm: caps?.vlm ? caps.vlm_model ?? "Bereit" : "Nicht verfügbar",
+    cleanVoice: caps?.denoise ? t("up.statusReady") : t("up.statusUnavailable"),
+    ocr: caps?.ocr ? String(caps.ocr) : t("up.statusUnavailable"),
+    vlm: caps?.vlm ? caps.vlm_model ?? t("up.statusReady") : t("up.statusUnavailable"),
     audio: caps?.audio_events
       ? caps.clap_audio
         ? "CLAP"
         : caps.panns_audio
           ? "PANNs"
-          : "Bereit"
-      : "Nicht verfügbar",
-    cues: "Bereit",
+          : t("up.statusReady")
+      : t("up.statusUnavailable"),
+    cues: t("up.statusReady"),
   };
 
   return (
     <div className="container">
       <div className="hero">
-        <h1>Ein langes Video rein. Eine Woche Short-Clips raus.</h1>
-        <p>
-          Lade einen Podcast, ein Interview oder Gameplay hoch. ClipForge findet die
-          stärksten Momente, setzt sie vertikal um, fügt Untertitel hinzu und sortiert
-          sie nach erwartetem Potenzial.
-        </p>
+        <h1>{t("up.heroTitle")}</h1>
+        <p>{t("up.heroText")}</p>
       </div>
 
       <div
@@ -229,33 +225,31 @@ export default function Upload({ health }: { health: Health | null }) {
       >
         {file ? (
           <div className="col" style={{ alignItems: "center", gap: 8 }}>
-            <div className="big">Video: {file.name}</div>
+            <div className="big">{t("up.videoLabel", { name: file.name })}</div>
             <div className="muted tiny">
-              {(file.size / 1024 / 1024).toFixed(1)} MB - bereit zur Verarbeitung
+              {t("up.fileReady", { size: (file.size / 1024 / 1024).toFixed(1) })}
             </div>
             <button className="btn ghost sm" onClick={() => setFile(null)}>
-              Andere Datei wählen
+              {t("up.chooseOtherFile")}
             </button>
           </div>
         ) : (
           <>
-            <div className="big">Ziehe ein Video hierher</div>
+            <div className="big">{t("up.dropHere")}</div>
             <div className="muted tiny" style={{ marginTop: 6 }}>
-              MP4, MOV, MKV, WEBM - auch mehrere Stunden sind ok
+              {t("up.dropFormats")}
             </div>
             <div style={{ marginTop: 16 }}>
               <button className="btn" onClick={() => fileRef.current?.click()}>
-                Dateien auswählen
+                {t("up.chooseFiles")}
               </button>
             </div>
-            <div className="or">- oder Link einfügen -</div>
+            <div className="or">{t("up.orPasteLink")}</div>
             <div className="url-row">
               <input
                 className="input"
                 placeholder={
-                  urlDisabled
-                    ? "URL-Import ist in dieser Umgebung nicht verfügbar"
-                    : "https://youtube.com/watch?v=..."
+                  urlDisabled ? t("up.urlDisabled") : t("up.urlPlaceholder")
                 }
                 value={url}
                 disabled={urlDisabled}
@@ -281,30 +275,30 @@ export default function Upload({ health }: { health: Health | null }) {
 
       <div className="settings-grid">
         <div className="field wide">
-          <label>Leistungsmodus</label>
+          <label>{t("up.powerMode")}</label>
           <div className="seg power-seg">
             {POWER_MODES.map((m) => (
               <button
                 key={m.id}
                 className={powerMode === m.id ? "on" : ""}
                 onClick={() => setPowerMode(m.id)}
-                title={m.hint}
+                title={t(m.hintKey)}
               >
-                <span>{m.label}</span>
+                <span>{t(m.labelKey)}</span>
                 {health?.capabilities.recommended_power_mode === m.id && (
-                  <small>Empfohlen</small>
+                  <small>{t("up.recommended")}</small>
                 )}
               </button>
             ))}
           </div>
         </div>
         <div className="field">
-          <label>Inhaltstyp</label>
+          <label>{t("up.contentType")}</label>
           <div className="seg">
             {[
-              { id: "auto", label: "Auto" },
-              { id: "talking", label: "Sprache" },
-              { id: "gameplay", label: "Gameplay" },
+              { id: "auto", labelKey: "up.contentAuto" },
+              { id: "talking", labelKey: "up.contentTalking" },
+              { id: "gameplay", labelKey: "up.contentGameplay" },
             ].map((c) => (
               <button
                 key={c.id}
@@ -312,41 +306,47 @@ export default function Upload({ health }: { health: Health | null }) {
                 onClick={() => setContentType(c.id)}
                 title={
                   c.id === "gameplay"
-                    ? "Findet starke Momente wie Kills und Tore über Audio- und Spielszenen-Signale"
+                    ? t("up.contentGameplayHint")
                     : c.id === "talking"
-                      ? "Findet die besten gesprochenen Momente aus dem Transkript"
-                      : "Erkennt automatisch, ob es um Sprache oder Gameplay geht"
+                      ? t("up.contentTalkingHint")
+                      : t("up.contentAutoHint")
                 }
               >
-                {c.label}
+                {t(c.labelKey)}
               </button>
             ))}
           </div>
         </div>
         <div className="field">
-          <label>Seitenverhältnis</label>
+          <label>{t("up.aspect")}</label>
           <select className="input" value={aspect} onChange={(e) => setAspect(e.target.value)}>
-            <option value="9:16">9:16 (Reels/Shorts/TikTok)</option>
-            <option value="4:5">4:5 (Feed)</option>
-            <option value="1:1">1:1 (Quadrat)</option>
-            <option value="16:9">16:9 (YouTube / in Premiere bearbeiten)</option>
+            <option value="9:16">{t("up.aspect916")}</option>
+            <option value="4:5">{t("up.aspect45")}</option>
+            <option value="1:1">{t("up.aspect11")}</option>
+            <option value="16:9">{t("up.aspect169")}</option>
           </select>
         </div>
         <div className="field">
-          <label>Spielprofil <span className="muted tiny">(nur Gameplay)</span></label>
+          <label>{t("up.gameProfile")} <span className="muted tiny">{t("up.gameplayOnly")}</span></label>
           <select className="input" value={gameProfile} onChange={(e) => setGameProfile(e.target.value)}
-            title="Passt die Highlight-Erkennung für Gameplay an und funktioniert auch für andere Spiele">
-            <option value="auto">Auto / Beliebiges Spiel</option>
+            title={t("up.gameProfileTitle")}>
+            <option value="auto">{t("up.gameProfileAuto")}</option>
             <option value="valorant">Valorant</option>
             <option value="cs2">CS2</option>
-            <option value="eafc">EA FC / FIFA</option>
-            <option value="rocketleague">Rocket League</option>
-            <option value="horror">Horror</option>
+            <option value="eafc">{t("up.gameProfileEafc")}</option>
+            <option value="rocketleague">{t("up.gameProfileRocketLeague")}</option>
+            <option value="horror">{t("up.gameProfileHorror")}</option>
           </select>
           {cues && cues[gameProfile] && (
-            <span className="muted tiny" title="Optional: Füge exakte Spielsounds hinzu. OCR und Audio-Erkennung funktionieren auch ohne sie.">
-              {cues[gameProfile].configured}/{cues[gameProfile].total} Cues -{" "}
-              {cues[gameProfile].configured === 0 ? "nur OCR/Audio" : "eigene Sounds aktiv"}
+            <span className="muted tiny" title={t("up.cuesHint")}>
+              {t("up.cuesCount", {
+                configured: cues[gameProfile].configured,
+                total: cues[gameProfile].total,
+                state:
+                  cues[gameProfile].configured === 0
+                    ? t("up.cuesOcrOnly")
+                    : t("up.cuesCustomActive"),
+              })}
             </span>
           )}
         </div>
@@ -401,103 +401,103 @@ export default function Upload({ health }: { health: Health | null }) {
         )}
         {contentType !== "talking" && (
           <div className="field">
-            <label>Facecam <span className="muted tiny">(nur Gameplay)</span></label>
+            <label>{t("up.facecam")} <span className="muted tiny">{t("up.gameplayOnly")}</span></label>
             <select className="input" value={facecamLayout}
               onChange={(e) => setFacecamLayout(e.target.value)}
-              title="Wenn eine Streamer-Cam erkannt wird: über dem Gameplay stapeln, als Overlay zeigen oder ignorieren">
-              <option value="auto">Auto (bei Erkennung stapeln)</option>
-              <option value="split">Gestapelt (Cam oben)</option>
-              <option value="framed">Overlay (PiP-Cam)</option>
-              <option value="off">Aus (nur Crop)</option>
+              title={t("up.facecamTitle")}>
+              <option value="auto">{t("up.facecamAuto")}</option>
+              <option value="split">{t("up.facecamSplit")}</option>
+              <option value="framed">{t("up.facecamFramed")}</option>
+              <option value="off">{t("up.facecamOff")}</option>
             </select>
           </div>
         )}
         <div className="field wide">
-          <label>Erkennungs-Schalter</label>
+          <label>{t("up.detectionToggles")}</label>
           <div className="toggle-stack compact capability-toggles">
             <button
               className={"toggle" + (useOcr ? " on" : "")}
               onClick={() => setUseOcr((v) => !v)}
-              title="Liest Scoreboards, Killfeed, Siegesmeldungen und andere Bildschirmhinweise"
+              title={t("up.ocrTitle")}
             >
               <span>OCR</span>
               <small>{status.ocr}</small>
-              <i>{useOcr ? "An" : "Aus"}</i>
+              <i>{useOcr ? t("up.on") : t("up.off")}</i>
             </button>
             <button
               className={"toggle" + (useVlm ? " on" : "")}
               onClick={() => setUseVlm((v) => !v)}
-              title="Nutzt das lokale Vision-Modell für Action, Ausdruck, Klarheit und langweilige Frames"
+              title={t("up.aiVisionTitle")}
             >
-              <span>KI-Bildanalyse</span>
+              <span>{t("up.aiVision")}</span>
               <small>{status.vlm}</small>
-              <i>{useVlm ? "An" : "Aus"}</i>
+              <i>{useVlm ? t("up.on") : t("up.off")}</i>
             </button>
             <button
               className={"toggle" + (useAudioEvents ? " on" : "")}
               onClick={() => setUseAudioEvents((v) => !v)}
-              title="Erkennt Jubel, Lachen, Impacts und CLAP-Zero-Shot-Audio-Cues"
+              title={t("up.audioEventsTitle")}
             >
-              <span>Audio-Ereignisse</span>
+              <span>{t("up.audioEvents")}</span>
               <small>{status.audio}</small>
-              <i>{useAudioEvents ? "An" : "Aus"}</i>
+              <i>{useAudioEvents ? t("up.on") : t("up.off")}</i>
             </button>
             <button
               className={"toggle" + (cueLearning ? " on" : "")}
               onClick={() => setCueLearning((v) => !v)}
-              title="Lernt neue wiederverwendbare Audio-Cues aus OCR-Treffern und behält deine Cue-Pakete"
+              title={t("up.cueLearningTitle")}
             >
-              <span>Cue-Lernen</span>
+              <span>{t("up.cueLearning")}</span>
               <small>{status.cues}</small>
-              <i>{cueLearning ? "An" : "Aus"}</i>
+              <i>{cueLearning ? t("up.on") : t("up.off")}</i>
             </button>
           </div>
         </div>
         <div className="field">
-          <label>Untertitel</label>
+          <label>{t("up.captions")}</label>
           <button
             className={"toggle" + (burnCaptions ? " on" : "")}
             onClick={() => setBurnCaptions((v) => !v)}
-            title="Brennt Untertitel direkt in die exportierten Clips ein"
+            title={t("up.burnCaptionsTitle")}
           >
-            <span>Untertitel einbrennen</span>
+            <span>{t("up.burnCaptions")}</span>
             <small>{status.captions}</small>
-            <i>{burnCaptions ? "An" : "Aus"}</i>
+            <i>{burnCaptions ? t("up.on") : t("up.off")}</i>
           </button>
-          <span className="muted tiny">Aus = saubere Clips für Premiere oder Resolve</span>
+          <span className="muted tiny">{t("up.captionsOffNote")}</span>
         </div>
         <div className="field">
-          <label>Rhythmus & Stil</label>
+          <label>{t("up.rhythmStyle")}</label>
           <div className="toggle-stack">
             <button
               className={"toggle" + (tighten ? " on" : "")}
               onClick={() => setTighten((v) => !v)}
-              title="Schneidet Pausen und Leerlauf in Sprach-Clips heraus"
+              title={t("up.jumpCutsTitle")}
             >
-              <span>Jump-Cuts</span>
-              <i>{tighten ? "An" : "Aus"}</i>
+              <span>{t("up.jumpCuts")}</span>
+              <i>{tighten ? t("up.on") : t("up.off")}</i>
             </button>
             <button
               className={"toggle" + (motion === "push" ? " on" : "")}
               onClick={() => setMotion((v) => (v === "push" ? "none" : "push"))}
-              title="Langsamer Push-in über den ganzen Clip"
+              title={t("up.slowPushTitle")}
             >
-              <span>Langsamer Push-in</span>
-              <i>{motion === "push" ? "An" : "Aus"}</i>
+              <span>{t("up.slowPush")}</span>
+              <i>{motion === "push" ? t("up.on") : t("up.off")}</i>
             </button>
             <button
               className={"toggle" + (denoise ? " on" : "")}
               onClick={() => setDenoise((v) => !v)}
-              title="Trennt die Stimme von Musik und Spielsound. Demucs muss installiert sein."
+              title={t("up.cleanVoiceTitle")}
             >
-              <span>Saubere Stimme</span>
+              <span>{t("up.cleanVoice")}</span>
               <small>{status.cleanVoice}</small>
-              <i>{denoise ? "An" : "Aus"}</i>
+              <i>{denoise ? t("up.on") : t("up.off")}</i>
             </button>
           </div>
         </div>
         <div className="field">
-          <label>Optimieren für</label>
+          <label>{t("up.optimizeFor")}</label>
           <div className="seg">
             {PLATFORMS.map((p) => (
               <button
@@ -505,34 +505,34 @@ export default function Upload({ health }: { health: Health | null }) {
                 className={platform === p.id ? "on" : ""}
                 onClick={() => setPlatform(p.id)}
               >
-                {p.label}
+                {p.labelKey ? t(p.labelKey) : p.label}
               </button>
             ))}
           </div>
         </div>
         <div className="field">
-          <label>Gesprochene Sprache</label>
+          <label>{t("up.spokenLanguage")}</label>
           <select
             className="input"
             value={language}
             onChange={(e) => setLanguage(e.target.value)}
-            title="Verbessert die Transkription und passt die Moment-Erkennung an die Sprache an"
+            title={t("up.spokenLanguageTitle")}
           >
-            <option value="de">Deutsch</option>
-            <option value="en">Englisch</option>
-            <option value="auto">Automatisch erkennen</option>
+            <option value="de">{t("up.langGerman")}</option>
+            <option value="en">{t("up.langEnglish")}</option>
+            <option value="auto">{t("up.langAuto")}</option>
           </select>
         </div>
         <div className="field">
-          <label>Clip-Länge</label>
+          <label>{t("up.clipLength")}</label>
           <button
             className={"toggle" + (autoLength ? " on" : "")}
             onClick={() => setAutoLength((v) => !v)}
-            title="Lässt ClipForge die passende Clip-Länge für Plattform und Inhalt wählen"
+            title={t("up.autoLengthTitle")}
             style={{ marginBottom: 8 }}
           >
-            <span>Auto-Länge</span>
-            <i>{autoLength ? "An" : "Aus"}</i>
+            <span>{t("up.autoLength")}</span>
+            <i>{autoLength ? t("up.on") : t("up.off")}</i>
           </button>
           <select
             className="input"
@@ -549,20 +549,20 @@ export default function Upload({ health }: { health: Health | null }) {
         </div>
         {contentType !== "talking" && (
           <div className="field wide timing-controls">
-            <label>Clip-Kontext</label>
+            <label>{t("up.clipContext")}</label>
             <button
               className={"toggle" + (!manualContext ? " on" : "")}
               onClick={() => setManualContext((v) => !v)}
-              title="Automatisch nutzt die beste Vorlauf- und Nachlaufzeit für den erkannten Moment"
+              title={t("up.autoContextTitle")}
               style={{ marginBottom: 8 }}
             >
-              <span>Automatischer Kontext</span>
-              <i>{manualContext ? "Aus" : "An"}</i>
+              <span>{t("up.autoContext")}</span>
+              <i>{manualContext ? t("up.off") : t("up.on")}</i>
             </button>
             {manualContext && (
               <>
             <div className="range-label">
-              <span>Vor dem erkannten Moment</span>
+              <span>{t("up.beforeMoment")}</span>
               <b>{leadSeconds}s</b>
             </div>
             <input
@@ -574,7 +574,7 @@ export default function Upload({ health }: { health: Health | null }) {
               onChange={(e) => setLeadSeconds(Number(e.target.value))}
             />
             <div className="range-label">
-              <span>Nach dem erkannten Moment</span>
+              <span>{t("up.afterMoment")}</span>
               <b>{tailSeconds}s</b>
             </div>
             <input
@@ -590,7 +590,7 @@ export default function Upload({ health }: { health: Health | null }) {
           </div>
         )}
         <div className="field">
-          <label>Maximale Clips: {target}</label>
+          <label>{t("up.maxClips", { target })}</label>
           <input
             type="range"
             min={3}
@@ -600,7 +600,7 @@ export default function Upload({ health }: { health: Health | null }) {
           />
         </div>
         <div className="field">
-          <label>Untertitel-Stil</label>
+          <label>{t("up.captionStyle")}</label>
           <select
             className="input"
             value={styleId}
@@ -642,14 +642,14 @@ export default function Upload({ health }: { health: Health | null }) {
         <button className="btn primary" onClick={submit} disabled={busy} style={{ minWidth: 240, justifyContent: "center" }}>
           {busy ? (
             pct < 100 && file ? (
-              <>Lade hoch... {pct}%</>
+              <>{t("up.uploading", { pct })}</>
             ) : (
               <>
-                <span className="spinner" /> Starte...
+                <span className="spinner" /> {t("up.starting")}
               </>
             )
           ) : (
-            <>Clips erzeugen</>
+            <>{t("up.generateClips")}</>
           )}
         </button>
       </div>
@@ -661,7 +661,7 @@ export default function Upload({ health }: { health: Health | null }) {
 
       {projects.length > 0 && (
         <div style={{ marginTop: 44 }}>
-          <h3 style={{ marginBottom: 14 }}>Letzte Projekte</h3>
+          <h3 style={{ marginBottom: 14 }}>{t("up.recentProjects")}</h3>
           <div className="proj-list">
             {projects.map((p) => (
               <div
@@ -673,13 +673,17 @@ export default function Upload({ health }: { health: Health | null }) {
                 <div className="col" style={{ flex: 1 }}>
                   <span className="name">{p.name}</span>
                   <span className="muted tiny">
-                    {fmtDuration(p.duration)} Quelle - {p.ready_clips}/{p.clip_count} Clips -{" "}
-                    {timeAgo(p.created_at)}
+                    {t("up.projectMeta", {
+                      duration: fmtDuration(p.duration),
+                      ready: p.ready_clips,
+                      total: p.clip_count,
+                      ago: timeAgo(p.created_at),
+                    })}
                   </span>
                 </div>
                 <StatusPill status={p.status} pct={p.progress?.pct ?? 0} />
                 <button className="btn sm danger" onClick={(e) => del(p.id, e)}>
-                  Löschen
+                  {t("up.delete")}
                 </button>
               </div>
             ))}
@@ -691,12 +695,13 @@ export default function Upload({ health }: { health: Health | null }) {
 }
 
 function StatusPill({ status, pct }: { status: string; pct: number }) {
-  if (status === "ready") return <span className="pill" style={{ color: "var(--good)" }}>Bereit</span>;
-  if (status === "failed") return <span className="pill" style={{ color: "var(--bad)" }}>Fehlgeschlagen</span>;
-  if (status === "paused") return <span className="pill" style={{ color: "var(--warn)" }}>Pausiert</span>;
+  const { t } = useT();
+  if (status === "ready") return <span className="pill" style={{ color: "var(--good)" }}>{t("up.pillReady")}</span>;
+  if (status === "failed") return <span className="pill" style={{ color: "var(--bad)" }}>{t("up.pillFailed")}</span>;
+  if (status === "paused") return <span className="pill" style={{ color: "var(--warn)" }}>{t("up.pillPaused")}</span>;
   if (status === "processing")
     return <span className="pill" style={{ color: "var(--warn)" }}>{Math.round(pct)}%</span>;
-  return <span className="pill">Warteschlange</span>;
+  return <span className="pill">{t("up.pillQueued")}</span>;
 }
 
 
