@@ -301,6 +301,15 @@ def _whisper_transcribe(audio_path, language, progress, batch_size: int) -> Tran
             progress(min(seg.end / total, 1.0))
     if not words:
         raise RuntimeError("whisper returned no words")
+    # Best-effort word-timestamp refinement. faster-whisper's native word
+    # timestamps drift ~1s on long segments (the vanilla-Whisper limitation);
+    # a wav2vec2 CTC forced-alignment pass tightens them to ~sub-100 ms when
+    # torchaudio is available. No-op when it isn't, so this path never fails.
+    try:
+        from . import align
+        words = align.align_transcript(words, audio_path, lang=lang)
+    except Exception as e:
+        log.debug("forced-alignment refinement skipped: %s", e)
     return Transcript(words=words, language=getattr(info, "language", "en") or "en",
                       speakers=1, provider="whisper")
 
