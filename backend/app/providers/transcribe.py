@@ -219,6 +219,7 @@ def _whisperx_transcribe(audio_path, language, progress, batch_size: int) -> Tra
     model = _load_whisperx_model()
     result = _transcribe_with_prompt(
         model, audio, batch_size=max(batch_size, 1), language=language,
+        condition_on_previous_text=False,   # stop hallucinations propagating across segments
         initial_prompt=_initial_prompt(language))
     lang = result.get("language", language or "en") or "en"
     if progress:
@@ -273,21 +274,33 @@ def _whisper_transcribe(audio_path, language, progress, batch_size: int) -> Tran
     model = _load_whisper()
     batched = _batched_pipeline(model, batch_size)
     prompt = _initial_prompt(language)
+    # Anti-hallucination transcription params. Whisper famously hallucinates
+    # ("thank you for watching", phantom repetitions) on long-form audio like
+    # podcasts — two knobs largely fix it:
+    #   * condition_on_previous_text=False stops a hallucination in one segment
+    #     from propagating into the next (the dominant failure mode on silence/
+    #     music beds). VAD then drops any words that land in non-speech.
+    #   * beam_size>1 trades a little speed for far fewer greedy-decode errors.
+    # We were running beam_size=1 "for safety" — that maximises hallucinations.
+    # Podium/interview audio deserves the accuracy; gameplay/fast content keeps
+    # the fast path via batch_size on the BatchedInferencePipeline.
+    common = dict(
+        word_timestamps=True, vad_filter=True,
+        condition_on_previous_text=False,
+        initial_prompt=prompt,
+    )
     if batched is not None:
         try:
             segments, info = _transcribe_with_prompt(
-                batched, audio_path, language=language, word_timestamps=True,
-                vad_filter=True, batch_size=max(batch_size, 1),
-                initial_prompt=prompt)
+                batched, audio_path, language=language,
+                batch_size=max(batch_size, 1), beam_size=5, **common)
         except Exception as e:  # any batched-path issue -> sequential, never fail
             log.warning("batched transcribe failed (%s); sequential", e)
             segments, info = _transcribe_with_prompt(
-                model, audio_path, language=language, word_timestamps=True,
-                vad_filter=True, beam_size=1, initial_prompt=prompt)
+                model, audio_path, language=language, beam_size=3, **common)
     else:
         segments, info = _transcribe_with_prompt(
-            model, audio_path, language=language, word_timestamps=True,
-            vad_filter=True, beam_size=1, initial_prompt=prompt)
+            model, audio_path, language=language, beam_size=3, **common)
     total = max(getattr(info, "duration", 0.0), 0.001)
     words: list[Word] = []
     for seg in segments:
