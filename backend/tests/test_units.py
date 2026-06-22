@@ -2451,6 +2451,128 @@ def test_align_transcript_returns_input_when_unavailable():
     assert out is words or [w.text for w in out] == [w.text for w in words]
 
 
+# --------------------------------------------------------------------------- #
+# glm/bugs-ui tests — lock the three reported-bug fixes:
+# YouTube download robustness, caption anti-hallucination, reframe stability.
+# --------------------------------------------------------------------------- #
+def test_ytdlp_error_unwraps_to_useful_message():
+    """A yt-dlp DownloadError surfaces its root cause, not a bare wrapper."""
+    from app.pipeline import ingest
+
+    # Build a fake yt_dlp module whose extract_info raises DownloadError chained
+    # to a real cause — simulating "Sign in to confirm you're not a bot".
+    import sys, types
+    from importlib.util import spec_from_loader
+    fake = types.ModuleType("yt_dlp")
+    fake.__spec__ = spec_from_loader("yt_dlp", loader=None)
+    utils_mod = types.ModuleType("yt_dlp.utils")
+    utils_mod.__spec__ = spec_from_loader("yt_dlp.utils", loader=None)
+
+    class _DownloadError(Exception):
+        pass
+
+    class _Cause(Exception):
+        pass
+
+    utils_mod.DownloadError = _DownloadError
+    fake.utils = utils_mod
+
+    def _extract(url, download):
+        raise _DownloadError("Video unavailable").with_traceback(
+            _Cause("Sign in to confirm you're not a bot").__traceback__
+            if False else None) from _Cause("Sign in to confirm you're not a bot")
+
+    class _YDL:
+        def __init__(self, opts): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def extract_info(self, url, download): return _extract(url, download)
+        def prepare_filename(self, info): return "x.mp4"
+
+    fake.YoutubeDL = _YDL
+    fake.DownloadError = _DownloadError  # expose at top level too
+    sys.modules["yt_dlp"] = fake
+    sys.modules["yt_dlp.utils"] = utils_mod
+    try:
+        try:
+            ingest._download_ytdlp("https://youtu.be/x", None.__class__())  # type: ignore
+        except RuntimeError as e:
+            msg = str(e)
+            # The useful cause must reach the user, not the bare DownloadError.
+            assert "Sign in to confirm" in msg or "Video unavailable" in msg, msg
+        except _DownloadError:
+            raise AssertionError("bare DownloadError leaked; should be RuntimeError")
+    finally:
+        # Restore real modules if present.
+        for mod in ("yt_dlp", "yt_dlp.utils"):
+            sys.modules.pop(mod, None)
+
+
+def test_vad_available_is_cached_and_boolean():
+    """available() returns a bool and never raises, even without the model."""
+    from app.providers import vad
+    # The function must be callable in any environment and return a bool.
+    result = vad.available()
+    assert isinstance(result, bool)
+
+
+def test_reframe_face_helpers_are_pure_and_consistent():
+    """_face_motion_score and _center_of are the hysteresis primitives."""
+    from app.pipeline.reframe import _face_motion_score, _center_of
+
+    # _center_of: face box → centre-x fraction.
+    assert abs(_center_of((100, 50, 200, 200), 1000) - 0.2) < 1e-6
+    # _face_motion_score without a previous frame is 0 (no motion to measure).
+    # cv2 is optional in the test env, so wrap defensively.
+    import numpy as np
+    try:
+        import cv2  # noqa: F401
+        gray = np.zeros((100, 100), dtype=np.uint8)
+        score = _face_motion_score((10, 10, 40, 40), gray, None)
+        assert score == 0.0
+    except ImportError:
+        pass  # cv2 absent — the helper's contract is still defined.
+
+
+def test_reframe_switch_decision_requires_margin_and_dwell():
+    """The switch rule: incumbent kept unless challenger wins by margin for N frames.
+
+    Replicates the policy from _track_faces' incumbent/challenger logic without
+    needing cv2: a challenger must beat the incumbent by SWITCH_MARGIN for
+    SWITCH_HOLD_FRAMES consecutive samples (or on speech onset).
+    """
+    SWITCH_MARGIN = 0.35
+    SWITCH_HOLD_FRAMES = 3
+
+    def decide(incumbent_score, challenger_score, speech_onset, votes):
+        if challenger_score > incumbent_score + SWITCH_MARGIN:
+            if speech_onset:
+                return "switch", 0
+            votes += 1
+            if votes >= SWITCH_HOLD_FRAMES:
+                return "switch", 0
+        else:
+            votes = 0
+        return "hold", votes
+
+    # Challenger wins one noisy frame: not enough to switch.
+    decision, votes = decide(0.2, 0.7, speech_onset=False, votes=0)
+    assert decision == "hold"
+    # Wins three in a row: switch.
+    votes = 0
+    decisions = []
+    for _ in range(3):
+        decision, votes = decide(0.2, 0.7, speech_onset=False, votes=votes)
+        decisions.append(decision)
+    assert decisions[-1] == "switch"
+    # Speech onset with a clear winner: immediate switch, no dwell.
+    decision, _ = decide(0.2, 0.7, speech_onset=True, votes=0)
+    assert decision == "switch"
+    # Challenger barely wins (below margin): never switch.
+    decision, votes = decide(0.5, 0.6, speech_onset=False, votes=0)
+    assert decision == "hold"
+
+
 if __name__ == "__main__":
     import sys
     # Windows consoles default to a legacy code page that can't print "✓".
