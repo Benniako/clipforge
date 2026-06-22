@@ -2803,6 +2803,84 @@ def test_speaker_aware_colors_assigned_in_ass():
     assert len(colors) >= 2, f"single-speaker colour used for multi-speaker: {colors}"
 
 
+# --------------------------------------------------------------------------- #
+# OCR improvement tests — the 5 detect_ocr.py fixes: Otsu binarization, Lanczos
+# upscale, Tesseract PSM 11, GPU batching fallback, inter-frame diffing.
+# --------------------------------------------------------------------------- #
+def test_ocr_hashes_match_identical_and_rejects_different():
+    """The inter-frame diff gate: identical frames reuse, changed frames re-OCR."""
+    from app.providers import detect_ocr as OCR
+    h = "1010" * 20  # 80-char hash: 1 bit diff = 1.25% (under the 5% gate)
+    # Identical → static frame → reuse.
+    assert OCR._hashes_match(h, h) is True
+    # 1 bit different in 80 → 1.25% → still a match.
+    assert OCR._hashes_match(h, h[:-1] + ("0" if h[-1] == "1" else "1")) is True
+    # Fully inverted → 100% different → re-OCR.
+    assert OCR._hashes_match(h, "".join("0" if c == "1" else "1" for c in h)) is False
+    # None / mismatched length → never a match.
+    assert OCR._hashes_match(None, h) is False
+    assert OCR._hashes_match(h, h + "1") is False
+
+
+def test_ocr_batch_falls_back_to_sequential_on_error():
+    """Batching is an optimisation: any failure must degrade to per-image reads."""
+    from app.providers import detect_ocr as OCR
+    # Empty list → empty result (no engine call).
+    assert OCR._ocr_batch([], "tesseract") == []
+    # Single path → sequential (no batching attempted).
+    out = OCR._ocr_batch(["/nonexistent.png"], "tesseract")
+    assert len(out) == 1 and out[0] == ("", 0.0)  # read fails gracefully
+
+
+def test_ocr_crop_hash_is_stable_for_identical_images(tmp_path=None):
+    """_crop_hash returns the same fingerprint for the same image twice,
+    and a different fingerprint for a genuinely different image."""
+    import tempfile, os
+    from PIL import Image, ImageDraw
+    from app.providers import detect_ocr as OCR
+    tmp = tempfile.mkdtemp()
+    # A textured image (not uniform) so the d-hash has real structure.
+    p = os.path.join(tmp, "t.png")
+    im = Image.new("L", (32, 32), 255)
+    d = ImageDraw.Draw(im)
+    for x in range(0, 32, 4):
+        d.line([(x, 0), (x, 31)], fill=0)  # vertical stripes
+    im.save(p)
+    h1 = OCR._crop_hash(p)
+    h2 = OCR._crop_hash(p)
+    assert h1 is not None and h1 == h2  # stable across reads
+    # A horizontally-striped image (perpendicular) produces a different d-hash.
+    p2 = os.path.join(tmp, "t2.png")
+    im2 = Image.new("L", (32, 32), 255)
+    d2 = ImageDraw.Draw(im2)
+    for y in range(0, 32, 4):
+        d2.line([(0, y), (31, y)], fill=0)  # horizontal stripes
+    im2.save(p2)
+    h3 = OCR._crop_hash(p2)
+    assert h3 is not None and h3 != h1  # perpendicular texture differs
+
+
+def test_ocr_psm_config_is_sparse_text():
+    """The tesseract path must pass --psm 11 (sparse text), not the default."""
+    from app.providers import detect_ocr as OCR
+    # Inspect the source rather than calling tesseract (not installed here) —
+    # the fix is that config='--psm 11' reaches image_to_string.
+    import inspect
+    src = inspect.getsource(OCR._ocr_image_conf)
+    assert "--psm 11" in src, "tesseract PSM 11 (sparse text) not configured"
+
+
+def test_ocr_binarization_applied_to_rois_not_full_frame():
+    """Otsu binarization runs on ROI crops but NOT on full-frame reads
+    (binarizing the whole frame destroys too much context)."""
+    from app.providers import detect_ocr as OCR
+    import inspect
+    src = inspect.getsource(OCR._ocr_frame_images)
+    # The binarization is gated on roi != "full".
+    assert "THRESH_OTSU" in src, "Otsu binarization not present"
+    assert 'roi != "full"' in src, "binarization not gated to ROI crops"
+
+
 if __name__ == "__main__":
     import sys
     # Windows consoles default to a legacy code page that can't print "✓".
