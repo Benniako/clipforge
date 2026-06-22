@@ -3,6 +3,7 @@ import { Link, Route, Routes } from "react-router-dom";
 import { api } from "./lib/api";
 import type { Health } from "./lib/types";
 import CueModal from "./components/CueModal";
+import DiagnosticsPanel from "./components/DiagnosticsPanel";
 import { useT, LanguageToggle } from "./lib/i18n";
 import ClipEditor from "./screens/ClipEditor";
 import ProjectView from "./screens/ProjectView";
@@ -72,6 +73,7 @@ export default function App() {
   const { t } = useT();
   const [health, setHealth] = useState<Health | null>(null);
   const [showCues, setShowCues] = useState(false);
+  const [showDiag, setShowDiag] = useState(false);
 
   useEffect(() => {
     api.health().then(setHealth).catch(() => setHealth(null));
@@ -84,7 +86,13 @@ export default function App() {
           <span className="mark">◆</span> ClipForge
         </Link>
         <div className="spacer" />
-        <Caps health={health} />
+        <button
+          className="caps-btn"
+          onClick={() => setShowDiag(true)}
+          title={t("diag.title")}
+        >
+          <Caps health={health} />
+        </button>
         <LanguageToggle />
         <button
           className="btn ghost sm"
@@ -98,6 +106,7 @@ export default function App() {
         </Link>
       </nav>
       {showCues && <CueModal onClose={() => setShowCues(false)} />}
+      {showDiag && <DiagnosticsPanel onClose={() => setShowDiag(false)} />}
       <Routes>
         <Route path="/" element={<Upload health={health} />} />
         <Route path="/p/:projectId" element={<ProjectView />} />

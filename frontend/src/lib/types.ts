@@ -283,6 +283,28 @@ export interface Health {
     vram_gb: number;
     cpu: number;
     recommended_power_mode: PowerMode;
+    /** New diagnostics-panel fields (from /api/capabilities). */
+    deno: boolean;
+    ollama: boolean;
+    torchaudio: boolean;
+    paddleocr: boolean;
+    easyocr: boolean;
+    tesseract: boolean;
   };
   output: { width: number; height: number };
+}
+
+/** Grouped detail view returned by /api/capabilities.detail. */
+export interface CapabilityItem {
+  key: string;
+  available: boolean;
+  label: string;
+  impact: string;
+}
+export interface CapabilityCategory {
+  name: string;
+  items: CapabilityItem[];
+}
+export interface CapabilityDetail {
+  categories: CapabilityCategory[];
 }
