@@ -24,8 +24,58 @@ log = logging.getLogger("clipforge.reframe")
 
 SAMPLE_FPS = 3.0          # frames/sec sampled for tracking
 SAMPLE_WIDTH = 480        # downscale for fast detection (cx is a fraction, so OK)
-EMA_ALPHA = 0.22          # smoothing strength
-MAX_STEP = 0.05           # max centre move per sample (conservative pan)
+# One-Euro filter tuning. min_cutoff = heavy smoothing when the face is roughly
+# still (kills hand-held jitter); beta = how aggressively smoothing relaxes once
+# the face genuinely moves (low latency during a pan). The classic 1€ defaults
+# (Casiez et al. 2012) — better than a fixed EMA because the speed/smoothing
+# tradeoff is adaptive: still → smooth, moving → responsive.
+ONE_EURO_MIN_CUTOFF = 1.2
+ONE_EURO_BETA = 0.6
+ONE_EURO_D_CUTOFF = 1.0
+MAX_STEP = 0.05           # max centre move per sample (final safety clamp)
+
+
+def _alpha(cutoff: float, dt: float) -> float:
+    """Smoothing factor for a 1€ low-pass given cutoff freq and frame dt."""
+    te = 1.0 / (2 * 3.141592653589793 * cutoff)
+    return 1.0 / (1.0 + te / max(dt, 1e-6))
+
+
+def one_euro_filter(samples: list[tuple[float, float]], *,
+                    min_cutoff: float = ONE_EURO_MIN_CUTOFF,
+                    beta: float = ONE_EURO_BETA,
+                    d_cutoff: float = ONE_EURO_D_CUTOFF
+                    ) -> list[tuple[float, float]]:
+    """One-Euro adaptive low-pass over a (t, value) series.
+
+    At low speeds the cutoff collapses → heavy smoothing (no jitter). As the
+    derivative grows, beta lifts the cutoff → low lag during real pans. Strictly
+    better for face tracking than a fixed-coefficient EMA, which forces one
+    static speed/latency compromise. Pure, so unit-tested without OpenCV.
+    """
+    out: list[tuple[float, float]] = []
+    prev_t: float | None = None
+    prev_v: float | None = None
+    d_prev = 0.0
+    for t, v in samples:
+        if prev_t is None or prev_v is None:
+            out.append((t, v))
+            prev_t, prev_v = t, v
+            continue
+        dt = max(t - prev_t, 1e-6)
+        # Estimate the signal speed (derivative), itself low-passed so noise in
+        # the derivative doesn't inject noise into the cutoff.
+        a_d = _alpha(d_cutoff, dt)
+        d = (v - prev_v) / dt
+        d_hat = a_d * d + (1 - a_d) * d_prev
+        # Speed-adaptive cutoff: barely smoothing when moving fast.
+        cutoff = min_cutoff + beta * abs(d_hat)
+        a = _alpha(cutoff, dt)
+        v_hat = a * v + (1 - a) * prev_v
+        out.append((t, v_hat))
+        prev_t, prev_v = t, v_hat
+        d_prev = d_hat
+    return out
 
 
 def compute_reframe(src: str, start: float, end: float, src_aspect: float,
@@ -57,7 +107,7 @@ def compute_reframe(src: str, start: float, end: float, src_aspect: float,
         return Reframe(layout=LayoutType.center,
                        keyframes=[ReframeKeyframe(t=0.0, cx=0.5)], tracked=False)
 
-    smoothed = _smooth(centers)
+    smoothed = _smooth(centers, src_aspect)
     keyframes = _to_keyframes(smoothed, start)
     return Reframe(layout=LayoutType.fill, keyframes=keyframes, tracked=True)
 
@@ -162,8 +212,13 @@ def _pick_face(faces, gray, prev_gray, frame_w: int) -> float:
             faces, key=lambda f: f[2] * f[3] - abs((f[0] + f[2] / 2) / frame_w - 0.5) * f[2])
         return (fx + fw / 2) / frame_w
 
-    best, best_score = faces[0], -1.0
     area_max = max(int(f[2]) * int(f[3]) for f in faces) or 1
+    # Score every face by mouth-region motion first. Area is only a *tiebreaker*
+    # — a large still face must not out-rank a small talking one. So we collect
+    # (motion, area_term, face) and let motion dominate, breaking near-ties
+    # (within AREA_TIE_EPS) by size.
+    AREA_TIE_EPS = 0.02
+    scored: list[tuple[float, float, tuple]] = []
     for f in faces:
         x, y, fw, fh = (int(v) for v in f)
         my0 = y + fh // 2                      # lower half ≈ mouth region
@@ -174,24 +229,54 @@ def _pick_face(faces, gray, prev_gray, frame_w: int) -> float:
         else:
             diff = cv2.absdiff(cur, prv)
             motion = float(diff.mean()) / 255.0
-        score = motion + 0.02 * (fw * fh / area_max)   # motion dominates
-        if score > best_score:
-            best, best_score = f, score
+        area_term = 0.02 * (fw * fh / area_max)   # motion dominates
+        scored.append((motion, area_term, f))
+    motion_max = max((m for m, _, _ in scored), default=0.0)
+    best = max(scored, key=lambda s: s[0])[2]
+    # Only when the top faces are essentially still (motion within ε of the
+    # winner) do we let size pick — that's the documented "largest face when
+    # nobody is clearly talking" fallback, not a default preference for big faces.
+    tied = [s for s in scored if motion_max - s[0] <= AREA_TIE_EPS]
+    if len(tied) > 1:
+        best = max(tied, key=lambda s: s[1])[2]
     return center(best)
 
 
-def _smooth(centers: list[tuple[float, float]]) -> list[tuple[float, float]]:
-    """EMA + per-step velocity clamp for smooth, conservative panning."""
+def _crop_half(src_aspect: float, out_aspect: float = 9 / 16) -> float:
+    """Half the width (as a fraction of the source width) a vertical crop window
+    occupies. Used to clamp the centre so a keyframe can't push the window past
+    the frame edge (which would render black bars)."""
+    if src_aspect <= 0:
+        return 0.5
+    # Vertical crop width fraction = out_aspect / src_aspect (≤ 1 for landscape → portrait).
+    frac = min(1.0, out_aspect / src_aspect)
+    return frac / 2.0
+
+
+def _smooth(centers: list[tuple[float, float]], src_aspect: float = 16 / 9
+            ) -> list[tuple[float, float]]:
+    """One-Euro adaptive smoothing + per-step velocity clamp + edge-safe clamp.
+
+    The 1€ filter adapts smoothing to face speed (still→smooth, moving→responsive);
+    MAX_STEP is kept as a final conservative pan limit; the centre is then clamped
+    to the real crop-safe range so an extreme keyframe can't describe a window
+    that hangs off the frame edge (the previous [0,1] clamp allowed that).
+    """
+    if not centers:
+        return centers
+    lo = _crop_half(src_aspect)
+    hi = 1.0 - lo
     out: list[tuple[float, float]] = []
-    ema: float | None = None
-    for t, cx in centers:
-        if ema is None:
-            ema = cx
-        else:
-            target = EMA_ALPHA * cx + (1 - EMA_ALPHA) * ema
-            step = max(-MAX_STEP, min(MAX_STEP, target - ema))
-            ema = ema + step
-        out.append((t, max(0.0, min(1.0, ema))))
+    prev = None
+    for t, cx in one_euro_filter(centers):
+        # Final velocity clamp — even 1€ can overshoot on a single huge jump.
+        if prev is not None:
+            step = max(-MAX_STEP, min(MAX_STEP, cx - prev))
+            cx = prev + step
+        # Edge-safe clamp: centre must keep the whole crop window in-frame.
+        cx = max(lo, min(hi, cx))
+        out.append((t, cx))
+        prev = cx
     return out
 
 
