@@ -264,6 +264,25 @@ def dedupe_events(events: list[OcrEvent], *, min_gap: float = 4.0) -> list[OcrEv
 # OCR backends (lazy, optional)
 # --------------------------------------------------------------------------- #
 _reader = None  # cached backend instance
+_easyocr_ok: bool | None = None  # cached availability probe for the low-conf retry
+
+
+def _easyocr_available() -> bool:
+    """True if EasyOCR can be constructed (for the low-confidence frame retry).
+
+    Cached after the first check so the per-frame fallback path never pays for a
+    repeated import probe on a long VOD. ``False`` once it has failed once.
+    """
+    global _easyocr_ok
+    if _easyocr_ok is not None:
+        return _easyocr_ok
+    try:
+        import easyocr  # noqa: F401
+
+        _easyocr_ok = True
+    except Exception:
+        _easyocr_ok = False
+    return _easyocr_ok
 
 
 def _make_paddle(gpu: bool):
@@ -601,6 +620,17 @@ def find_text_events(src_path: str, info: MediaInfo,
                 for roi, img in _ocr_frame_images(
                         frame, tmpd, i, profile, extra_regions=extra_regions):
                     text, rconf = _ocr_image_conf(str(img), engine)
+                    # PaddleOCR misses text that EasyOCR catches on noisy/bitrate-
+                    # starved streamer VODs (per the 2025 real-world OCR shootouts:
+                    # on heavy noise EasyOCR beat PaddleOCR). When the primary
+                    # engine was PaddleOCR and this ROI came back empty or very low
+                    # confidence, retry the same image with EasyOCR before giving up.
+                    # Cheap by construction: only fires on weak frames, so clean
+                    # footage pays nothing.
+                    if (not text or rconf < 0.5) and engine == "paddleocr" and _easyocr_available():
+                        etext, econf = _ocr_image_conf(str(img), "easyocr")
+                        if len(etext) > len(text) or econf > rconf:
+                            text, rconf = etext, econf
                     if text:
                         roi_texts.append((roi, text, rconf))
                 for roi, text, rconf in roi_texts:
