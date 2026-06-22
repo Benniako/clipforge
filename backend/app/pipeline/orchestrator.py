@@ -224,10 +224,13 @@ class Engine:
         overall = (stage_idx + max(min(frac, 1.0), 0.0)) / len(STAGES) * 100.0
         with store.mutate(project_id) as p:
             p.status = ProjectStatus.processing
+            # Anchor the ETA clock on the first advance and keep it across stages.
+            started = p.progress.started_at or now()
             p.progress = JobProgress(
                 stage=STAGES[stage_idx], stage_index=stage_idx,
                 total_stages=len(STAGES), message=message,
                 pct=round(overall, 1), stages=self._stage_view(stage_idx, frac),
+                started_at=started,
             )
 
     def _paused_stage_view(self, p) -> list[dict]:

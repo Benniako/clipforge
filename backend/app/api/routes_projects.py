@@ -339,10 +339,34 @@ def get_project(project_id: str) -> Project:
     return p
 
 
+def _progress_timing(p) -> dict:
+    """Elapsed + estimated-remaining seconds for the live processing UI.
+
+    ETA extrapolates from how long it took to reach the current percent — it is
+    self-correcting as the run proceeds and stays None until there's enough
+    signal (a few percent in) to avoid wild early guesses.
+    """
+    import time
+    prog = p.progress
+    started = prog.started_at
+    processing = str(getattr(p.status, "value", p.status)) == "processing"
+    elapsed = round(time.time() - started, 1) if started else None
+    eta = None
+    if processing and started and elapsed is not None and prog.pct >= 3.0:
+        remaining = elapsed * (100.0 - prog.pct) / max(prog.pct, 1e-6)
+        eta = round(max(0.0, remaining), 1)
+    return {
+        "elapsed_seconds": elapsed,
+        "eta_seconds": eta,
+        "source_duration": round(p.source.duration, 1) if p.source else None,
+    }
+
+
 def _status_payload(project_id: str) -> dict | None:
     p = store.get(project_id)
     if not p:
         return None
+    rendered = sum(1 for c in p.clips if c.thumb_url)
     return {
         "id": p.id,
         "status": p.status,
@@ -354,6 +378,9 @@ def _status_payload(project_id: str) -> dict | None:
             "aspect": p.settings.aspect,
         },
         "system": _system_usage(),
+        "timing": _progress_timing(p),
+        "target_clips": p.settings.target_clips,
+        "rendered_count": rendered,
         "progress": p.progress.model_dump(),
         "clips": [
             {
