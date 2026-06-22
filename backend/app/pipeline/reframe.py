@@ -158,6 +158,16 @@ def _track_faces(src: str, start: float, end: float,
 
         centers: list[tuple[float, float]] = []
         last_cx: float | None = None
+        # Target tracking: remember WHICH face we're following so we only switch
+        # when the current target is gone or a new speaker clearly takes over.
+        # Without this, face-detection box jitter on the *same* speaker feeds a
+        # new cx into the smoother every active frame and the camera "breathes".
+        last_target_center: float | None = None     # cx of the followed face (pixels)
+        switch_votes = 0                            # consecutive frames a challenger has won
+        prev_speech_active = False                  # for onset detection
+        SWITCH_MARGIN = 0.35        # challenger motion must beat incumbent by this
+        SWITCH_HOLD_FRAMES = 3      # ...for this many consecutive samples (≈1s @3fps)
+        FACE_MATCH_RADIUS = 0.06    # two face-centres within this fraction = same face
         prev_gray = None
         hits = 0
         for i, fp in enumerate(frames):
@@ -168,12 +178,54 @@ def _track_faces(src: str, start: float, end: float,
             gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
             faces = faces_mod.detect_faces(img, min_size_frac=0.06)
             t_rel = i / SAMPLE_FPS
+            speech_now = _speech_active(t_rel, speech)
+            speech_onset = speech_now and not prev_speech_active
+            prev_speech_active = speech_now
+
             if len(faces):
                 hits += 1
-                # Re-aim only while someone is talking (or when we have no
-                # position yet); silence holds the current frame steady.
-                if last_cx is None or _speech_active(t_rel, speech):
-                    last_cx = _pick_face(faces, gray, prev_gray, w)
+                # Score every face (motion + area) so we can pick both the
+                # incumbent (the one we already follow, if still visible) and the
+                # strongest challenger.
+                def _score(f):
+                    return _face_motion_score(f, gray, prev_gray)
+
+                incumbent = None
+                if last_target_center is not None:
+                    # The face we were following, if it's still in frame.
+                    best_d, best_f = None, None
+                    for f in faces:
+                        fcx = (f[0] + f[2] / 2) / w
+                        d = abs(fcx - last_target_center)
+                        if d <= FACE_MATCH_RADIUS and (best_d is None or d < best_d):
+                            best_d, best_f = d, f
+                    incumbent = best_f
+
+                challenger = max(faces, key=_score)
+                chal_score = _score(challenger)
+                inc_score = _score(incumbent) if incumbent is not None else -1.0
+
+                # Decide whether to switch. We switch when:
+                #  (a) there's no incumbent yet (first face, or target left frame), or
+                #  (b) speech just started AND a challenger clearly dominates, or
+                #  (c) a challenger has beaten the incumbent by SWITCH_MARGIN for
+                #      SWITCH_HOLD_FRAMES consecutive frames (dwell hysteresis — a
+                #      single noisy frame can't yank the camera).
+                switch = False
+                if incumbent is None:
+                    switch = True
+                elif speech_onset and chal_score > inc_score + SWITCH_MARGIN:
+                    switch = True
+                elif chal_score > inc_score + SWITCH_MARGIN:
+                    switch_votes += 1
+                    if switch_votes >= SWITCH_HOLD_FRAMES:
+                        switch = True
+                else:
+                    switch_votes = 0
+
+                if (last_cx is None or switch) and (speech_now or last_cx is None):
+                    last_cx = _center_of(challenger if switch else faces[0], w)
+                    last_target_center = last_cx
                 cx = last_cx
             else:
                 sc = subject_center(img) if use_subject else None
@@ -181,6 +233,7 @@ def _track_faces(src: str, start: float, end: float,
                     hits += 1
                     if last_cx is None or _speech_active(t_rel, speech):
                         last_cx = sc
+                        last_target_center = sc
                     cx = last_cx
                 else:
                     cx = last_cx  # hold last known position; may be None
@@ -191,6 +244,29 @@ def _track_faces(src: str, start: float, end: float,
         if hits < max(2, len(frames) * 0.15):
             return None
         return centers
+
+
+def _face_motion_score(face, gray, prev_gray) -> float:
+    """Mouth-region frame-diff motion for a face box, normalised to [0,1].
+
+    Extracted so the switch logic above can score both the incumbent and a
+    challenger with the same metric. Returns 0 when there's no previous frame.
+    """
+    import cv2
+    if prev_gray is None or prev_gray.shape != gray.shape:
+        return 0.0
+    x, y, fw, fh = (int(v) for v in face)
+    my0 = y + fh // 2
+    cur = gray[my0:y + fh, x:x + fw]
+    prv = prev_gray[my0:y + fh, x:x + fw]
+    if cur.size == 0 or cur.shape != prv.shape:
+        return 0.0
+    return float(cv2.absdiff(cur, prv).mean()) / 255.0
+
+
+def _center_of(face, frame_w: int) -> float:
+    """Centre-x as a fraction of frame width for a face box."""
+    return (face[0] + face[2] / 2) / frame_w
 
 
 def _pick_face(faces, gray, prev_gray, frame_w: int) -> float:
