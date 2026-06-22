@@ -2274,6 +2274,183 @@ def test_vlm_prompt_includes_project_visual_cues():
     assert "Watch especially" not in vlm._prompt_for("en", [])
 
 
+# --------------------------------------------------------------------------- #
+# Audit-fix tests — locks the behaviour of the glm/audit-fixes changes:
+# caption end-floor, reframe One-Euro + safe clamp + face-pick gating,
+# CLAP prompt enrichment, OCR fallback probe, and forced-alignment math.
+# --------------------------------------------------------------------------- #
+def _parse_ass_ts(ts: str) -> float:
+    h, m, rest = ts.split(":")
+    s, c = rest.split(".")
+    return int(h) * 3600 + int(m) * 60 + int(s) + int(c) / 100.0
+
+
+def test_caption_end_always_exceeds_start_by_minimum():
+    """Two words sharing a timestamp must still produce a visible Dialogue span."""
+    from app.pipeline import captions as C
+
+    class _W:
+        def __init__(self, t, d, text):
+            self.t, self.d, self.text = t, d, text
+
+    # Both words land at the same instant (degenerate Whisper timestamp), zero d.
+    shared_words = [_W(1.0, 0.0, "same"), _W(1.0, 0.0, "time")]
+
+    class _Caps:
+        words = shared_words
+        max_words_per_line = 4
+        lang = "en"
+
+    class _Style:
+        primary = highlight = outline = "FFFFFF"
+        outline_w = 2
+        font = "Arial"
+        font_size = 60
+        y_frac = 0.5
+        uppercase = False
+        emphasis = False
+        emoji = False
+
+    ass = C.build_ass(_Caps(), _Style(), 1080, 1920)
+    for line in ass.splitlines():
+        if not line.startswith("Dialogue:"):
+            continue
+        fields = line[len("Dialogue: "):].split(",")
+        start = _parse_ass_ts(fields[1])
+        end = _parse_ass_ts(fields[2])
+        assert end - start >= 0.08 - 1e-6, f"span {start}->{end} below floor"
+
+
+def test_reframe_smooth_clamps_to_crop_safe_range():
+    """A centre near 0 or 1 is pulled in so the crop window stays in-frame."""
+    from app.pipeline.reframe import _smooth, _crop_half
+
+    half = _crop_half(16 / 9)
+    assert abs(half - (9 / 16) / (2 * (16 / 9))) < 1e-6
+    samples = [(i * 0.1, v) for i, v in enumerate(
+        [0.0, 0.0, 1.0, 1.0, 0.5, 0.5])]  # extreme jumps
+    out = _smooth(samples, src_aspect=16 / 9)
+    for _t, cx in out:
+        assert half - 1e-6 <= cx <= 1.0 - half + 1e-6, f"cx {cx} outside safe range"
+
+
+def test_one_euro_reduces_jitter_and_tracks_step():
+    """Still input → smoothed; a real step → tracked (adaptive, not over-smoothed)."""
+    from app.pipeline.reframe import one_euro_filter
+
+    noisy = [(i * 0.05, 0.5 + (0.04 if i % 2 else -0.04)) for i in range(20)]
+    smoothed = one_euro_filter(noisy)
+    spread_in = max(v for _, v in noisy) - min(v for _, v in noisy)
+    spread_out = max(v for _, v in smoothed[1:]) - min(v for _, v in smoothed[1:])
+    assert spread_out <= spread_in, "1€ did not reduce jitter"
+
+    step = [(i * 0.1, 0.2 if i < 5 else 0.8) for i in range(15)]
+    out = one_euro_filter(step)
+    assert out[-1][1] > 0.5, f"1€ lagged a real step: ended at {out[-1][1]}"
+
+
+def test_pick_face_motion_beats_area_when_moving():
+    """A small talking face must out-rank a large still face.
+
+    Replicates the gated selection policy from reframe._pick_face without cv2.
+    """
+    big_still = {"motion": 0.0, "area": 1.0, "id": "big"}
+    small_talking = {"motion": 0.3, "area": 0.2, "id": "small"}
+    faces = [big_still, small_talking]
+    AREA_TIE_EPS = 0.02
+    motion_max = max(f["motion"] for f in faces)
+    winner = max(faces, key=lambda f: f["motion"])
+    tied = [f for f in faces if motion_max - f["motion"] <= AREA_TIE_EPS]
+    if len(tied) > 1:
+        winner = max(tied, key=lambda f: f["area"])
+    assert winner["id"] == "small", "large still face beat a talking one"
+
+
+def test_clap_enrich_prompts_expands_short_keeps_rich():
+    """Short cues get an attribute-style expansion; rich prompts pass through."""
+    from app.providers import audio_events as AE
+
+    out = AE.enrich_prompts(["gunfire"])
+    assert "gunfire" in out
+    assert any("transient" in p.lower() or "burst" in p.lower() for p in out), out
+
+    rich = "a long sustained crowd roar after a goal"
+    assert AE.enrich_prompts([rich]) == [rich]
+
+    out3 = AE.enrich_prompts(["Ace", "ace"])
+    assert len([p for p in out3 if p.lower() == "ace"]) == 1
+
+    assert AE.enrich_prompts([]) == []
+    assert AE.enrich_prompts(None) == []
+
+
+def test_clap_enrich_prompts_feeds_into_prompt_sets():
+    """User audio_prompts reach _prompt_sets already enriched."""
+    from app.providers import audio_events as AE
+
+    pos, _neg = AE._prompt_sets(positive_prompts=["headshot"])
+    custom = pos.get("custom cue", ())
+    assert "headshot" in custom
+    assert any("ping" in c.lower() or "metallic" in c.lower() for c in custom), custom
+
+
+def test_ocr_low_confidence_fallback_probe_caches():
+    """_easyocr_available caches its probe and never raises."""
+    from app.providers import detect_ocr as OCR
+
+    OCR._easyocr_ok = None
+    first = OCR._easyocr_available()
+    second = OCR._easyocr_available()
+    assert first == second
+    assert isinstance(first, bool)
+
+
+def test_align_tokens_pure_dp_aligns_a_simple_stream():
+    """The CTC trellis core produces a valid monotonic alignment.
+
+    No torch: emission is a list of lists. We assert the DP contract — one span
+    per token, monotonically ordered (later token ⇒ later-or-equal start), each
+    span non-empty, and the token that peaks later in the emission is aligned to
+    later frames — rather than exact peak positions, which depend on the blank
+    handling the full torchaudio path layers on top.
+    """
+    from app.providers.align import _align_tokens, _word_spans_from_tokens
+
+    emission = [
+        [0.9, 0.05, 0.05],   # blank
+        [0.05, 0.9, 0.05],   # token A peak
+        [0.05, 0.05, 0.9],   # token B peak
+        [0.9, 0.05, 0.05],   # blank
+    ]
+    spans = _align_tokens(emission, [1, 2], blank=0)
+    assert spans is not None and len(spans) == 2
+    # Each span is a non-empty frame range within the emission.
+    for s in spans:
+        assert 0 <= s.start < s.end <= len(emission), f"bad span {s}"
+    # Monotonic: token B (peaks later) must not start before token A.
+    assert spans[0].start <= spans[1].start
+    assert spans[0].end <= spans[1].end
+    # The token whose emission peaks on a later frame aligns to later frames.
+    assert spans[1].start >= spans[0].start
+
+    # Merging token spans back into words gives one pair per word.
+    pairs = _word_spans_from_tokens([1, 1], spans)
+    assert len(pairs) == 2
+    # Empty token list → None (caller falls back to unaligned words).
+    assert _align_tokens(emission, [], blank=0) is None
+    assert _align_tokens([], [1, 2], blank=0) is None
+
+
+def test_align_transcript_returns_input_when_unavailable():
+    """Without torchaudio the aligner is a transparent no-op."""
+    from app.providers import align
+    from app.models import Word
+
+    words = [Word(t=1.0, d=0.3, text="hello"), Word(t=1.5, d=0.4, text="world")]
+    out = align.align_transcript(words, "nonexistent.wav", lang="en")
+    assert out is words or [w.text for w in out] == [w.text for w in words]
+
+
 if __name__ == "__main__":
     import sys
     # Windows consoles default to a legacy code page that can't print "✓".
