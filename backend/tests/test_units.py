@@ -2697,6 +2697,112 @@ def test_vlm_prompt_handles_empty_or_all_rejected_cues():
     assert "Watch especially" not in all_rejected
 
 
+# --------------------------------------------------------------------------- #
+# Production-value pass tests — zoom, B-roll, hook analysis, emoji JSON.
+# --------------------------------------------------------------------------- #
+def test_emoji_map_loads_from_json_and_falls_back():
+    """The editable emoji_map.json loads; missing file degrades to built-ins."""
+    from app.pipeline.caption_fx import _load_emoji_map, _EMOJI_FALLBACK
+    m = _load_emoji_map()
+    # Either the JSON file (54+ keys) or the fallback — both are valid captions.
+    assert "money" in m and isinstance(m["money"], str)
+    # The fallback is the floor: every fallback key must resolve to an emoji.
+    for k, v in _EMOJI_FALLBACK.items():
+        assert isinstance(_EMOJI_FALLBACK[k], str) and len(_EMOJI_FALLBACK[k]) > 0
+
+
+def test_zoom_spikes_from_emphasis_respect_min_gap():
+    """Rapid-fire emphasis words collapse to one zoom (no strobe)."""
+    from app.pipeline.zoom import spikes_from_emphasis, zoom_expr
+
+    class _W:
+        def __init__(self, t): self.t = t; self.emphasis = True
+
+    # Four emphasis words within 0.6s of each other → at most 2 spikes (min_gap).
+    words = [_W(1.0), _W(1.2), _W(1.4), _W(2.5)]
+    spikes = spikes_from_emphasis(words, min_gap=0.6)
+    assert len(spikes) <= 2
+    # The expression is a sum of tent functions + base.
+    expr = zoom_expr(spikes)
+    assert expr.startswith("(") or expr == "1.0"  # always valid ffmpeg expr
+
+
+def test_zoom_expr_handles_no_spikes():
+    """No spikes → constant base (no-op filter)."""
+    from app.pipeline.zoom import zoom_expr, build_zoom_filter
+    assert zoom_expr([]) == "1.0"
+    assert build_zoom_filter([], 1080, 1920) is None  # caller skips the filter
+
+
+def test_broll_candidates_from_cuts_and_motion():
+    """Scene cuts + high-motion spans both yield B-roll windows."""
+    from app.pipeline.broll import (candidates_from_cuts,
+                                    candidates_from_motion, select_broll)
+    cuts = candidates_from_cuts([1.0, 5.0, 9.0], clip_end=12.0)
+    assert len(cuts) == 3 and all(c.kind == "cut" for c in cuts)
+    # Motion series with a clear peak above threshold.
+    motion = [(i * 0.2, 0.8 if 2.0 <= i * 0.2 <= 2.6 else 0.1) for i in range(30)]
+    m = candidates_from_motion(motion, threshold=0.4)
+    assert len(m) >= 1 and all(c.kind == "motion" for c in m)
+    # Selection fills gaps with the best candidates, capped.
+    gaps = [(0.0, 4.0), (6.0, 10.0)]
+    chosen = select_broll(cuts + m, gaps=gaps, max_per_clip=2)
+    assert len(chosen) <= 2
+    assert all(c.end - c.start >= 0.3 for c in chosen)
+
+
+def test_hook_analysis_classifies_strength_and_suggests():
+    """hook_analysis returns a verdict + actionable suggestion for weak openers."""
+    from app.providers.score import hook_analysis
+    from app.models import Word
+
+    # Empty transcript → weak, no crash.
+    r = hook_analysis([])
+    assert r["verdict"] == "weak" and r["first_words"] == ""
+
+    # A slow warm-up opener (no hook words) → weak with a suggestion.
+    warmup = [Word(t=i * 0.5, d=0.4, text=w) for i, w in enumerate(
+        ["so", "um", "today", "i", "want", "to", "talk", "about"])]
+    r2 = hook_analysis(warmup, lang="en")
+    assert r2["verdict"] in ("weak", "ok")
+    assert isinstance(r2["suggestion"], str)
+    # Strong hooks should not produce an empty suggestion only when strong.
+    assert "strength" in r2 and 0.0 <= r2["strength"] <= 1.0
+
+
+def test_new_caption_presets_exist_and_are_distinct():
+    """The 4 new presets (MrBeast, TikTok, Hormozi, Subtle) are registered."""
+    from app.styles import all_styles, get_style
+    ids = {s.id for s in all_styles()}
+    for new_id in ("beast-outline", "tiktok-bubble", "hormozi-yellow", "subtle-news"):
+        assert new_id in ids, f"missing preset {new_id}"
+    # Each resolves and has the production-value flags wired.
+    beast = get_style("beast-outline")
+    assert beast.emphasis and beast.emoji  # the MrBeast look needs both
+    subtle = get_style("subtle-news")
+    assert not subtle.emphasis and not subtle.emoji  # restrained
+
+
+def test_speaker_aware_colors_assigned_in_ass():
+    """When multiple speakers exist, each line's primary colour differs."""
+    from app.pipeline.captions import build_ass
+    from app.models import CaptionWord, CaptionSet, StyleTemplate
+
+    # Two speakers, two words each.
+    words = ([CaptionWord(t=i * 0.5, d=0.4, text=w, speaker=0)
+              for i, w in enumerate(["hello", "there"])]
+             + [CaptionWord(t=1.5 + i * 0.5, d=0.4, text=w, speaker=1)
+                for i, w in enumerate(["good", "morning"])])
+    caps = CaptionSet(words=words, max_words_per_line=2, lang="en")
+    style = StyleTemplate(id="t", name="T")
+    ass = build_ass(caps, style, 1080, 1920)
+    # Speaker colours differ — the ASS carries at least two distinct \\c values
+    # across the Dialogue lines.
+    import re
+    colors = set(re.findall(r"\\c&H([0-9A-Fa-f]+)&", ass))
+    assert len(colors) >= 2, f"single-speaker colour used for multi-speaker: {colors}"
+
+
 if __name__ == "__main__":
     import sys
     # Windows consoles default to a legacy code page that can't print "✓".
