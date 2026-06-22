@@ -87,6 +87,25 @@ def _detect_ocr() -> str:
     return ""
 
 
+def _detect_ollama() -> bool:
+    """True when the local Ollama LLM server is reachable.
+
+    Ollama powers the optional virality re-rank. It runs as a separate process
+    on port 11434 by default; checking the module is useless (it's not a pip
+    dep), so we probe the CLI and the port. Cheap socket probe, ~50ms timeout.
+    """
+    if shutil.which("ollama"):
+        return True
+    import socket
+    try:
+        host = os.environ.get("CLIPFORGE_OLLAMA_HOST", "127.0.0.1")
+        port = int(os.environ.get("CLIPFORGE_OLLAMA_PORT", "11434"))
+        with socket.create_connection((host, port), timeout=0.05):
+            return True
+    except OSError:
+        return False
+
+
 def _detect_reframe_engine() -> str:
     """Best installed subject-tracking backend for content-aware 9:16 reframe.
 
@@ -273,6 +292,13 @@ class Settings:
     has_asd: bool = False        # LR-ASD active-speaker detection wired in
     vram_mb: int = 0        # total VRAM of the first GPU (MB)
     auto_model: bool = True  # whisper model was auto-selected for this hardware
+    # --- individual optional tools surfaced in the capability report ----------
+    has_deno: bool = False       # deno JS runtime — yt-dlp needs it for 1080p YouTube
+    has_ollama: bool = False     # local LLM server — virality re-ranking (optional)
+    has_torchaudio: bool = False # wav2vec2 forced alignment for tighter captions
+    has_paddleocr: bool = False  # OCR engine (best accuracy overall)
+    has_easyocr: bool = False    # OCR engine (best on noisy frames)
+    has_tesseract: bool = False  # OCR engine (fallback)
 
     # --- pipeline tunables ----------------------------------------------
     whisper_model: str = os.environ.get("CLIPFORGE_WHISPER_MODEL", "tiny")
@@ -329,6 +355,104 @@ class Settings:
     @property
     def has_ocr(self) -> bool:
         return bool(self.ocr_engine)
+
+    # ---------------------------------------------------------------- #
+    # Capability detail — a structured, human-readable inventory of what
+    # ClipForge found installed. Used by /api/capabilities and the UI's
+    # diagnostics panel so users can see exactly what's available and what
+    # each piece unlocks, rather than guessing from behaviour.
+    # ---------------------------------------------------------------- #
+    def capability_detail(self) -> dict:
+        """Return a grouped inventory of detected capabilities.
+
+        Shape: ``{"categories": [{name, items: [{key, available, label, impact}]}]}``.
+        ``impact`` explains what each capability unlocks (or what degrades when
+        absent) so the panel is actionable, not just a checklist.
+        """
+        def item(key: str, available: bool, label: str, impact: str) -> dict:
+            return {"key": key, "available": available,
+                    "label": label, "impact": impact}
+
+        return {"categories": [
+            {"name": "core", "items": [
+                item("ffmpeg", bool(self.ffmpeg),
+                     "ffmpeg", "Required for video decode/encode. Without it nothing renders."),
+                item("ffprobe", bool(self.ffprobe),
+                     "ffprobe", "Media probing (duration, dimensions, audio)."),
+                item("deno", self.has_deno,
+                     "deno (JS runtime)",
+                     "yt-dlp needs this to read YouTube's player. Without it, YouTube "
+                     "imports may be capped at 360p."),
+                item("yt_dlp", self.has_ytdlp,
+                     "yt-dlp", "Enables importing from a pasted URL (YouTube + ~1000 sites)."),
+            ]},
+            {"name": "transcription", "items": [
+                item("faster_whisper", self.has_whisper,
+                     "faster-whisper", "Baseline word-timed transcription (Whisper). Required for captions."),
+                item("whisperx", self.has_whisperx,
+                     "whisperX", "Upgrades captions with sub-100ms word alignment + speaker diarization."),
+                item("silero_vad", self.has_vad,
+                     "Silero VAD",
+                     "Pins captions to exact speech and drops silence hallucinations. "
+                     "Without it captions may drift."),
+                item("torchaudio", self.has_torchaudio,
+                     "torchaudio",
+                     "Optional wav2vec2 forced alignment to tighten faster-whisper timestamps."),
+                item("ollama", self.has_ollama,
+                     "Ollama",
+                     "Local LLM server for virality re-ranking. Without it, scoring uses the "
+                     "weighted-factor model only."),
+            ]},
+            {"name": "vision", "items": [
+                item("opencv", self.has_opencv,
+                     "OpenCV", "Face tracking for speaker-aware 9:16 reframing."),
+                item("reframe_engine", True,
+                     f"Reframe backend: {self.reframe_engine}",
+                     "yolo (best) > mediapipe > haar/YuNet (always available)."),
+                item("asd", self.has_asd,
+                     "LR-ASD active speaker",
+                     "Ties transcript words to the on-screen speaker for multi-person content."),
+            ]},
+            {"name": "ocr", "items": [
+                item("paddleocr", self.has_paddleocr,
+                     "PaddleOCR", "Best overall OCR accuracy for in-game HUD text."),
+                item("easyocr", self.has_easyocr,
+                     "EasyOCR", "Better than PaddleOCR on noisy/bitrate-starved frames."),
+                item("tesseract", self.has_tesseract,
+                     "Tesseract", "Fallback OCR engine."),
+                item("ocr_selected", bool(self.ocr_engine),
+                     f"Active OCR: {self.ocr_engine or 'none'}",
+                     "Selected automatically from the engines above. None = OCR detection skipped."),
+            ]},
+            {"name": "audio", "items": [
+                item("clap", self.has_clap,
+                     "CLAP", "Zero-shot audio cue detection (cheers, explosions, custom prompts)."),
+                item("panns", self.has_audio_events,
+                     "PANNs", "Cheering/laughter/explosion detection as a virality signal."),
+                item("emotion", self.has_emotion,
+                     "emotion2vec/FunASR", "Excitement/intensity virality signal from voice."),
+                item("demucs", self.has_demucs,
+                     "Demucs", "Isolates voice from music/game audio for cleaner transcription."),
+            ]},
+            {"name": "gpu", "items": [
+                item("nvidia", self.has_nvidia,
+                     "NVIDIA GPU", "Present and detected by nvidia-smi."),
+                item("cuda", self.has_cuda,
+                     "CUDA", "Available for ML acceleration (ctranslate2/torch)."),
+                item("nvenc", self.has_nvenc,
+                     "NVENC (h264)",
+                     f"ffmpeg h264_nvenc encoder. {'Used for GPU rendering.' if self.use_nvenc else 'Compile of ffmpeg includes it but no GPU is active.'}"),
+                item("av1_nvenc", self.has_av1_nvenc,
+                     "NVENC (av1)", "RTX 40/50-series AV1 hardware encoding."),
+                item("vram", self.vram_mb > 0,
+                     f"VRAM: {self.vram_mb} MB",
+                     "Total VRAM on the first GPU. Drives the auto-selected Whisper model size."),
+            ]},
+            {"name": "scenework", "items": [
+                item("scenedetect", self.has_scenedetect,
+                     "PySceneDetect", "Snaps clip boundaries to real scene cuts."),
+            ]},
+        ]}
 
     @property
     def upload_cap_bytes(self) -> int | None:
@@ -441,6 +565,13 @@ class Settings:
             "recommended_power_mode": (
                 "max_gpu" if self.has_cuda and self.vram_mb >= 12000 else "balanced"
             ),
+            # New, surfaced for the diagnostics panel.
+            "deno": self.has_deno,
+            "ollama": self.has_ollama,
+            "torchaudio": self.has_torchaudio,
+            "paddleocr": self.has_paddleocr,
+            "easyocr": self.has_easyocr,
+            "tesseract": self.has_tesseract,
         }
 
 
@@ -489,6 +620,12 @@ def get_settings() -> Settings:
         has_av1_nvenc=has_av1_nvenc,
         vram_mb=vram_mb,
         auto_model=model_env is None,
+        has_deno=bool(shutil.which("deno")),
+        has_ollama=_detect_ollama(),
+        has_torchaudio=_has_module("torchaudio"),
+        has_paddleocr=_has_module("paddleocr"),
+        has_easyocr=_has_module("easyocr"),
+        has_tesseract=bool(_has_module("pytesseract") and shutil.which("tesseract")),
         device=device,
         whisper_model=whisper_model,
         render_workers=render_workers,

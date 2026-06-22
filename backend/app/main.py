@@ -100,6 +100,20 @@ def create_app() -> FastAPI:
         """
         return {"ok": True, "version": __version__}
 
+    @app.get("/api/capabilities", tags=["meta"])
+    def capabilities() -> dict:
+        """Structured inventory of what ClipForge detected installed.
+
+        Returns two views:
+        - ``flat``: the legacy boolean/string map (back-compat for /api/health
+          consumers), now extended with deno, ollama, torchaudio, and per-OCR-engine flags.
+        - ``detail``: a grouped, human-readable breakdown with an ``impact`` line
+          per item explaining what each capability unlocks (or what degrades
+          when it's absent). Used by the UI's diagnostics panel.
+        """
+        s = settings
+        return {"flat": s.capability_report(), "detail": s.capability_detail()}
+
     app.include_router(routes_projects.router)
     app.include_router(routes_clips.router)
     app.include_router(routes_cues.router)
