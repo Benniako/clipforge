@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { api } from "../lib/api";
 import type { Clip } from "../lib/types";
 import { fmtDuration } from "../lib/format";
+import { useT } from "../lib/i18n";
 import ScoreBadge from "./ScoreBadge";
 
 interface Props {
@@ -16,10 +17,11 @@ interface Props {
 // A small "Top pick" ribbon for the strongest few clips — the at-a-glance cue
 // every social clipper uses so you know what to post first.
 function RankRibbon({ rank }: { rank?: number }) {
+  const { t } = useT();
   if (!rank || rank > 3) return null;
-  const label = rank === 1 ? "Top pick" : `#${rank}`;
+  const label = rank === 1 ? t("cc.topPick") : t("cc.rank", { rank });
   return (
-    <span className={"rank-ribbon r" + rank} title="Ranked by virality score">
+    <span className={"rank-ribbon r" + rank} title={t("cc.rankTitle")}>
       {rank === 1 ? "★ " : ""}
       {label}
     </span>
@@ -27,11 +29,12 @@ function RankRibbon({ rank }: { rank?: number }) {
 }
 
 function StatusChip({ status }: { status: Clip["status"] }) {
+  const { t } = useT();
   if (status === "ready") return null;
   const map: Record<string, [string, string]> = {
-    rendering: ["Rendering…", "var(--warn)"],
-    pending: ["Warteschlange", "var(--muted)"],
-    failed: ["Fehlgeschlagen", "var(--bad)"],
+    rendering: [t("cc.statusRendering"), "var(--warn)"],
+    pending: [t("cc.statusPending"), "var(--muted)"],
+    failed: [t("cc.statusFailed"), "var(--bad)"],
   };
   const [label, color] = map[status] ?? [status, "var(--muted)"];
   return (
@@ -42,6 +45,7 @@ function StatusChip({ status }: { status: Clip["status"] }) {
 }
 
 export default function ClipCard({ clip, projectId, rank, selected, onToggleSelect }: Props) {
+  const { t } = useT();
   const nav = useNavigate();
   const open = () => nav(`/p/${projectId}/clip/${clip.id}`);
   const ready = clip.status === "ready" && clip.export_url;
@@ -71,7 +75,7 @@ export default function ClipCard({ clip, projectId, rank, selected, onToggleSele
               e.stopPropagation();
               onToggleSelect(clip.id);
             }}
-            title="Select for montage"
+            title={t("cc.selectTitle")}
             style={{
               position: "absolute", top: 8, right: 8, width: 26, height: 26,
               borderRadius: 6, display: "grid", placeItems: "center", fontSize: 15,
@@ -91,7 +95,7 @@ export default function ClipCard({ clip, projectId, rank, selected, onToggleSele
         )}
         <span className="dur">
           {fmtDuration(clip.tightened_duration ?? clip.end - clip.start)}
-          {clip.tightened_duration != null && " Schnitt"}
+          {clip.tightened_duration != null && " " + t("cc.tightened")}
         </span>
       </div>
       <div className="clip-body">
@@ -99,7 +103,7 @@ export default function ClipCard({ clip, projectId, rank, selected, onToggleSele
           <ScoreBadge score={clip.score} />
         </div>
         <div className="clip-title" onClick={open} role="button">
-          {clip.title || "Unbenannter Clip"}
+          {clip.title || t("cc.untitled")}
         </div>
         <div className="factors">
           {clip.factors.slice(0, 2).map((f, i) => (
@@ -110,7 +114,7 @@ export default function ClipCard({ clip, projectId, rank, selected, onToggleSele
         </div>
         <div className="card-actions">
           <button className="btn sm ghost" onClick={open}>
-            Bearbeiten
+            {t("cc.edit")}
           </button>
           {ready && (
             <a
@@ -118,25 +122,25 @@ export default function ClipCard({ clip, projectId, rank, selected, onToggleSele
               href={api.downloadClipUrl(projectId, clip.id)}
               download
             >
-              Download
+              {t("cc.download")}
             </a>
           )}
           <div className="spacer" style={{ flex: 1 }} />
           <button
             className="btn sm ghost"
-            title="Mehr davon - verbessert die lokale Bewertung"
+            title={t("cc.likeTitle")}
             onClick={(e) => rate(e, "up")}
             style={{ padding: "7px 9px", color: fb === "up" ? "var(--good)" : undefined }}
           >
-            Gut
+            {t("cc.like")}
           </button>
           <button
             className="btn sm ghost"
-            title="Weniger davon"
+            title={t("cc.dislikeTitle")}
             onClick={(e) => rate(e, "down")}
             style={{ padding: "7px 9px", color: fb === "down" ? "var(--bad)" : undefined }}
           >
-            Schlecht
+            {t("cc.dislike")}
           </button>
         </div>
       </div>
