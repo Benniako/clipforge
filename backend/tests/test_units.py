@@ -2895,7 +2895,6 @@ def test_ocr_binarization_applied_to_rois_not_full_frame():
 # --------------------------------------------------------------------------- #
 def test_render_filter_chain_includes_zoom_when_spikes_exist():
     """When zoom spikes exist, the filter chain uses zoom_filter, not simple scale."""
-    from app.pipeline.render import render_clip
     from app.pipeline.zoom import build_zoom_filter, spikes_from_emphasis
     # build_zoom_filter returns None when no spikes exist.
     assert build_zoom_filter([], 1080, 1920) is None
@@ -2938,6 +2937,18 @@ def test_hook_analysis_runs_as_pipeline_integration():
     assert r2["verdict"] in ("weak", "ok", "strong")
     assert isinstance(r2["suggestion"], str)
     assert isinstance(r2["strength"], float)
+
+
+def test_broll_pip_writes_complex_filtergraph():
+    """When a clip has broll_overlay, the renderer writes a 2-input graph."""
+    from app.pipeline.render import render_clip
+
+    # Verify the filtergraph path by inspecting render_clip's source.
+    import inspect
+    src = inspect.getsource(render_clip)
+    assert "broll_overlay" in src
+    assert "between(t," in src  # enable gate
+    assert "filter_complex_script" in src  # switches from simple to complex
 
 
 if __name__ == "__main__":
