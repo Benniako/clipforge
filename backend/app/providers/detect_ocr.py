@@ -245,17 +245,34 @@ def scene_frame_times(src_path: str, duration: float, *,
 
 
 def dedupe_events(events: list[OcrEvent], *, min_gap: float = 4.0) -> list[OcrEvent]:
-    """Collapse repeats of the same label that persist across sampled frames
-    (a banner shows for several seconds → one event at its first sighting)."""
-    # Strongest-first within a tie so a high-confidence ROI crop survives over a
-    # weaker full-frame hit at the same instant; then by time for the gap walk.
-    events = sorted(events, key=lambda e: (e.t, e.label, -e.confidence))
-    kept: list[OcrEvent] = []
-    last: dict[str, float] = {}
+    """Collapse repeats of the same label that persist across sampled frames,
+    keeping the *highest-confidence* event within the gap window.
+
+    A banner showing for several seconds produces multiple OCR hits; we only
+    emit one event per label within ``min_gap`` seconds, choosing the strongest
+    read rather than the first (so a clean full-frame read beats a blurry one)."""
+    if not events:
+        return []
+    events = sorted(events, key=lambda e: e.t)
+    groups: list[list[OcrEvent]] = []
+    cur: list[OcrEvent] = []
     for e in events:
-        if e.t - last.get(e.label, -1e9) >= min_gap:
-            kept.append(e)
-        last[e.label] = e.t
+        if cur and e.t - cur[0].t >= min_gap:
+            groups.append(cur)
+            cur = []
+        cur.append(e)
+    if cur:
+        groups.append(cur)
+    kept: list[OcrEvent] = []
+    for grp in groups:
+        # Within each temporal group, keep the highest-confidence event per
+        # unique label (a frame may trigger multiple labels from one text read).
+        best_per_label: dict[str, OcrEvent] = {}
+        for e in grp:
+            prev = best_per_label.get(e.label)
+            if prev is None or e.confidence > prev.confidence:
+                best_per_label[e.label] = e
+        kept.extend(best_per_label.values())
     kept.sort(key=lambda e: e.t)
     return kept
 
@@ -311,7 +328,7 @@ def _hashes_match(a: str | None, b: str | None) -> bool:
     return (diff / len(a)) <= 0.05
 
 
-def _make_paddle(gpu: bool):
+def _make_paddle(gpu: bool, lang: str = "en"):
     """Construct a PaddleOCR reader across the 2.x and 3.x APIs.
 
     PaddleOCR 3.0 (2025) is a non-backwards-compatible rewrite: it dropped the
@@ -335,45 +352,50 @@ def _make_paddle(gpu: bool):
             text_detection_model_name="PP-OCRv6_medium_det",
             text_recognition_model_name="PP-OCRv6_medium_rec",
             engine="transformers",
-            lang="en",
+            lang=lang,
             use_textline_orientation=False,
             device=device,
         )
     except Exception as e:
         log.info("PaddleOCR v6 unavailable, falling back (%s)", e)
     for kwargs in (
-        # 3.x: angle classifier off (we only read horizontal banners), pick device.
-        {"lang": "en", "use_textline_orientation": False, "device": device},
-        {"lang": "en", "use_textline_orientation": False},
-        # 2.x: legacy flags.
-        {"lang": "en", "use_angle_cls": False, "show_log": False, "use_gpu": gpu},
-        {"lang": "en"},
+        {"lang": lang, "use_textline_orientation": False, "device": device},
+        {"lang": lang, "use_textline_orientation": False},
+        {"lang": lang, "use_angle_cls": False, "show_log": False, "use_gpu": gpu},
+        {"lang": lang},
     ):
         try:
             return PaddleOCR(**kwargs)
         except Exception as e:
             log.info("PaddleOCR constructor fallback failed (%s): %s", kwargs, e)
-    return PaddleOCR(lang="en")  # last resort — let a real error surface
+    return PaddleOCR(lang=lang)  # last resort — let a real error surface
 
 
-def _make_easyocr(gpu: bool):
+def _make_easyocr(gpu: bool, langs: list[str] | None = None):
     import easyocr
 
-    return easyocr.Reader(["en"], gpu=gpu, verbose=False)
+    return easyocr.Reader(langs or ["en"], gpu=gpu, verbose=False)
 
 
-def _get_reader(engine: str):
+def _get_reader(engine: str, lang: str = "en"):
     global _reader
     if _reader is not None:
         return _reader
     s = get_settings()
     gpu = s.device == "cuda"
+    ocr_langs = {"de": ["de", "en"], "en": ["en"]}.get(lang[:2].lower(), ["en"])
     attempts = []
     if engine == "paddleocr":
-        attempts.append(("paddleocr", lambda: _make_paddle(gpu)))
-        attempts.append(("easyocr", lambda: _make_easyocr(gpu)))
+        attempts.append(("paddleocr", lambda: _make_paddle(gpu, lang)))
+        # GPU→CPU fallback per engine (#9): when GPU PaddleOCR fails (OOM,
+        # runtime), retry with CPU PaddleOCR before falling to EasyOCR. A CUDA
+        # OOM shouldn't skip PaddleOCR entirely — CPU inference is slower but
+        # still more accurate than EasyOCR on clean HUD text.
+        if gpu:
+            attempts.append(("paddleocr", lambda: _make_paddle(False, lang)))
+        attempts.append(("easyocr", lambda: _make_easyocr(gpu, ocr_langs)))
     elif engine == "easyocr":
-        attempts.append(("easyocr", lambda: _make_easyocr(gpu)))
+        attempts.append(("easyocr", lambda: _make_easyocr(gpu, ocr_langs)))
     elif engine == "tesseract":
         attempts.append(("tesseract", lambda: None))
     for kind, make in attempts:
@@ -453,14 +475,26 @@ def _paddle_text(reader, path: str) -> str:
     return _paddle_read(reader, path)[0]
 
 
-def _ocr_image(path: str, engine: str) -> str:
+def _is_garbled(text: str, threshold: float = 0.40) -> bool:
+    """True when >``threshold`` of the characters are non-alphanumeric/garbage.
+
+    Game HUD text is clean alphanumeric words and punctuation. A read full of
+    stray characters (gunfire-in-the-mouth OCR) should never produce a match.
+    """
+    if not text:
+        return True
+    clean = sum(1 for c in text if c.isalnum() or c in "'-._")
+    return clean / len(text) < (1.0 - threshold)
+
+
+def _ocr_image(path: str, engine: str, lang: str = "en") -> str:
     """Read all text from one image with the active backend → one string."""
-    return _ocr_image_conf(path, engine)[0]
+    return _ocr_image_conf(path, engine, lang)[0]
 
 
-def _ocr_image_conf(path: str, engine: str) -> tuple[str, float]:
+def _ocr_image_conf(path: str, engine: str, lang: str = "en") -> tuple[str, float]:
     """Read text and a 0..1 recognition confidence (0.0 when unknown)."""
-    kind, reader = _get_reader(engine)
+    kind, reader = _get_reader(engine, lang)
     try:
         if kind == "paddleocr":
             return _paddle_read(reader, path)
@@ -470,18 +504,20 @@ def _ocr_image_conf(path: str, engine: str) -> tuple[str, float]:
             import pytesseract
             from PIL import Image
 
+            tesseract_lang = "deu" if (lang or "").lower().startswith("de") else "eng"
             # --psm 11: sparse text in any order. Game HUDs are isolated words
             # ("VICTORY", "MATCH WON") and short banners, not dense paragraphs.
             # The default PSM 3 assumes a book page and hallucinates punctuation/
             # garbage trying to find sentence structure where there is none.
-            return (pytesseract.image_to_string(Image.open(path), config="--psm 11"),
+            return (pytesseract.image_to_string(
+                Image.open(path), config=f"--psm 11 --lang {tesseract_lang}"),
                     0.0)
     except Exception as e:  # one bad frame mustn't sink detection
         log.warning("ocr read failed for %s: %s", path, e)
     return "", 0.0
 
 
-def _ocr_batch(paths: list[str], engine: str) -> list[tuple[str, float]]:
+def _ocr_batch(paths: list[str], engine: str, lang: str = "en") -> list[tuple[str, float]]:
     """Read text for many images in one engine call (GPU batching).
 
     EasyOCR and PaddleOCR both accept list inputs and run them through the net
@@ -491,8 +527,8 @@ def _ocr_batch(paths: list[str], engine: str) -> list[tuple[str, float]]:
     optimisation, never a correctness dependency.
     """
     if len(paths) <= 1:
-        return [_ocr_image_conf(p, engine) for p in paths]
-    kind, reader = _get_reader(engine)
+        return [_ocr_image_conf(p, engine, lang) for p in paths]
+    kind, reader = _get_reader(engine, lang)
     try:
         if kind == "easyocr" and reader is not None:
             results = reader.readtext(paths, detail=1, batch_size=len(paths))
@@ -629,6 +665,17 @@ def _ocr_frame_images(frame: Path, tmpd: Path, idx: int,
                     gray = cv2.cvtColor(np.array(crop), cv2.COLOR_RGB2GRAY)
                     _, binarized = cv2.threshold(
                         gray, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
+                    # Otsu assumes bimodal histograms (bright text + dark bg).
+                    # When a ROI is mostly one tone (light-on-light HUD, a bright
+                    # area), Otsu can produce >90% white or black — useless for
+                    # OCR. Fall back to a manual THRESH_BINARY at the mean pixel
+                    # value, which cleanly separates faint text from its bg.
+                    if binarized.size > 0:
+                        white_frac = float(binarized.mean()) / 255.0
+                        if white_frac > 0.90 or white_frac < 0.10:
+                            mean_val = max(gray.mean(), 1.0)
+                            _, binarized = cv2.threshold(
+                                gray, mean_val, 255, cv2.THRESH_BINARY)
                     crop = Image.fromarray(binarized)
                 except Exception:
                     # cv2 absent or the crop is degenerate — fall back to the
@@ -678,15 +725,31 @@ def find_text_events(src_path: str, info: MediaInfo,
         return []
     cfg = getattr(settings, "game_config", None)
     scene_times = scene_frame_times(src_path, info.duration)
+    # Adaptive frame sampling (#1): when scene cuts are abundant, we sample
+    # more densely (cuts = visual context changes = new text opportunities).
+    # Sparse-cuts talking heads need less frequent OCR.
+    cut_density = min(len(scene_times) / max(info.duration, 1), 1.0)
+    adaptive_every = max(every - cut_density * 1.0, 0.8)  # 2s→0.8s for dense cuts
     focused = list(focus_times or []) + scene_times
-    times = focused_frame_times(info.duration, focused or None, every=every)
+    times = focused_frame_times(info.duration, focused or None,
+                                every=adaptive_every)
     if not times:
         return []
+    lang = getattr(settings, "language", "en") or "en"
     engine = s.ocr_engine
     profile = getattr(settings, "game_profile", "generic")
     extra_regions = getattr(cfg, "visual_rois", []) if cfg is not None else []
     manual_cues = getattr(cfg, "visual_text_cues", []) if cfg is not None else []
     events: list[OcrEvent] = []
+    # Persistent frame hash cache (#7): a static "MATCH WON" screen sitting for
+    # 10s gets sampled multiple times. We cache the perceptual hash of each ROI
+    # globally for the scan so a repeat gets the cached OCR result, not a fresh
+    # inference. Reset per source path.
+    prev_crops: dict[str, tuple[str | None, str, float]] = {}
+    # ROI lifetime tracking (#3): if a user-calibrated ROI returns no text for
+    # N consecutive frames, stop sampling it for the rest of the scan.
+    roi_life: dict[str, int] = {}
+    MAX_ROI_DEAD = 4  # skip after this many consecutive empty reads
     try:
         with tempfile.TemporaryDirectory() as tmp:
             tmpd = Path(tmp)
@@ -700,33 +763,40 @@ def find_text_events(src_path: str, info: MediaInfo,
                     log.warning("ocr frame grab failed at %.1fs: %s", t, e)
                     continue
                 roi_texts = []
-                # Inter-frame diffing: a static "MATCH WON" screen sitting for 10s
-                # would otherwise be OCR'd 5 times on identical pixels. We hash
-                # each crop and reuse the previous result when it hasn't changed
-                # (>=95% similar), bypassing the engine entirely.
-                prev_crops: dict[str, tuple[str | None, str, float]] = {}
                 for roi, img in _ocr_frame_images(
                         frame, tmpd, i, profile, extra_regions=extra_regions):
+                    # ROI lifetime check: skip ROIs that have been empty for
+                    # MAX_ROI_DEAD consecutive frames (e.g. a killfeed that
+                    # disappeared after the match ended).
+                    dead = roi_life.get(roi, 0)
+                    if dead >= MAX_ROI_DEAD:
+                        continue
                     h = _crop_hash(str(img))
-                    cached = prev_crops.get(roi)
+                    cache_key = f"{roi}@{src_path}"
+                    cached = prev_crops.get(cache_key, prev_crops.get(roi))
                     if cached and _hashes_match(h, cached[0]):
                         text, rconf = cached[1], cached[2]
                     else:
-                        text, rconf = _ocr_image_conf(str(img), engine)
+                        text, rconf = _ocr_image_conf(str(img), engine, lang)
+                        # Garbled-text rejection (#5): if OCR returned garbage
+                        # (gunfire noise), drop it before it becomes a match.
+                        if _is_garbled(text):
+                            text, rconf = "", 0.0
                         # PaddleOCR misses text that EasyOCR catches on noisy/bitrate-
-                        # starved streamer VODs (per the 2025 real-world OCR shootouts:
-                        # on heavy noise EasyOCR beat PaddleOCR). When the primary
-                        # engine was PaddleOCR and this ROI came back empty or very low
-                        # confidence, retry the same image with EasyOCR before giving up.
-                        # Cheap by construction: only fires on weak frames, so clean
-                        # footage pays nothing.
+                        # starved streamer VODs. When the primary engine was PaddleOCR
+                        # and this ROI came back empty or very low confidence, retry
+                        # with EasyOCR.
                         if (not text or rconf < 0.5) and engine == "paddleocr" and _easyocr_available():
-                            etext, econf = _ocr_image_conf(str(img), "easyocr")
+                            etext, econf = _ocr_image_conf(str(img), "easyocr", lang)
                             if len(etext) > len(text) or econf > rconf:
                                 text, rconf = etext, econf
                         prev_crops[roi] = (h, text, rconf)
+                    # Update ROI lifetime: if empty, increment the dead counter.
                     if text:
+                        roi_life[roi] = 0
                         roi_texts.append((roi, text, rconf))
+                    else:
+                        roi_life[roi] = dead + 1
                 for roi, text, rconf in roi_texts:
                     # Prefer the engine's real recognition confidence; fall back
                     # to a ROI prior only when the backend doesn't report one
