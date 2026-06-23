@@ -1,12 +1,13 @@
-"""Optional local LLM (Ollama) for punchier titles/hooks — no cloud, no API key.
+"""LLM provider — local (Ollama) or cloud (OpenModel.ai) for viral titles, descriptions, hashtags.
 
-If an Ollama server is reachable (default http://localhost:11434) it's used to
-write a scroll-stopping title from the clip's transcript. If it isn't running,
-every call returns None and the caller keeps the heuristic title — so this is a
-pure, safe upgrade. Runs on the user's own GPU via Ollama.
+Two providers, tried in priority order:
+1. OpenModel.ai (when CLIPFORGE_OPENMODEL_KEY is set) — cloud, supports any model
+2. Ollama (local, http://localhost:11434) — free, fully offline
 
-Enable by installing Ollama (https://ollama.com) and pulling a small model, e.g.
-``ollama pull llama3.2``. Configure with CLIPFORGE_OLLAMA_URL / CLIPFORGE_LLM_MODEL.
+Both run the same prompts and produce the same output types. The caller never
+needs to know which provider is active; available() returns True when either
+is reachable. Graceful degradation: both failing means every function returns
+None and the heuristic fallbacks are used.
 """
 from __future__ import annotations
 
@@ -19,13 +20,17 @@ import urllib.request
 
 log = logging.getLogger("clipforge.llm")
 
-_URL = os.environ.get("CLIPFORGE_OLLAMA_URL", "http://localhost:11434").rstrip("/")
-# Empty = auto-pick the strongest installed model (see _PREFERRED).
-_MODEL = os.environ.get("CLIPFORGE_LLM_MODEL", "")
+# --- Provider configuration ------------------------------------------------
+# Ollama (local).
+_OLLAMA_URL = os.environ.get("CLIPFORGE_OLLAMA_URL", "http://localhost:11434").rstrip("/")
+# OpenModel.ai (cloud gateway, OpenAI-compatible API).
+_OPENMODEL_KEY = os.environ.get("CLIPFORGE_OPENMODEL_KEY", "")
+_OPENMODEL_URL = os.environ.get("CLIPFORGE_OPENMODEL_URL",
+                                "https://api.openmodel.ai/v1").rstrip("/")
+_OPENMODEL_MODEL = os.environ.get("CLIPFORGE_OPENMODEL_MODEL", "qwen3-32b")
 
-# Auto-pick order when CLIPFORGE_LLM_MODEL isn't set. Within each family the
-# largest installed size wins, so pulling qwen3:32b later automatically upgrades
-# the local title/virality model.
+# Auto-pick order for Ollama models (when CLIPFORGE_LLM_MODEL isn't set).
+_MODEL = os.environ.get("CLIPFORGE_LLM_MODEL", "")
 _FAMILY_RANK = (
     "qwen3", "gemma4", "llama3.3", "llama3.1", "gemma3", "qwen2.5",
     "mistral", "llama3.2", "deepseek-r1",
@@ -33,7 +38,8 @@ _FAMILY_RANK = (
 _VISION_HINTS = ("vl", "vision", "llava", "moondream", "minicpm-v")
 _SIZE_RE = re.compile(r"(?::|-)(\d+(?:\.\d+)?)b\b", re.IGNORECASE)
 
-_avail: tuple[float, bool, str | None] | None = None  # (checked_at, ok, model)
+# Cache: (timestamp, provider_name, model_name)
+_avail: tuple[float, str | None, str | None] | None = None
 
 
 def _size_b(tag: str) -> float:
@@ -68,44 +74,73 @@ def _refresh() -> None:
     now = time.time()
     if _avail and now - _avail[0] < 60:
         return
-    ok, model = False, None
+    _avail = (now, None, None)
+    # Priority 1: OpenModel.ai (when API key is set).
+    if _OPENMODEL_KEY:
+        try:
+            req = urllib.request.Request(
+                _OPENMODEL_URL + "/models",
+                headers={"Authorization": f"Bearer {_OPENMODEL_KEY}"},
+            )
+            with urllib.request.urlopen(req, timeout=3.0) as r:
+                if r.status == 200:
+                    _avail = (now, "openmodel", _OPENMODEL_MODEL)
+                    return
+        except Exception:
+            log.debug("OpenModel.ai unavailable; falling back to Ollama")
+    # Priority 2: Ollama (local).
     try:
-        with urllib.request.urlopen(_URL + "/api/tags", timeout=1.5) as r:
+        with urllib.request.urlopen(_OLLAMA_URL + "/api/tags", timeout=1.5) as r:
             data = json.loads(r.read())
             tags = [m.get("name", "") for m in data.get("models", [])]
             model = _resolve_model([t for t in tags if t])
-            ok = r.status == 200 and model is not None
+            if r.status == 200 and model is not None:
+                _avail = (now, "ollama", model if not _MODEL else _MODEL)
     except Exception:
-        ok, model = False, None
-    _avail = (now, ok, model)
+        pass
 
 
 def available() -> bool:
-    """True if an Ollama server answers and has a usable model. Cached 60s."""
+    """True when either OpenModel.ai (key set) or Ollama (server running) is reachable."""
     _refresh()
-    return _avail[1] if _avail else False
+    return _avail[1] is not None if _avail else False
 
 
 def active_model() -> str | None:
-    """The model that will actually write titles, or None."""
+    """The model name that will be used, or None."""
     _refresh()
     return _avail[2] if _avail and _avail[1] else None
 
 
+def active_provider() -> str | None:
+    """'openmodel' or 'ollama', or None when nothing is available."""
+    _refresh()
+    return _avail[1] if _avail else None
+
+
 def _generate(prompt: str, *, timeout: float = 30.0) -> str | None:
+    """Call whichever LLM provider is active — OpenModel.ai cloud or Ollama local."""
+    model = active_model()
+    if not model or not active_provider():
+        return None
+
+    provider = active_provider()
+    if provider == "openmodel":
+        return _generate_openmodel(prompt, model, timeout=timeout)
+    return _generate_ollama(prompt, model, timeout=timeout)
+
+
+def _generate_ollama(prompt: str, model: str, *, timeout: float = 30.0) -> str | None:
     # "think": False — reasoning models (qwen3, deepseek-r1) otherwise spend
     # the whole token budget thinking and return an empty response. Models or
     # Ollama versions that don't know the flag get a retry without it (their
     # inline <think> text, if any, is stripped by _clean_title).
-    model = active_model()
-    if not model:
-        return None
     payload: dict = {
         "model": model, "prompt": prompt, "stream": False, "think": False,
         "options": {"temperature": 0.7, "num_predict": 80},
     }
     for body in (payload, {k: v for k, v in payload.items() if k != "think"}):
-        req = urllib.request.Request(_URL + "/api/generate",
+        req = urllib.request.Request(_OLLAMA_URL + "/api/generate",
                                      data=json.dumps(body).encode(),
                                      headers={"Content-Type": "application/json"})
         try:
@@ -114,13 +149,51 @@ def _generate(prompt: str, *, timeout: float = 30.0) -> str | None:
         except urllib.error.HTTPError as e:
             detail = e.read().decode("utf-8", errors="ignore")
             if "think" in detail.lower() and "think" in body:
-                continue  # flag unsupported here — retry plain
+                continue
             log.warning("ollama generate failed: %s %s", e, detail[:200])
             return None
         except Exception as e:
             log.warning("ollama generate failed: %s", e)
             return None
     return None
+
+
+def _generate_openmodel(prompt: str, model: str, *, timeout: float = 30.0) -> str | None:
+    """Call OpenModel.ai's OpenAI-compatible /v1/chat/completions endpoint.
+
+    Uses a simple system/user message format. The response is parsed from the
+    standard OpenAI response shape (choices[0].message.content).
+    """
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": "You are a helpful short-form video content assistant."},
+            {"role": "user", "content": prompt},
+        ],
+        "temperature": 0.7,
+        "max_tokens": 120,
+        "stream": False,
+    }
+    req = urllib.request.Request(
+        _OPENMODEL_URL + "/chat/completions",
+        data=json.dumps(payload).encode(),
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {_OPENMODEL_KEY}",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            body = json.loads(r.read())
+            content = body.get("choices", [{}])[0].get("message", {}).get("content", "")
+            return content.strip() or None
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode("utf-8", errors="ignore")
+        log.warning("openmodel generate failed: %s %s", e, detail[:200])
+        return None
+    except Exception as e:
+        log.warning("openmodel generate failed: %s", e)
+        return None
 
 
 _THINK_RE = re.compile(r"<think>.*?(?:</think>|$)", re.DOTALL)

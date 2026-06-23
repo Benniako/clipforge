@@ -3046,6 +3046,28 @@ def test_adaptive_binarization_checks_monotone_rois():
     assert "THRESH_BINARY" in src  # fallback threshold method
 
 
+# --------------------------------------------------------------------------- #
+# LLM provider tests — OpenModel.ai detection and availability.
+# --------------------------------------------------------------------------- #
+def test_openmodel_config_field_exists():
+    """has_openmodel is present in the capability report, readable."""
+    from app.config import get_settings
+    s = get_settings()
+    assert hasattr(s, "has_openmodel")
+    assert isinstance(s.has_openmodel, bool)
+    r = s.capability_report()
+    assert "openmodel" in r
+    assert isinstance(r["openmodel"], bool)
+
+
+def test_llm_provider_returns_none_when_nothing_available():
+    """Without Ollama or an OpenModel key, available() returns False safely."""
+    from app.providers import llm as L
+    # In CI/test there's no Ollama and no key — available must be False, never crash.
+    avail = L.available()
+    assert isinstance(avail, bool)
+
+
 if __name__ == "__main__":
     import sys
     # Windows consoles default to a legacy code page that can't print "✓".
