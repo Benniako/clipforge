@@ -12,6 +12,14 @@ import Upload from "./screens/Upload";
 function Caps({ health }: { health: Health | null }) {
   if (!health) return null;
   const c = health.capabilities;
+  // Count active capabilities
+  const count = Object.entries(c).filter(([k, v]) =>
+    typeof v === "boolean" && v === true && !k.includes("auto_model")
+  ).length;
+  const total = Object.entries(c).filter(([k, v]) =>
+    typeof v === "boolean" && !k.includes("auto_model")
+  ).length;
+  const pct = total > 0 ? Math.round((count / total) * 100) : 0;
   const engine =
     c.transcription === "whisperx" ? "WhisperX" : c.transcription === "whisper" ? "Whisper" : "Synthetisch";
   const asr =
@@ -65,6 +73,9 @@ function Caps({ health }: { health: Health | null }) {
           {label}
         </span>
       ))}
+      <span className={"caps-badge " + (pct >= 80 ? "ok" : pct >= 50 ? "warn" : "bad")}>
+        {count}/{total}
+      </span>
     </div>
   );
 }
