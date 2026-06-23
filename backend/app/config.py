@@ -302,6 +302,7 @@ class Settings:
     # --- individual optional tools surfaced in the capability report ----------
     has_deno: bool = False       # deno JS runtime — yt-dlp needs it for 1080p YouTube
     has_ollama: bool = False     # local LLM server — virality re-ranking (optional)
+    has_openmodel: bool = False  # OpenModel.ai API key — cloud LLM replacement
     has_torchaudio: bool = False # wav2vec2 forced alignment for tighter captions
     has_paddleocr: bool = False  # OCR engine (best accuracy overall)
     has_easyocr: bool = False    # OCR engine (best on noisy frames)
@@ -409,6 +410,9 @@ class Settings:
                      "Ollama",
                      "Local LLM server for virality re-ranking. Without it, scoring uses the "
                      "weighted-factor model only."),
+                item("openmodel", self.has_openmodel,
+                     "OpenModel.ai",
+                     "Cloud LLM gateway (set CLIPFORGE_OPENMODEL_KEY). Overrides Ollama when set."),
             ]},
             {"name": "vision", "items": [
                 item("opencv", self.has_opencv,
@@ -579,6 +583,7 @@ class Settings:
             "paddleocr": self.has_paddleocr,
             "easyocr": self.has_easyocr,
             "tesseract": self.has_tesseract,
+            "openmodel": self.has_openmodel,
         }
 
 
@@ -629,6 +634,7 @@ def get_settings() -> Settings:
         auto_model=model_env is None,
         has_deno=bool(shutil.which("deno")),
         has_ollama=_detect_ollama(),
+        has_openmodel=bool(os.environ.get("CLIPFORGE_OPENMODEL_KEY", "")),
         has_torchaudio=_has_module("torchaudio"),
         has_paddleocr=_has_module("paddleocr"),
         has_easyocr=_has_module("easyocr"),
