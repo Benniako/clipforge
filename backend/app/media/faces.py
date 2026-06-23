@@ -25,6 +25,24 @@ _YUNET_MIN_BYTES = 100_000          # sanity floor for a complete download
 _lock = threading.Lock()            # FaceDetectorYN instances aren't thread-safe
 _yunet = None                       # cached detector ("unavailable" = gave up)
 _haar = None
+_yolo_face = None                   # cached ultralytics YOLO model or False
+
+
+def _get_yolo_face():
+    global _yolo_face
+    if _yolo_face is not None:
+        return _yolo_face
+    try:
+        from ultralytics import YOLO
+        # YOLOv8n-face: lightweight face-specific model (~3MB, runs at 200+ fps
+        # on RTX. Better accuracy than YuNet, especially for profile/occluded
+        # faces and the small corner facecam that video reframing needs.
+        _yolo_face = YOLO("yolov8n-face.pt")
+        return _yolo_face
+    except Exception as e:
+        log.info("YOLOv8-face unavailable (%s); using YuNet/Haar", e)
+        _yolo_face = False
+        return None
 
 
 def _yunet_path() -> Path:
@@ -92,11 +110,32 @@ def detect_faces(img_bgr, *, min_size_frac: float = 0.03) -> list[tuple[int, int
 
     ``min_size_frac`` is the minimum face width as a fraction of frame width —
     keeps tiny in-game character faces from registering.
+
+    Detection priority: YOLOv8-face (best, GPU) → YuNet (ONNX, GPU) → Haar (CPU).
     """
     import cv2
 
     h, w = img_bgr.shape[:2]
     min_px = max(int(w * min_size_frac), 10)
+
+    # 1. YOLOv8-face (GPU via ultralytics) — best accuracy, handles profile faces.
+    yolo = _get_yolo_face()
+    if yolo is not None:
+        try:
+            results = yolo(img_bgr, conf=0.4, iou=0.5, verbose=False)
+            out = []
+            for r in results:
+                for box in (r.boxes or []):
+                    x1, y1, x2, y2 = (int(v) for v in box.xyxy[0])
+                    fw, fh = x2 - x1, y2 - y1
+                    if fw >= min_px and fh >= min_px:
+                        out.append((x1, y1, fw, fh))
+            if out:
+                return out
+        except Exception:
+            log.debug("YOLO face detection failed; falling through to YuNet")
+
+    # 2. YuNet (ONNX, OpenCV DNN).
     with _lock:
         det = _get_yunet()
         if det is not None:
@@ -106,13 +145,13 @@ def detect_faces(img_bgr, *, min_size_frac: float = 0.03) -> list[tuple[int, int
             for f in (faces if faces is not None else []):
                 fx, fy, fw, fh = (int(round(v)) for v in f[:4])
                 if fw >= min_px and fh >= min_px:
-                    # clamp — YuNet can return boxes slightly outside the frame
                     fx, fy = max(fx, 0), max(fy, 0)
                     out.append((fx, fy, min(fw, w - fx), min(fh, h - fy)))
-            return out
+            if out:
+                return out
+
+    # 3. Haar cascade (CPU, fallback).
     gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
-    # CascadeClassifier isn't thread-safe either — the pipeline worker and an
-    # editor-triggered reframe can call this concurrently.
     with _lock:
         faces = _get_haar().detectMultiScale(gray, scaleFactor=1.15, minNeighbors=5,
                                              minSize=(max(min_px, 30), max(min_px, 30)))
