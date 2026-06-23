@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import tempfile
 import time
+import uuid
 import zipfile
 from pathlib import Path
 
@@ -682,10 +683,10 @@ def mark_highlight(project_id: str, timestamp: float, duration: float = 30.0):
 
     from ..models import Clip, ClipStatus, CaptionSet, Reframe, LayoutType, ReframeKeyframe
     clip = Clip(
-        id=__import__("uuid").uuid4().hex[:12],
+        id=uuid.uuid4().hex[:12],
         start=round(max(timestamp - duration / 2, 0), 3),
         end=round(min(timestamp + duration / 2, project.source.duration), 3),
-        title=f"Highlight @ {__import__('time').strftime('%H:%M:%S', __import__('time').gmtime(timestamp))}",
+        title=f"Highlight @ {time.strftime('%H:%M:%S', time.gmtime(timestamp))}",
         kind="talking", status=ClipStatus.pending,
         captions=CaptionSet(),
         reframe=Reframe(layout=LayoutType.fill, keyframes=[ReframeKeyframe(t=0.0, cx=0.5)]),
