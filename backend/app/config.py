@@ -244,11 +244,18 @@ def _auto_whisper_model(has_cuda: bool, vram_mb: int, cpu: int) -> str:
 
     GPU (CUDA usable by ctranslate2) → large-v3 (or medium on a small card).
     CPU only → scale by core count (large-v3 on CPU is impractically slow).
+
+    Accounts for concurrent GPU load: CLAP (~1GB) and Ollama (~1GB) run
+    alongside the transcriber, so the VRAM budget is 2GB less than total.
+    Without this reserve, a whisper-large model loads on a 6GB card, then
+    CLAP OOMs the pipeline 30 seconds later.
     """
     if has_cuda:
-        # large-v3-turbo: ~2x faster than large-v3 at +0.3% WER — the better
-        # default on a capable card. medium on a small GPU.
-        return "large-v3-turbo" if vram_mb >= 4500 else "medium"
+        # Reserve 2 GB for other GPU models (CLAP, Ollama) that load during
+        # or after transcription. Without this guard, a card with 6 GB picks
+        # large-v3-turbo, and CLAP OOMs before scoring a single clip.
+        budget = max(vram_mb - 2000, 0)
+        return "large-v3-turbo" if budget >= 4500 else "medium"
     if cpu >= 12:
         return "small"
     if cpu >= 6:
