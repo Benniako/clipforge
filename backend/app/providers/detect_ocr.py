@@ -328,6 +328,22 @@ def _hashes_match(a: str | None, b: str | None) -> bool:
     return (diff / len(a)) <= 0.05
 
 
+def _try_with_timeout(fn, timeout: float = 15.0):
+    """Run ``fn`` in a thread and kill it if it exceeds ``timeout`` seconds.
+
+    GPU model loads (PaddleOCR, EasyOCR) can hang indefinitely when the CUDA
+    runtime misbehaves — a deadlocked GPU load blocks the entire pipeline. This
+    wraps the constructor in a timeout so the CPU fallback gets a chance.
+    """
+    import concurrent.futures
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+        fut = ex.submit(fn)
+        try:
+            return fut.result(timeout=timeout)
+        except concurrent.futures.TimeoutError:
+            raise TimeoutError(f"GPU model load timed out after {timeout}s")
+
+
 def _make_paddle(gpu: bool, lang: str = "en"):
     """Construct a PaddleOCR reader across the 2.x and 3.x APIs.
 
@@ -400,7 +416,9 @@ def _get_reader(engine: str, lang: str = "en"):
         attempts.append(("tesseract", lambda: None))
     for kind, make in attempts:
         try:
-            _reader = (kind, make())
+            # GPU model loads can hang indefinitely (CUDA deadlock). Wrap the
+            # constructor with a timeout so the CPU fallback gets a chance.
+            _reader = (kind, _try_with_timeout(make, timeout=15.0))
             return _reader
         except Exception as e:
             log.warning("%s OCR unavailable, trying fallback if present: %s", kind, e)
