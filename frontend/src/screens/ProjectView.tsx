@@ -122,6 +122,14 @@ export default function ProjectView() {
           <button className="btn primary sm" onClick={() => setViewMode("swipe")}>
             {t("pv.swipe")}
           </button>
+          {/* Streamer.bot webhook: show the mark-highlight URL so users
+              can copy it into Streamer.bot's HTTP request action. */}
+          <span className="muted tiny" style={{ marginLeft: 12, fontSize: 11 }}>
+            🎯 Webhook:
+            <code style={{ marginLeft: 6, fontSize: 10, background: "var(--bg)", padding: "2px 6px", borderRadius: 4 }}>
+              POST /api/projects/{projectId}/mark-highlight?timestamp=SEC&amp;duration=30
+            </code>
+          </span>
         </div>
         <ClipGridView project={project} onChange={setProject} />
       </>

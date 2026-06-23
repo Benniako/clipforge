@@ -22,6 +22,14 @@ from ..models import LayoutType, Reframe, ReframeKeyframe
 
 log = logging.getLogger("clipforge.reframe")
 
+# Frame cache: face detection results keyed by (source_path, start_bucket, end_bucket).
+# Multiple overlapping clips on the same source (e.g. 20 candidate clips on a
+# podcast) would otherwise extract + detect faces on the same frames 20 times.
+# The cache avoids redundant ffmpeg calls and YOLO/SCRFD/YuNet inference.
+# BUCKET_SIZE=0.5 means two clips whose starts differ by <0.5s share a cache entry.
+_FACE_CACHE: dict[tuple[str, int, int], list[tuple[float, float]] | None] = {}
+_FACE_CACHE_BUCKET = 2  # 1/bucket = 0.5s resolution
+
 SAMPLE_FPS = 3.0          # frames/sec sampled for tracking
 SAMPLE_WIDTH = 480        # downscale for fast detection (cx is a fraction, so OK)
 # One-Euro filter tuning. min_cutoff = heavy smoothing when the face is roughly
@@ -102,7 +110,17 @@ def compute_reframe(src: str, start: float, end: float, src_aspect: float,
         except Exception as e:
             log.warning("active-speaker reframe failed: %s", e)
     if not centers and s.has_opencv:
-        centers = _track_faces(src, start, end, speech)
+        # Frame cache: overlapping clips on the same source extract the same
+        # frames. Bucket the time range so {:.1f}-precision differences don't
+        # miss the cache.
+        cache_key = (src, round(start * _FACE_CACHE_BUCKET),
+                     round(end * _FACE_CACHE_BUCKET))
+        cached = _FACE_CACHE.get(cache_key)
+        if cached is not None:
+            centers = cached
+        else:
+            centers = _track_faces(src, start, end, speech)
+            _FACE_CACHE[cache_key] = centers
     if not centers:
         return Reframe(layout=LayoutType.center,
                        keyframes=[ReframeKeyframe(t=0.0, cx=0.5)], tracked=False)

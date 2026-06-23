@@ -661,3 +661,44 @@ def export_premiere(project_id: str):
     fname = f"{_safe_name(p.name)}_premiere_edl.zip"
     return FileResponse(tmp_zip, media_type="application/zip", filename=fname,
                         background=BackgroundTask(lambda: tmp_zip.unlink(missing_ok=True)))
+
+
+@router.post("/{project_id}/mark-highlight")
+def mark_highlight(project_id: str, timestamp: float, duration: float = 30.0):
+    """Streamer.bot webhook: mark a highlight moment during a live stream.
+
+    When called with a source timestamp and duration, creates a clip at that
+    position and queues it for rendering. Streamer.bot can call this via its
+    HTTP request action:
+    ``POST http://localhost:8000/api/projects/{project_id}/mark-highlight?timestamp=1234.5&duration=30``
+    """
+    project = store.get(project_id)
+    if not project:
+        raise HTTPException(404, "project not found")
+    if not project.source:
+        raise HTTPException(409, "project has no source video")
+    if not project.transcript:
+        raise HTTPException(409, "project hasn't been transcribed yet")
+
+    from ..models import Clip, ClipStatus, CaptionSet, Reframe, LayoutType, ReframeKeyframe
+    clip = Clip(
+        id=__import__("uuid").uuid4().hex[:12],
+        start=round(max(timestamp - duration / 2, 0), 3),
+        end=round(min(timestamp + duration / 2, project.source.duration), 3),
+        title=f"Highlight @ {__import__('time').strftime('%H:%M:%S', __import__('time').gmtime(timestamp))}",
+        kind="talking", status=ClipStatus.pending,
+        captions=CaptionSet(),
+        reframe=Reframe(layout=LayoutType.fill, keyframes=[ReframeKeyframe(t=0.0, cx=0.5)]),
+    )
+    dur = clip.end - clip.start
+    if dur < 5:
+        clip.start = max(clip.end - 10, 0)
+    if clip.end - clip.start > 120:
+        clip.end = min(clip.start + 120, project.source.duration)
+
+    with store.mutate(project_id) as p:
+        p.clips.append(clip)
+    threading.Thread(target=engine.rerender_clip, args=(project_id, clip.id),
+                     daemon=True).start()
+    return {"ok": True, "clip_id": clip.id, "start": clip.start,
+            "end": clip.end, "duration": round(clip.end - clip.start, 1)}
