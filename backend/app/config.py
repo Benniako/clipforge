@@ -87,23 +87,35 @@ def _detect_ocr() -> str:
     return ""
 
 
-def _detect_ollama() -> bool:
-    """True when the local Ollama LLM server is reachable.
+def _detect_ollama() -> tuple[bool, str]:
+    """Return (available, model_names_string).
 
-    Ollama powers the optional virality re-rank. It runs as a separate process
-    on port 11434 by default; checking the module is useless (it's not a pip
-    dep), so we probe the CLI and the port. Cheap socket probe, ~50ms timeout.
+    True when the local Ollama server is reachable via CLI or port probe.
+    Also returns a comma-separated list of installed models to show in the
+    diagnostics panel so users can see exactly what AI models are ready.
     """
+    models = ""
     if shutil.which("ollama"):
-        return True
+        try:
+            import subprocess
+            out = subprocess.run(["ollama", "list"], capture_output=True, text=True, timeout=5)
+            lines = out.stdout.splitlines()
+            if len(lines) > 1:
+                names = [l.split()[0] for l in lines[1:] if l.strip()]
+                if names:
+                    models = ", ".join(names)
+        except Exception:
+            pass
+        if models:
+            return True, models
     import socket
     try:
         host = os.environ.get("CLIPFORGE_OLLAMA_HOST", "127.0.0.1")
         port = int(os.environ.get("CLIPFORGE_OLLAMA_PORT", "11434"))
         with socket.create_connection((host, port), timeout=0.05):
-            return True
+            return True, models or "server running"
     except OSError:
-        return False
+        return False, ""
 
 
 def _detect_reframe_engine() -> str:
@@ -302,6 +314,8 @@ class Settings:
     # --- individual optional tools surfaced in the capability report ----------
     has_deno: bool = False       # deno JS runtime — yt-dlp needs it for 1080p YouTube
     has_ollama: bool = False     # local LLM server — virality re-ranking (optional)
+    ollama_models: str = ""      # installed model names (comma-separated)
+    has_openmodel: bool = False  # OpenModel.ai API key — cloud LLM replacement
     has_torchaudio: bool = False # wav2vec2 forced alignment for tighter captions
     has_paddleocr: bool = False  # OCR engine (best accuracy overall)
     has_easyocr: bool = False    # OCR engine (best on noisy frames)
@@ -407,8 +421,7 @@ class Settings:
                      "Optional wav2vec2 forced alignment to tighten faster-whisper timestamps."),
                 item("ollama", self.has_ollama,
                      "Ollama",
-                     "Local LLM server for virality re-ranking. Without it, scoring uses the "
-                     "weighted-factor model only."),
+                     f"Local LLM server for virality re-ranking. Models: {self.ollama_models or 'none installed'}"),
             ]},
             {"name": "vision", "items": [
                 item("opencv", self.has_opencv,
@@ -575,6 +588,7 @@ class Settings:
             # New, surfaced for the diagnostics panel.
             "deno": self.has_deno,
             "ollama": self.has_ollama,
+            "ollama_models": self.ollama_models,
             "torchaudio": self.has_torchaudio,
             "paddleocr": self.has_paddleocr,
             "easyocr": self.has_easyocr,
@@ -628,7 +642,8 @@ def get_settings() -> Settings:
         vram_mb=vram_mb,
         auto_model=model_env is None,
         has_deno=bool(shutil.which("deno")),
-        has_ollama=_detect_ollama(),
+        has_ollama=_detect_ollama()[0],
+        ollama_models=_detect_ollama()[1],
         has_torchaudio=_has_module("torchaudio"),
         has_paddleocr=_has_module("paddleocr"),
         has_easyocr=_has_module("easyocr"),
