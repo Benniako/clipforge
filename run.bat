@@ -14,9 +14,11 @@ REM 4 parallel renders: encoding runs on NVENC, so ffmpeg barely loads the CPU.
 set CLIPFORGE_RENDER_WORKERS=4
 REM ~6x faster transcription at near-large-v3 quality on this GPU.
 set CLIPFORGE_WHISPER_MODEL=large-v3-turbo
-set CLIPFORGE_WHISPER_BATCH=16
+set CLIPFORGE_WHISPER_BATCH=24
 REM New projects default to the strongest local path on this workstation.
 set CLIPFORGE_DEFAULT_POWER_MODE=max_gpu
+REM Add optional tools to PATH for capability detection.
+set PATH=%PATH%;%LOCALAPPDATA%\deno;%ProgramFiles%\Tesseract-OCR
 REM Pull private/local account settings written by setup.bat into this process.
 for /f "usebackq delims=" %%T in (`powershell -NoProfile -Command "[Environment]::GetEnvironmentVariable('HF_TOKEN','User')"`) do if not "%%T"=="" set "HF_TOKEN=%%T"
 for /f "usebackq delims=" %%T in (`powershell -NoProfile -Command "[Environment]::GetEnvironmentVariable('CLIPFORGE_ASD_DIR','User')"`) do if not "%%T"=="" set "CLIPFORGE_ASD_DIR=%%T"
