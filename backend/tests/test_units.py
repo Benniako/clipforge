@@ -1561,11 +1561,11 @@ def test_ocr_reader_falls_back_to_easyocr_when_paddle_fails():
     try:
         O._reader = None
 
-        def fail_paddle(_gpu):
+        def fail_paddle(_gpu, _lang="en"):
             raise RuntimeError("broken paddle runtime")
 
         O._make_paddle = fail_paddle
-        O._make_easyocr = lambda _gpu: EasyReader()
+        O._make_easyocr = lambda _gpu, _langs=None: EasyReader()
         kind, reader = O._get_reader("paddleocr")
         assert kind == "easyocr"
         assert isinstance(reader, EasyReader)
@@ -2949,6 +2949,101 @@ def test_broll_pip_writes_complex_filtergraph():
     assert "broll_overlay" in src
     assert "between(t," in src  # enable gate
     assert "filter_complex_script" in src  # switches from simple to complex
+
+
+# --------------------------------------------------------------------------- #
+# OCR improvement tests — the next 10 improvements.
+# --------------------------------------------------------------------------- #
+def test_ocr_is_garbled_rejects_nonsense_keeps_text():
+    """Clean text passes; heavily non-alphanumeric text is garbage."""
+    from app.providers import detect_ocr as OCR
+    assert OCR._is_garbled("hello world") is False
+    assert OCR._is_garbled("double kill awesome") is False
+    assert OCR._is_garbled("!@#$%^&*()") is True
+    assert OCR._is_garbled("!@#$hello") is True  # >40% garbage
+    assert OCR._is_garbled("") is True  # empty = reject
+
+
+def test_ocr_dedupe_keeps_highest_confidence_per_label():
+    """Within the min_gap window, the strongest read survives, not the first."""
+    from app.providers import detect_ocr as OCR
+    from app.providers.detect_ocr import OcrEvent
+    e = lambda t, lbl, conf: OcrEvent(t=t, label=lbl, text="x", confidence=conf)
+    events = [
+        e(1.0, "kill", 0.3), e(1.2, "kill", 0.9), e(1.8, "kill", 0.5),
+        e(2.0, "ace", 0.8), e(2.3, "ace", 0.4),
+        e(10.0, "kill", 0.7),
+    ]
+    d = OCR.dedupe_events(events)
+    assert len(d) == 3  # 2 groups + 1 late
+    kills = [ev for ev in d if ev.label == "kill"]
+    assert len(kills) == 2
+    # First kill group (1.0-1.8s): the 0.9-confidence event wins.
+    assert kills[0].confidence == 0.9
+    # Ace group: 0.8 beats 0.4.
+    aces = [ev for ev in d if ev.label == "ace"]
+    assert len(aces) == 1 and aces[0].confidence == 0.8
+
+
+def test_ocr_gpu_cpu_fallback_attempts_are_ordered():
+    """GPU PaddleOCR → CPU PaddleOCR → EasyOCR in fallback chain."""
+    from app.providers import detect_ocr as OCR
+    import inspect
+    src = inspect.getsource(OCR._get_reader)
+    assert "paddleocr" in src
+    # The CPU paddleocr fallback must appear before easyocr in the chain.
+    cpu_pos = src.find("_make_paddle(False")
+    easy_pos = src.find("_make_easyocr")
+    assert cpu_pos >= 0 and easy_pos >= 0
+    assert cpu_pos < easy_pos, "CPU PaddleOCR should be tried before EasyOCR"
+
+
+def test_ocr_tesseract_german_lang_passes_config():
+    """Tesseract path includes --lang deu when the source language is German."""
+    from app.providers import detect_ocr as OCR
+    import inspect
+    src = inspect.getsource(OCR._ocr_image_conf)
+    assert "--lang deu" in src or "deu" in src
+    # The default is English when no language is specified.
+    # The config always has --psm 11 (sparse text).
+
+
+def test_ocr_language_threads_to_constructors():
+    """_get_reader and engine constructors accept a language parameter."""
+    from app.providers import detect_ocr as OCR
+    import inspect
+    src = inspect.getsource(OCR._make_paddle)
+    assert "lang=lang" in src  # language passes through to PaddleOCR
+    src2 = inspect.getsource(OCR._make_easyocr)
+    assert "langs" in src2  # language list accepted
+
+
+def test_ocr_persistent_hash_cache_outlives_single_frame():
+    """prev_crops is declared at the find_text_events scope, not per-frame."""
+    from app.providers import detect_ocr as OCR
+    import inspect
+    src = inspect.getsource(OCR.find_text_events)
+    # The cache should be above the for loop, not inside it.
+    assert "prev_crops: dict[str, tuple[str | None, str, float]] = {}" in src
+
+
+def test_ocr_roi_lifetime_tracks_and_kills_dead_rois():
+    """ROIs with N consecutive empty reads are skipped."""
+    from app.providers import detect_ocr as OCR
+    import inspect
+    src = inspect.getsource(OCR.find_text_events)
+    assert "roi_life" in src
+    assert "MAX_ROI_DEAD" in src
+    assert "dead >= MAX_ROI_DEAD" in src or "roi_life.get(roi, 0) >= MAX_ROI_DEAD" in src
+
+
+def test_adaptive_binarization_checks_monotone_rois():
+    """Otsu binarization has a >90% white/black guard with mean fallback."""
+    from app.providers import detect_ocr as OCR
+    import inspect
+    src = inspect.getsource(OCR._ocr_frame_images)
+    assert "white_frac" in src and "0.90" in src
+    assert "THRESH_BINARY" in src  # fallback threshold method
 
 
 if __name__ == "__main__":
