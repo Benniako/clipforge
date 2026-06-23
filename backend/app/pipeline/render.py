@@ -184,6 +184,59 @@ def _composed_graph(clip: Clip, cam: Rect, info: MediaInfo,
     return lines
 
 
+def _make_thumbnail(out_path: Path, thumb_path: Path, *, at: float,
+                    width: int, title: str | None = None) -> None:
+    """Extract a thumbnail frame and optionally overlay the clip title."""
+    ffmpeg.make_thumbnail(out_path, thumb_path, at=at, width=width)
+    if not title:
+        return
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+        import numpy as np
+        img = Image.open(thumb_path).convert("RGB")
+        w, h = img.size
+        draw = ImageDraw.Draw(img)
+        # Semi-transparent gradient at bottom for text legibility.
+        grad_h = max(h // 3, 30)
+        grad = np.zeros((grad_h, w, 4), dtype=np.uint8)
+        for y in range(grad_h):
+            alpha = int(180 * (1.0 - min(y / grad_h, 1.0)))
+            grad[y, :, 3] = alpha
+        gradient = Image.fromarray(grad, mode="RGBA")
+        img = Image.alpha_composite(img.convert("RGBA"), gradient).convert("RGB")
+        draw = ImageDraw.Draw(img)
+        font_size = max(int(w * 0.065), 20)
+        try:
+            font = ImageFont.truetype("DejaVuSans-Bold.ttf", font_size)
+        except OSError:
+            font = ImageFont.load_default()
+        # Word-wrap title to thumbnail width (minus 24px padding).
+        words = (title or "").split()
+        lines, line = [], ""
+        max_w = w - 32
+        for wd in words:
+            test = f"{line} {wd}" if line else wd
+            bw = draw.textbbox((0, 0), test, font=font)[2]
+            if bw > max_w and line:
+                lines.append(line)
+                line = wd
+            else:
+                line = test
+        if line:
+            lines.append(line)
+        line_h = int(font_size * 1.35)
+        total_h = len(lines) * line_h
+        start_y = h - 20 - total_h
+        for i, l in enumerate(lines):
+            bw = draw.textbbox((0, 0), l, font=font)[2]
+            tx = (w - bw) / 2
+            draw.text((tx, start_y + i * line_h), l, fill="white",
+                      font=font, stroke_width=3, stroke_color="black")
+        img.save(thumb_path, quality=90)
+    except Exception as e:
+        log.debug("title overlay on thumbnail failed: %s", e)
+
+
 def render_clip(clip: Clip, src_path: str, info: MediaInfo, style: StyleTemplate,
                 out_path: Path, thumb_path: Path, *, out_w: int, out_h: int,
                 burn_captions: bool = True, motion: str = "none") -> None:
@@ -352,6 +405,9 @@ def render_clip(clip: Clip, src_path: str, info: MediaInfo, style: StyleTemplate
         if last is not None:
             raise last
 
-    # Thumbnail from the finished clip so it reflects the real framing + captions.
+    # Thumbnail with AI title overlay: extracts a frame from the rendered clip,
+    # adds a bottom gradient, then overlays the clip's AI-generated title in bold
+    # white text. Gives a "YouTube thumbnail" look without any external API.
     at = min(max(eff_dur * 0.35, 0.5), max(eff_dur - 0.1, 0.0))
-    ffmpeg.make_thumbnail(out_path, thumb_path, at=at, width=540)
+    _make_thumbnail(out_path, thumb_path, at=at, width=540,
+                    title=getattr(clip, "title", None))
