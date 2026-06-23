@@ -6,6 +6,7 @@ import { fmtClock, fmtDuration } from "../lib/format";
 import { mediaTimeUrl } from "../lib/media";
 import { useT } from "../lib/i18n";
 import ScoreBadge from "../components/ScoreBadge";
+import PublishPanel from "../components/PublishPanel";
 
 export default function ClipEditor() {
   const { t } = useT();
@@ -489,6 +490,11 @@ export default function ClipEditor() {
               ))}
             </div>
           </div>
+
+          {/* AI publish content — titles, description, hashtags per platform. */}
+          {clip.status === "ready" && projectId && clipId && (
+            <PublishPanel projectId={projectId} clipId={clipId} />
+          )}
         </div>
       </div>
 
