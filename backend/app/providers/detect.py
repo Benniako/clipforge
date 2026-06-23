@@ -18,6 +18,7 @@ function so a learned detector can replace it without touching the pipeline.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from ..models import ImportSettings, Word
@@ -94,8 +95,6 @@ def _salience(words: list[Word], duration: float, st: ImportSettings,
 def _make_title(words: list[Word]) -> str:
     text = " ".join(w.text for w in words).strip()
     # Prefer the first sentence-ish chunk, capped for a hook line.
-    import re
-
     first = re.split(r"(?<=[.!?])\s", text)[0]
     title = first if 12 <= len(first) <= 70 else text
     title = re.sub(r"\s+", " ", title).strip(" ,.-")

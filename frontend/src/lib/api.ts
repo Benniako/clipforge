@@ -1,6 +1,8 @@
 // Tiny typed API client. All paths are same-origin (dev proxy / prod static).
 import type {
+  AiBoostSettings,
   Clip,
+  CapabilityDetail,
   GameProfileConfig,
   Health,
   ImportSettings,
@@ -69,6 +71,7 @@ export interface CreateProjectInput {
   tighten: boolean;
   denoise: boolean;
   motion: string;
+  ai_boost: AiBoostSettings;
   facecam_layout: string;
   use_ocr: boolean;
   use_vlm: boolean;
@@ -84,6 +87,11 @@ export interface CreateProjectInput {
 
 export const api = {
   health: () => fetch("/api/health").then((r) => json<Health>(r)),
+
+  /** Grouped capability inventory for the diagnostics panel. */
+  capabilities: () =>
+    fetch("/api/capabilities")
+      .then((r) => json<{ flat: Health["capabilities"]; detail: CapabilityDetail }>(r)),
 
   styles: () => fetch("/api/styles").then((r) => json<StyleTemplate[]>(r)),
 

@@ -5,6 +5,17 @@
   return `${m}:${sec.toString().padStart(2, "0")}`;
 }
 
+// Compact elapsed/remaining clock: "H:MM:SS" past an hour, else "M:SS".
+export function fmtHMS(s: number): string {
+  if (!s || s < 0) s = 0;
+  const total = Math.round(s);
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const sec = total % 60;
+  if (h > 0) return `${h}:${m.toString().padStart(2, "0")}:${sec.toString().padStart(2, "0")}`;
+  return `${m}:${sec.toString().padStart(2, "0")}`;
+}
+
 export function fmtClock(s: number): string {
   const m = Math.floor(s / 60);
   const sec = Math.floor(s % 60);

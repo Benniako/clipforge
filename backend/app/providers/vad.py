@@ -38,6 +38,11 @@ def _load():
     return _model or None
 
 
+def available() -> bool:
+    """True when Silero VAD can be loaded in this environment."""
+    return get_settings().has_vad and _load() is not None
+
+
 def speech_intervals(wav_path: str, *, sr: int = 16000) -> list[tuple[float, float]] | None:
     """Speech (start, end) spans in seconds, or None when VAD isn't available."""
     if not get_settings().has_vad:

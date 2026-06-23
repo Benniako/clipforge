@@ -120,12 +120,28 @@ Format: Layer, Start, End, Style, MarginL, MarginR, MarginV, Effect, Text
                      emphasis=style.emphasis, emoji=style.emoji,
                      max_words_per_line=captions.max_words_per_line)
     lines = _group_lines(words, captions.max_words_per_line)
-    events: list[str] = []
 
+    # Speaker-aware caption colours: when more than one speaker is present,
+    # give each their own primary colour so a podcast reads as a conversation
+    # (host vs guest) rather than a monochrome wall. The style's primary is
+    # still used as speaker 0's colour so a single-speaker clip is unchanged.
+    speakers = sorted({getattr(w, "speaker", 0) or 0 for w in words})
+    speaker_colors: dict[int, str] = {}
+    if len(speakers) > 1:
+        palette = ["F4F4F8", "FFD166", "06D6A0", "EF476F", "8338EC", "3A86FF"]
+        for i, sp in enumerate(speakers):
+            speaker_colors[sp] = _ass_color(palette[i % len(palette)])
+    else:
+        speaker_colors[speakers[0] if speakers else 0] = primary
+
+    events: list[str] = []
     for line in lines:
         if not line:
             continue
         line_end = line[-1].t + line[-1].d
+        # The active word's speaker picks this line's primary colour.
+        line_primary = speaker_colors.get(
+            getattr(line[0], "speaker", 0) or 0, primary)
         for idx, w in enumerate(line):
             start = w.t
             # Hold until the next word in the line starts; last word holds to its end.
@@ -134,9 +150,11 @@ Format: Layer, Start, End, Style, MarginL, MarginR, MarginV, Effect, Text
             # gap — clear it shortly after it's spoken instead.
             if end - (w.t + w.d) > SILENCE_GAP:
                 end = w.t + w.d + LINGER_PAD
-            if end <= start:
-                end = start + 0.08
-            events.append(_dialogue(line, idx, start, end, primary, highlight,
+            # Unconditional floor: a zero/negative-duration Dialogue (words that
+            # share a timestamp, a near-zero w.d) would be dropped by libass and
+            # the highlight flickers off. Always keep a visible minimum span.
+            end = max(end, start + 0.08)
+            events.append(_dialogue(line, idx, start, end, line_primary, highlight,
                                     style.uppercase))
 
     return head + "\n".join(events) + "\n"

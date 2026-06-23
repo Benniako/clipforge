@@ -2,11 +2,13 @@ import { useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api } from "../lib/api";
 import type { Project, StatusPayload } from "../lib/types";
+import { useT } from "../lib/i18n";
 import ProcessingView from "../components/ProcessingView";
 import ClipGridView from "../components/ClipGridView";
 import SwipeReviewScreen from "./SwipeReviewScreen";
 
 export default function ProjectView() {
+  const { t } = useT();
   const { projectId } = useParams();
   const [status, setStatus] = useState<StatusPayload | null>(null);
   const [project, setProject] = useState<Project | null>(null);
@@ -38,7 +40,7 @@ export default function ProjectView() {
         if (await handle(s)) return;
         timer.current = window.setTimeout(poll, 1200);
       } catch (e: any) {
-        if (alive) setError(e.message ?? "could not load project");
+        if (alive) setError(e.message ?? t("pv.loadError"));
       }
     };
     const startPolling = () => {
@@ -86,10 +88,10 @@ export default function ProjectView() {
     return (
       <div className="container">
         <div className="empty">
-          <h3>Couldn’t load this project</h3>
+          <h3>{t("pv.loadError")}</h3>
           <p>{error}</p>
           <Link className="btn" to="/">
-            Back to start
+            {t("pv.back")}
           </Link>
         </div>
       </div>
@@ -101,10 +103,10 @@ export default function ProjectView() {
     return (
       <div className="container">
         <div className="empty">
-          <h3>Processing failed</h3>
-          <p className="muted">{status.error ?? "The pipeline hit an error on this video."}</p>
+          <h3>{t("pv.failedTitle")}</h3>
+          <p className="muted">{status.error ?? t("pv.failedGeneric")}</p>
           <Link className="btn" to="/">
-            Try another video
+            {t("pv.tryAnother")}
           </Link>
         </div>
       </div>
@@ -118,7 +120,7 @@ export default function ProjectView() {
       <>
         <div className="container view-switch">
           <button className="btn primary sm" onClick={() => setViewMode("swipe")}>
-            Swipe Review
+            {t("pv.swipe")}
           </button>
         </div>
         <ClipGridView project={project} onChange={setProject} />

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { api } from "../lib/api";
 import type { CuesStatus } from "../lib/api";
+import { useT } from "../lib/i18n";
 
 const EVENT_LABELS: Record<string, string> = {
   kill: "Kill",
@@ -30,6 +31,34 @@ const EVENT_LABELS: Record<string, string> = {
   wow: "Wow",
 };
 
+const EVENT_LABELS_EN: Record<string, string> = {
+  kill: "Kill",
+  double_kill: "Double kill",
+  triple_kill: "Triple kill",
+  quad_kill: "Quad kill",
+  ace: "Ace",
+  clutch: "Clutch",
+  spike_plant: "Spike planted",
+  spike_defuse: "Spike defused",
+  headshot: "Headshot",
+  bomb_plant: "Bomb planted",
+  bomb_defuse: "Bomb defused",
+  goal: "Goal",
+  whistle: "Whistle",
+  crowd_roar: "Crowd roar",
+  demolition: "Demolition",
+  save: "Save",
+  stinger: "Stinger",
+  scream: "Scream",
+  jumpscare: "Jumpscare",
+  airhorn: "Airhorn",
+  hype: "Hype",
+  laugh: "Laugh",
+  applause: "Applause",
+  bruh: "Bruh",
+  wow: "Wow",
+};
+
 export default function CueManager({
   game,
   cues,
@@ -43,6 +72,9 @@ export default function CueManager({
   enabled?: boolean;
   onToggle?: (enabled: boolean) => void;
 }) {
+  const { t, lang } = useT();
+  const labels = lang === "en" ? EVENT_LABELS_EN : EVENT_LABELS;
+  const eventLabel = (name: string) => labels[name] ?? name;
   const pack = cues?.[game];
   const [urls, setUrls] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState<string | null>(null);
@@ -61,7 +93,7 @@ export default function CueManager({
       onChange(await api.addCue(game, event, file ? { file } : { url }));
       setUrls((u) => ({ ...u, [event]: "" }));
     } catch (e: any) {
-      setErr(`Cue "${event}" konnte nicht hinzugefügt werden: ${e?.message ?? "unbekannter Fehler"}`);
+      setErr(t("cm.addFailed", { event, error: e?.message ?? t("cm.unknownError") }));
     } finally {
       setBusy(null);
     }
@@ -79,12 +111,12 @@ export default function CueManager({
         onChange(await api.addCue(game, ev.name, { url }));
         setUrls((u) => ({ ...u, [ev.name]: "" }));
       } catch (e: any) {
-        errors.push(`${ev.name}: ${e?.message ?? "fehlgeschlagen"}`);
+        errors.push(`${ev.name}: ${e?.message ?? t("cm.failed")}`);
       }
     }
     setBusy(null);
     setBusyAll(false);
-    if (errors.length) setErr(`Einige Cues sind fehlgeschlagen: ${errors.join(" | ")}`);
+    if (errors.length) setErr(t("cm.someFailed", { errors: errors.join(" | ") }));
   };
 
   const remove = async (event: string) => {
@@ -93,7 +125,7 @@ export default function CueManager({
     try {
       onChange(await api.removeCue(game, event));
     } catch (e: any) {
-      setErr(`Cue "${event}" konnte nicht entfernt werden: ${e?.message ?? "unbekannter Fehler"}`);
+      setErr(t("cm.removeFailed", { event, error: e?.message ?? t("cm.unknownError") }));
     } finally {
       setBusy(null);
     }
@@ -104,12 +136,14 @@ export default function CueManager({
       <div className="cue-manager-head">
         <div>
           <h3>
-            Eigene Sound-Cues - {pack.label}{" "}
-            <span className="muted tiny">({pack.configured}/{pack.total} konfiguriert)</span>
+            {t("cm.heading", { label: pack.label })}{" "}
+            <span className="muted tiny">
+              {t("cm.configured", { done: pack.configured, total: pack.total })}
+            </span>
           </h3>
           {onToggle && (
             <p className="muted tiny" style={{ margin: "6px 0 0" }}>
-              Das steuert nur, ob diese gespeicherten Sounds für die Clip-Erkennung genutzt werden.
+              {t("cm.toggleNote")}
             </p>
           )}
         </div>
@@ -117,22 +151,19 @@ export default function CueManager({
           <button
             className={"toggle cue-use-toggle" + (enabled ? " on" : "")}
             onClick={() => onToggle(!enabled)}
-            title="Eigene Referenzsounds für die nächste Erkennung ein- oder ausschalten"
+            title={t("cm.useToggleTitle")}
           >
-            <span>In Clips nutzen</span>
-            <i>{enabled ? "An" : "Aus"}</i>
+            <span>{t("cm.useInClips")}</span>
+            <i>{enabled ? t("cm.on") : t("cm.off")}</i>
           </button>
         )}
       </div>
       <p className="muted tiny" style={{ marginBottom: 12 }}>
-        Optional: Füge eine Sound-URL ein oder lade einen sauberen Referenzsound hoch.
-        ClipForge nutzt diese Sounds als zusätzliches Signal, nicht als garantiertes Highlight.
-        <b> Eingegebene URLs werden erst gespeichert, wenn du Hinzufügen oder Alle speichern klickst.</b>
+        {t("cm.intro")}
+        <b>{t("cm.introSave")}</b>
       </p>
       {onToggle && !enabled && (
-        <p className="tiny cue-off-note">
-          Eigene Sound-Erkennung ist für neue Clips aus. Du kannst hier trotzdem Sounds verwalten.
-        </p>
+        <p className="tiny cue-off-note">{t("cm.offNote")}</p>
       )}
       {err && (
         <p className="tiny" style={{ color: "var(--bad)", marginBottom: 10 }}>
@@ -143,29 +174,29 @@ export default function CueManager({
         {pack.events.map((e) => (
           <div key={e.name} className="row" style={{ gap: 8, alignItems: "center", flexWrap: "wrap" }}>
               <span style={{ width: 130, fontWeight: 600, color: e.configured ? "var(--good)" : undefined }}>
-                {e.configured ? "aktiv" : "neu"} {EVENT_LABELS[e.name] ?? e.name}
+                {e.configured ? t("cm.active") : t("cm.new")} {eventLabel(e.name)}
               </span>
               <input
                 className="input"
                 style={{ flex: 1, minWidth: 170 }}
-                placeholder={`${EVENT_LABELS[e.name] ?? e.name} - URL einfügen`}
+                placeholder={t("cm.urlPlaceholder", { label: eventLabel(e.name) })}
                 value={urls[e.name] || ""}
                 onChange={(ev) => setUrls((u) => ({ ...u, [e.name]: ev.target.value }))}
               />
               <a
                 className="btn sm ghost"
-                href={`https://www.myinstants.com/de/search/?name=${encodeURIComponent(e.hint)}`}
+                href={`https://www.myinstants.com/${lang}/search/?name=${encodeURIComponent(e.hint)}`}
                 target="_blank"
                 rel="noreferrer"
-                title={`MyInstants nach ${EVENT_LABELS[e.name] ?? e.name} durchsuchen`}
+                title={t("cm.findTitle", { label: eventLabel(e.name) })}
               >
-                Finden
+                {t("cm.find")}
               </a>
             <button className="btn sm" disabled={busy === e.name} onClick={() => add(e.name)}>
-              {busy === e.name ? "..." : "Hinzufügen"}
+              {busy === e.name ? "..." : t("cm.add")}
             </button>
-            <label className="btn sm ghost" style={{ cursor: "pointer" }} title="Sounddatei hochladen">
-              Datei
+            <label className="btn sm ghost" style={{ cursor: "pointer" }} title={t("cm.fileTitle")}>
+              {t("cm.file")}
               <input
                 type="file"
                 accept="audio/*"
@@ -179,7 +210,7 @@ export default function CueManager({
             </label>
             {e.configured && (
               <button className="btn sm danger" disabled={busy === e.name} onClick={() => remove(e.name)}>
-                Entfernen
+                {t("cm.remove")}
               </button>
             )}
           </div>
@@ -191,14 +222,14 @@ export default function CueManager({
             className="btn primary sm"
             disabled={busyAll}
             onClick={saveAll}
-            title="Alle oben eingefügten URLs herunterladen und installieren"
+            title={t("cm.saveAllTitle")}
           >
             {busyAll ? (
               <>
-                <span className="spinner" /> Speichert...
+                <span className="spinner" /> {t("cm.saving")}
               </>
             ) : (
-              <>Alle speichern ({filled.length})</>
+              <>{t("cm.saveAll", { count: filled.length })}</>
             )}
           </button>
         </div>

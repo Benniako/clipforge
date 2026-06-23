@@ -15,6 +15,10 @@ faster-whisper>=1.0          # real word-timed transcription (Whisper)
 opencv-python-headless>=4.9  # face tracking for speaker-aware 9:16 reframe
 numpy>=1.26
 yt-dlp>=2024.0              # optional: import from a pasted video URL
+silero-vad>=5.1             # pins captions to exact speech — drops Whisper
+                            # hallucinations and breaths that land in silence.
+                            # Required for accurate captions; the pipeline still
+                            # runs without it but captions may drift.
 
 # Gameplay on-screen text detection (OCR) — optional, gameplay-tuned. Reads
 # kill banners / scorelines / "VICTORY" splashes and learns reusable audio cues

@@ -97,6 +97,10 @@ class Engine:
         self._clip_locks_guard = threading.Lock()
         self._pause_condition = threading.Condition()
         self._pause_requested: set[str] = set()
+        # Per-stage timing anchors (project_id -> timestamp / stage index) so the
+        # render window can show how long the *current* stage has been running.
+        self._stage_started: dict[str, float] = {}
+        self._stage_idx: dict[str, int] = {}
         self._queued_projects: set[str] = set()
         self._active_projects: set[str] = set()
 
@@ -205,29 +209,58 @@ class Engine:
                 self._q.task_done()
 
     # -- progress helpers -------------------------------------------------
-    def _stage_view(self, current: int, frac: float) -> list[dict]:
+    def _stage_view(self, current: int, frac: float,
+                    stage_started_at: float | None = None,
+                    prior: list[dict] | None = None) -> list[dict]:
         view = []
+        now_ts = now()
+        # Carry forward elapsed times for completed stages so the UI keeps
+        # showing "how long transcribe took" after we move on to detect, etc.
+        prior_elapsed: dict[str, float] = {}
+        for entry in (prior or ()):
+            name = entry.get("name")
+            el = entry.get("elapsed_seconds")
+            if name and el is not None and entry.get("status") == "done":
+                prior_elapsed[name] = float(el)
         for i, name in enumerate(STAGES):
             if i < current:
                 status, pct = "done", 1.0
+                elapsed = prior_elapsed.get(name)
             elif i == current:
                 status, pct = "active", frac
+                elapsed = (now_ts - stage_started_at) if stage_started_at else None
             else:
                 status, pct = "pending", 0.0
-            view.append({"name": name, "label": STAGE_LABELS[name],
-                         "status": status, "pct": round(pct, 3)})
+                elapsed = None
+            entry = {"name": name, "label": STAGE_LABELS[name],
+                     "status": status, "pct": round(pct, 3)}
+            if elapsed is not None:
+                entry["elapsed_seconds"] = round(elapsed, 1)
+            view.append(entry)
         return view
 
     def _advance(self, project_id: str, stage_idx: int, message: str,
                  frac: float = 0.0) -> None:
         self._wait_if_paused(project_id)
         overall = (stage_idx + max(min(frac, 1.0), 0.0)) / len(STAGES) * 100.0
+        # Track when the current stage began so the UI can show per-stage
+        # elapsed time. Reset when the stage index changes.
+        prev_started = self._stage_started.get(project_id)
+        prev_idx = self._stage_idx.get(project_id)
+        stage_started = prev_started if prev_idx == stage_idx else now()
+        self._stage_started[project_id] = stage_started
+        self._stage_idx[project_id] = stage_idx
         with store.mutate(project_id) as p:
             p.status = ProjectStatus.processing
+            # Anchor the ETA clock on the first advance and keep it across stages.
+            started = p.progress.started_at or now()
+            prior_stages = p.progress.stages or []
             p.progress = JobProgress(
                 stage=STAGES[stage_idx], stage_index=stage_idx,
                 total_stages=len(STAGES), message=message,
-                pct=round(overall, 1), stages=self._stage_view(stage_idx, frac),
+                pct=round(overall, 1),
+                stages=self._stage_view(stage_idx, frac, stage_started, prior_stages),
+                started_at=started,
             )
 
     def _paused_stage_view(self, p) -> list[dict]:
@@ -301,15 +334,22 @@ class Engine:
             transcript = transcribe_mod.synthetic_transcript(
                 src_path, lang=project.settings.language)
 
-        # Pin caption words to the *exact* speech with Silero VAD (optional):
-        # clamp each word to its speech region and drop words stuck in silence,
-        # so captions start/stop precisely when the speaker is talking.
+        # Pin caption words to the *exact* speech with Silero VAD: clamp each
+        # word to its speech region and drop words stuck in silence, so captions
+        # start/stop precisely when the speaker is talking. VAD also strips
+        # Whisper's classic silence hallucinations ("thank you for watching").
+        # It's now a hard dep; if it's somehow absent we warn the user that
+        # captions may drift rather than fail silently.
+        vad_absent_warned = False
         if wav_path and transcript.provider != "synthetic":
             try:
                 from ..providers import vad as vad_mod
                 speech = vad_mod.speech_intervals(wav_path)
                 if speech:
                     transcript.words = vad_mod.refine_words(transcript.words, speech)
+                elif not vad_mod.available():
+                    vad_absent_warned = True
+                    log.warning("Silero VAD not installed — captions may drift")
             except Exception as e:
                 log.warning("VAD refine failed: %s", e)
             # Optional LR-ASD: attribute each word to the on-screen active speaker
@@ -324,6 +364,12 @@ class Engine:
 
         with store.mutate(project_id) as p:
             p.transcript = transcript
+            if vad_absent_warned:
+                p.add_warning(
+                    "Silero VAD isn't installed, so captions may drift from the "
+                    "speech and include hallucinated words in quiet sections. "
+                    "Install it (pip install silero-vad) and re-process for "
+                    "accurate captions.", severity="warning")
 
         # Decide talking vs gameplay (auto-detect unless forced).
         forced = project.settings.content_type

@@ -4,9 +4,11 @@ import { api } from "../lib/api";
 import type { Clip, Project, Rect, StyleTemplate } from "../lib/types";
 import { fmtClock, fmtDuration } from "../lib/format";
 import { mediaTimeUrl } from "../lib/media";
+import { useT } from "../lib/i18n";
 import ScoreBadge from "../components/ScoreBadge";
 
 export default function ClipEditor() {
+  const { t } = useT();
   const { projectId, clipId } = useParams();
   const nav = useNavigate();
   const [project, setProject] = useState<Project | null>(null);
@@ -53,10 +55,10 @@ export default function ClipEditor() {
         setProject(p);
         const c = p.clips.find((x) => x.id === clipId) ?? null;
         if (c) hydrate(c);
-        else setLoadErr("This clip no longer exists.");
+        else setLoadErr(t("ce.notFound"));
       })
       .catch((e) => {
-        if (live) setLoadErr(e?.message ?? "Failed to load the clip.");
+        if (live) setLoadErr(e?.message ?? t("ce.loadFail"));
       });
     return () => {
       live = false;
@@ -122,7 +124,7 @@ export default function ClipEditor() {
   const apply = async () => {
     if (!projectId || !clipId || !clip) return;
     setBusy(true);
-    setMsg("Clip wird neu gerendert…");
+    setMsg(t("ce.rendering"));
     try {
       const edit: any = {};
       if (title !== clip.title) edit.title = title;
@@ -147,7 +149,7 @@ export default function ClipEditor() {
       await api.editClip(projectId, clipId, edit);
       await pollUntilReady();
     } catch (e: any) {
-      setMsg(e.message ?? "Bearbeitung fehlgeschlagen");
+      setMsg(e.message ?? t("ce.editFail"));
       setBusy(false);
     }
   };
@@ -165,18 +167,18 @@ export default function ClipEditor() {
         hydrate(c);
         setVer((v) => v + 1);
         setBusy(false);
-        setMsg("Aktualisiert ✓");
+        setMsg(t("ce.updated"));
         setTimeout(() => setMsg(null), 2500);
         return;
       }
       if (c && c.status === "failed") {
         setBusy(false);
-        setMsg("Render failed: " + (c.error ?? "unknown"));
+        setMsg(t("ce.renderFailed", { error: c.error ?? t("ce.renderUnknown") }));
         return;
       }
     }
     setBusy(false);
-    setMsg("Rendert noch - schau gleich wieder vorbei.");
+    setMsg(t("ce.stillRendering"));
   };
 
   if (loadErr)
@@ -186,7 +188,7 @@ export default function ClipEditor() {
           <div className="col" style={{ alignItems: "center", gap: 12 }}>
             <span>{loadErr}</span>
             <Link className="btn ghost sm" to={projectId ? `/p/${projectId}` : "/"}>
-              ← Zurück zu den Clips
+              {t("ce.back")}
             </Link>
           </div>
         </div>
@@ -208,32 +210,32 @@ export default function ClipEditor() {
     <div className="container">
       <div className="row" style={{ justifyContent: "space-between", marginBottom: 18 }}>
         <Link className="btn ghost sm" to={`/p/${projectId}`}>
-          ← Alle Clips
+          {t("ce.allClips")}
         </Link>
         <div className="row">
-          <button className="btn sm ghost" title="Mehr davon - personalisiert die Bewertung"
+          <button className="btn sm ghost" title={t("ce.likeTitle")}
             onClick={() => rate("up")}
             style={{ color: fb === "up" ? "var(--good)" : undefined }}>
-            Gut
+            {t("ce.like")}
           </button>
-          <button className="btn sm ghost" title="Weniger davon"
+          <button className="btn sm ghost" title={t("ce.dislikeTitle")}
             onClick={() => rate("down")}
             style={{ color: fb === "down" ? "var(--bad)" : undefined }}>
-            Schlecht
+            {t("ce.dislike")}
           </button>
           {clip.export_url && (
             <a className="btn sm" href={api.downloadClipUrl(projectId!, clipId!)} download>
-              Download
+              {t("ce.download")}
             </a>
           )}
           {clip.captions.words.length > 0 && (
             <a className="btn sm ghost" href={api.downloadSrtUrl(projectId!, clipId!)} download
-              title="Untertitel-Datei für Premiere/Resolve">
-              .srt
+              title={t("ce.srtTitle")}>
+              {t("ce.srt")}
             </a>
           )}
           <button className="btn primary sm" onClick={apply} disabled={!dirty || busy}>
-            {busy ? <><span className="spinner" /> Rendert…</> : "Anwenden & neu rendern"}
+            {busy ? <><span className="spinner" /> {t("ce.applyRendering")}</> : t("ce.apply")}
           </button>
         </div>
       </div>
@@ -245,13 +247,13 @@ export default function ClipEditor() {
               className={previewMode === "rendered" ? "on" : ""}
               onClick={() => setPreviewMode("rendered")}
             >
-              Gerendert
+              {t("ce.tabRendered")}
             </button>
             <button
               className={previewMode === "original" ? "on" : ""}
               onClick={() => setPreviewMode("original")}
             >
-              Original
+              {t("ce.tabOriginal")}
             </button>
           </div>
           <div className="video-wrap">
@@ -264,13 +266,13 @@ export default function ClipEditor() {
                 poster={previewMode === "rendered" ? clip.thumb_url ?? undefined : undefined}
               />
             ) : (
-              <div className="empty">Noch nicht gerendert</div>
+              <div className="empty">{t("ce.notRendered")}</div>
             )}
           </div>
           <div className="panel section" style={{ marginTop: 14 }}>
             <div className="row" style={{ justifyContent: "space-between", marginBottom: 10 }}>
               <ScoreBadge score={clip.score} />
-              <span className="pill">{clip.reframe.tracked ? "Sprecher verfolgt" : clip.reframe.overridden ? "Manueller Crop" : "Zentrierter Crop"}</span>
+              <span className="pill">{clip.reframe.tracked ? t("ce.tracked") : clip.reframe.overridden ? t("ce.manualCrop") : t("ce.centerCrop")}</span>
             </div>
             <div className="factors">
               {clip.factors.map((f, i) => (
@@ -293,30 +295,30 @@ export default function ClipEditor() {
 
         <div className="controls-pane">
           <div className="panel section">
-            <h3>Titel / Hook</h3>
+            <h3>{t("ce.titleHook")}</h3>
             <input className="input" value={title} onChange={(e) => setTitle(e.target.value)} />
           </div>
 
           <div className="panel section">
-            <h3>Schnitt</h3>
+            <h3>{t("ce.cut")}</h3>
             <div className="muted tiny" style={{ marginBottom: 10 }}>
               {fmtClock(start)} → {fmtClock(end)} · {fmtDuration(end - start)}
             </div>
-            <label className="tiny muted">Start</label>
+            <label className="tiny muted">{t("ce.start")}</label>
             <input type="range" min={0} max={srcDur} step={0.1} value={start}
               onChange={(e) => setStart(Math.min(Number(e.target.value), end - 1))} />
-            <label className="tiny muted">End</label>
+            <label className="tiny muted">{t("ce.end")}</label>
             <input type="range" min={0} max={srcDur} step={0.1} value={end}
               onChange={(e) => setEnd(Math.max(Number(e.target.value), start + 1))} />
             {spanChanged && (
               <div className="tiny muted" style={{ marginTop: 8 }}>
-                Untertitel und Score werden für den neuen Bereich neu berechnet.
+                {t("ce.spanNote")}
               </div>
             )}
           </div>
 
           <div className="panel section">
-            <h3>Untertitel-Stil</h3>
+            <h3>{t("ce.captionStyle")}</h3>
             <div className="style-picker">
               {styles.map((s) => (
                 <div
@@ -334,45 +336,45 @@ export default function ClipEditor() {
           </div>
 
           <div className="panel section">
-            <h3>Reframe</h3>
+            <h3>{t("ce.reframe")}</h3>
             <div className="muted tiny" style={{ marginBottom: 10 }}>
               {cx === null
-                ? "Auto: folgt dem Sprecher. Ziehe den Regler für einen festen Crop."
-                : `Manueller Crop-Mittelpunkt: ${Math.round(cx * 100)}% von links`}
+                ? t("ce.cropAuto")
+                : t("ce.cropManual", { pct: Math.round(cx * 100) })}
             </div>
             <div className="range-row">
-              <span className="tiny muted">Links</span>
+              <span className="tiny muted">{t("ce.left")}</span>
               <input type="range" min={0} max={1} step={0.01}
                 value={cx ?? 0.5}
                 onChange={(e) => setCx(Number(e.target.value))} />
-              <span className="tiny muted">Rechts</span>
+              <span className="tiny muted">{t("ce.right")}</span>
             </div>
             {cx !== null && (
               <button className="btn ghost sm" style={{ marginTop: 10 }} onClick={() => setCx(null)}>
-                Zurück auf Auto
+                {t("ce.resetAuto")}
               </button>
             )}
             <div style={{ marginTop: 14 }}>
-              <label className="tiny muted">Ausgabeformat (nur dieser Clip)</label>
+              <label className="tiny muted">{t("ce.aspectLabel")}</label>
               <select className="input" value={aspect}
                 onChange={(e) => setAspect(e.target.value)}>
-                <option value="">Projektstandard ({project.settings.aspect})</option>
-                <option value="9:16">9:16 (Reels/Shorts/TikTok)</option>
-                <option value="4:5">4:5 (Feed)</option>
-                <option value="1:1">1:1 (Quadrat)</option>
-                <option value="16:9">16:9 (YouTube)</option>
+                <option value="">{t("ce.aspectProject", { aspect: project.settings.aspect })}</option>
+                <option value="9:16">{t("ce.aspect916")}</option>
+                <option value="4:5">{t("ce.aspect45")}</option>
+                <option value="1:1">{t("ce.aspect11")}</option>
+                <option value="16:9">{t("ce.aspect169")}</option>
               </select>
             </div>
           </div>
 
           {clip.kind === "gameplay" && (
             <div className="panel section">
-              <h3>Facecam-Layout</h3>
+              <h3>{t("ce.facecamLayout")}</h3>
               <div className="seg" style={{ marginBottom: 10 }}>
                 {[
-                  { id: "center", label: "Nur Gameplay" },
-                  { id: "split", label: "Gestapelt" },
-                  { id: "framed", label: "PiP" },
+                  { id: "center", label: t("ce.layoutGameplay") },
+                  { id: "split", label: t("ce.layoutSplit") },
+                  { id: "framed", label: t("ce.layoutPip") },
                 ].map((o) => (
                   <button
                     key={o.id}
@@ -384,10 +386,10 @@ export default function ClipEditor() {
                     }}
                     title={
                       o.id === "split"
-                        ? "Streamer-Cam über dem Gameplay stapeln"
+                        ? t("ce.layoutSplitTitle")
                         : o.id === "framed"
-                          ? "Streamer-Cam über das Gameplay legen"
-                          : "Nur Gameplay, keine Facecam"
+                          ? t("ce.layoutPipTitle")
+                          : t("ce.layoutGameplayTitle")
                     }
                   >
                     {o.label}
@@ -418,14 +420,14 @@ export default function ClipEditor() {
                   </div>
                   {(
                     [
-                      ["x", "Links", 0, 0.95],
-                      ["y", "Oben", 0, 0.95],
-                      ["w", "Breite", 0.05, 0.6],
-                      ["h", "Höhe", 0.05, 0.6],
+                      ["x", "ce.camX", 0, 0.95],
+                      ["y", "ce.camY", 0, 0.95],
+                      ["w", "ce.camW", 0.05, 0.6],
+                      ["h", "ce.camH", 0.05, 0.6],
                     ] as const
-                  ).map(([k, label, min, max]) => (
+                  ).map(([k, labelKey, min, max]) => (
                     <div className="range-row" key={k}>
-                      <span className="tiny muted" style={{ width: 48 }}>{label}</span>
+                      <span className="tiny muted" style={{ width: 48 }}>{t(labelKey)}</span>
                       <input
                         type="range"
                         min={min}
@@ -437,8 +439,7 @@ export default function ClipEditor() {
                     </div>
                   ))}
                   <span className="muted tiny">
-                    Markiere die Streamer-Cam - sie wird{" "}
-                    {layout === "split" ? "über dem Gameplay gestapelt" : "über das Gameplay gelegt"}.
+                    {layout === "split" ? t("ce.camMarkSplit") : t("ce.camMarkPip")}
                   </span>
                 </>
               )}
@@ -447,7 +448,7 @@ export default function ClipEditor() {
 
           {clip.speakers.length > 1 && (
             <div className="panel section">
-              <h3>Sprecher <span className="muted tiny">- wähle, wer in Untertiteln erscheint</span></h3>
+              <h3>{t("ce.speakers")} <span className="muted tiny">{t("ce.speakersHint")}</span></h3>
               <div className="seg" style={{ flexWrap: "wrap", marginBottom: 8 }}>
                 {clip.speakers.map((sp) => {
                   const on = keptSpeakers(clip, capSpeakers).includes(sp);
@@ -456,21 +457,21 @@ export default function ClipEditor() {
                       key={sp}
                       className={on ? "on" : ""}
                       onClick={() => toggleSpeaker(sp)}
-                      title={on ? "In Untertiteln sichtbar - klicken zum Ausblenden" : "Aus Untertiteln ausgeblendet - klicken zum Einblenden"}
+                      title={on ? t("ce.speakerOnTitle") : t("ce.speakerOffTitle")}
                     >
-                      {on ? "An" : "Aus"} Sprecher {sp + 1}
+                      {t("ce.speakerState", { state: on ? t("up.on") : t("up.off"), index: sp + 1 })}
                     </button>
                   );
                 })}
               </div>
               <span className="muted tiny">
-                Untertitel zeigen nur aktivierte Sprecher - praktisch bei Übersprechen oder wenn nur der Host sichtbar sein soll.
+                {t("ce.speakersNote")}
               </span>
             </div>
           )}
 
           <div className="panel section">
-            <h3>Untertitel <span className="muted tiny">- Transkriptionsfehler korrigieren</span></h3>
+            <h3>{t("ce.captions")} <span className="muted tiny">{t("ce.captionsHint")}</span></h3>
             <div className="caption-list">
               {words.map((w, i) => (
                 <div className="caption-row" key={i}>

@@ -109,6 +109,8 @@ export interface StageView {
   label: string;
   status: "pending" | "active" | "paused" | "done";
   pct: number;
+  /** Seconds the active stage has run / a completed stage took (optional). */
+  elapsed_seconds?: number | null;
 }
 
 export interface JobProgress {
@@ -118,6 +120,7 @@ export interface JobProgress {
   message: string;
   pct: number;
   stages: StageView[];
+  started_at?: number | null;
   updated_at: number;
 }
 
@@ -130,6 +133,21 @@ export interface SourceMedia {
   height: number;
   fps: number;
   size_bytes: number;
+}
+
+export interface AiBoostSettings {
+  /** Keyword emphasis: colour + enlarge power words for the whole line. */
+  emphasis: boolean;
+  /** Auto-emoji: 1-2 fitting emojis per line next to power words. */
+  emoji: boolean;
+  /** Speaker-aware caption colours (podcast look). */
+  speakerColors: boolean;
+  /** Auto zoom/punch-in on emphasis words and scene cuts. */
+  autoZoom: boolean;
+  /** B-roll smart cutaways during static voiceover spans. */
+  broll: boolean;
+  /** Hook/first-3s analysis with a warning + suggestion. */
+  hookCheck: boolean;
 }
 
 export interface ImportSettings {
@@ -147,6 +165,8 @@ export interface ImportSettings {
   tighten: boolean;
   denoise: boolean;
   motion: string;
+  /** AI Boost — the viral-effect toggles grouped in the upload panel. */
+  ai_boost: AiBoostSettings;
   facecam_layout: string;
   use_ocr: boolean;
   use_vlm: boolean;
@@ -216,6 +236,13 @@ export interface StatusPayload {
     gpu_mem_mb: number | null;
     gpu_mem_total_mb: number | null;
   };
+  timing?: {
+    elapsed_seconds: number | null;
+    eta_seconds: number | null;
+    source_duration: number | null;
+  };
+  target_clips?: number;
+  rendered_count?: number;
   progress: JobProgress;
   clips: Array<
     Pick<Clip, "id" | "title" | "score" | "kind" | "status" | "thumb_url" | "export_url"> & {
@@ -273,6 +300,28 @@ export interface Health {
     vram_gb: number;
     cpu: number;
     recommended_power_mode: PowerMode;
+    /** New diagnostics-panel fields (from /api/capabilities). */
+    deno: boolean;
+    ollama: boolean;
+    torchaudio: boolean;
+    paddleocr: boolean;
+    easyocr: boolean;
+    tesseract: boolean;
   };
   output: { width: number; height: number };
+}
+
+/** Grouped detail view returned by /api/capabilities.detail. */
+export interface CapabilityItem {
+  key: string;
+  available: boolean;
+  label: string;
+  impact: string;
+}
+export interface CapabilityCategory {
+  name: string;
+  items: CapabilityItem[];
+}
+export interface CapabilityDetail {
+  categories: CapabilityCategory[];
 }

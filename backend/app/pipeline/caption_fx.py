@@ -12,17 +12,23 @@ caption-build time; rendering (captions.py) just honours the marks.
 """
 from __future__ import annotations
 
+import json
+import logging
 import re
+from pathlib import Path
 
 from ..models import CaptionWord
 from ..providers import signals
 
+log = logging.getLogger("clipforge.caption_fx")
+
 _WORD_RE = re.compile(r"[a-zà-ÿ']+", re.IGNORECASE)
 _NUM_RE = re.compile(r"\d")
 
-# Power word -> emoji. Kept small and unambiguous; matched on the normalized
-# token. Language-shared where the concept is the same; de adds its own keys.
-_EMOJI: dict[str, str] = {
+# Built-in fallback: used when the editable emoji_map.json is missing or
+# unparseable so captions always render. Users add their own pairs by editing
+# emoji_map.json next to this file (no restart needed — reloaded per render).
+_EMOJI_FALLBACK: dict[str, str] = {
     # money / growth
     "money": "💰", "rich": "💰", "cash": "💰", "profit": "📈", "millionaire": "💰",
     "geld": "💰", "reich": "💰",
@@ -40,6 +46,36 @@ _EMOJI: dict[str, str] = {
     "win": "🏆", "won": "🏆", "victory": "🏆", "finally": "🙌", "now": "⏰",
     "sieg": "🏆", "endlich": "🙌", "jetzt": "⏰",
 }
+
+_EMOJI_PATH = Path(__file__).parent / "emoji_map.json"
+_EMOJI_CACHE: tuple[float, dict[str, str]] | None = None  # (mtime, map)
+
+
+def _load_emoji_map() -> dict[str, str]:
+    """Load the editable emoji map, falling back to the built-in dict.
+
+    Cached with mtime invalidation so a hot edit to emoji_map.json takes effect
+    on the next render without a process restart. Missing/corrupt file degrades
+    silently to the fallback — captions must never fail to build.
+    """
+    global _EMOJI_CACHE
+    try:
+        mtime = _EMOJI_PATH.stat().st_mtime
+    except OSError:
+        return _EMOJI_FALLBACK  # file absent — built-ins are still good captions
+    if _EMOJI_CACHE and _EMOJI_CACHE[0] == mtime:
+        return _EMOJI_CACHE[1]
+    try:
+        with _EMOJI_PATH.open(encoding="utf-8") as f:
+            raw = json.load(f)
+        # Drop the _comment key + any non-string entries; keep the rest verbatim.
+        merged = {k: v for k, v in raw.items()
+                  if not k.startswith("_") and isinstance(k, str) and isinstance(v, str)}
+        _EMOJI_CACHE = (mtime, merged)
+        return merged
+    except (json.JSONDecodeError, OSError) as e:
+        log.warning("emoji_map.json unreadable (%s); using built-in emoji set", e)
+        return _EMOJI_FALLBACK
 
 
 def _norm(text: str) -> str:
@@ -82,6 +118,7 @@ def annotate(words: list[CaptionWord], *, lang: str = "en",
         return words
     lex = signals.get_lexicon(lang)
     emph = _emphasis_set(lex)
+    emoji_map = _load_emoji_map() if emoji else {}
     out: list[CaptionWord] = []
     line_emph = 0
     line_emoji = 0
@@ -98,8 +135,8 @@ def annotate(words: list[CaptionWord], *, lang: str = "en",
         if emphasis and (is_num or tok in emph) and line_emph < max_emphasis_per_line:
             mark_e = True
             line_emph += 1
-        if emoji and tok in _EMOJI and line_emoji < max_emoji_per_line:
-            emo = _EMOJI[tok]
+        if emoji and tok in emoji_map and line_emoji < max_emoji_per_line:
+            emo = emoji_map[tok]
             line_emoji += 1
         out.append(w.model_copy(update={"emphasis": mark_e, "emoji": emo}))
         pos_in_line += 1
