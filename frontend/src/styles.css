@@ -1605,6 +1605,16 @@ input[type="range"] {
 .diagnostics-panel .diag-impact { line-height: 1.35; }
 .diagnostics-panel .pill.ok { color: var(--good); }
 .diagnostics-panel .pill.bad { color: var(--bad); }
+.diagnostics-panel .ollama-models {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  padding: 1px 7px;
+  border-radius: 8px;
+  white-space: nowrap;
+}
 @media (max-width: 620px) {
   .diagnostics-panel .diag-items { grid-template-columns: 1fr; }
 }
