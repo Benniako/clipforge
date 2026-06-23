@@ -325,3 +325,10 @@ export interface CapabilityCategory {
 export interface CapabilityDetail {
   categories: CapabilityCategory[];
 }
+
+export interface PublishContent {
+  titles: string[];
+  description: string;
+  hashtags: string[];
+  excerpt: string;
+}

@@ -363,6 +363,43 @@ def download_srt(project_id: str, clip_id: str):
     if not clip.captions.words:
         raise HTTPException(409, "this clip has no captions")
     safe = "".join(c if c.isalnum() or c in " -_" else "_" for c in clip.title).strip()
+    fname = f"{(safe or clip_id)[:60]}.srt"
     return PlainTextResponse(
         build_srt(clip.captions), media_type="application/x-subrip",
-        headers={"Content-Disposition": f'attachment; filename="{(safe or clip_id)[:60]}.srt"'})
+        headers={"Content-Disposition": f"attachment; filename={fname}"})
+
+
+@router.get("/projects/{project_id}/clips/{clip_id}/publish-content")
+def publish_content(project_id: str, clip_id: str, platform: str = "generic"):
+    """AI-generated publish-ready content for this clip (titles, description,
+    hashtags). Generated on demand so the user can iterate."""
+    from ..providers import hashtags as hashtags_mod
+    from ..providers import llm as llm_mod
+
+    project = store.get(project_id)
+    clip = project.clip(clip_id) if project else None
+    if not clip:
+        raise HTTPException(404, "clip not found")
+    transcript = getattr(project, "transcript", None)
+    excerpt = clip.transcript_excerpt or (
+        " ".join(w.text for w in transcript.words
+                 if w.end > clip.start and w.t < clip.end)[:600]
+        if transcript else "")
+    lang = getattr(transcript, "language", "en") or "en"
+    game = getattr(project, "settings", None) and getattr(project.settings, "game_profile", None)
+
+    titles = llm_mod.suggest_title_variants(excerpt, lang=lang, platform=platform)
+    desc = llm_mod.suggest_description(excerpt, lang=lang, platform=platform,
+                                       title=titles[0] if titles else None)
+    ai_tags = llm_mod.suggest_hashtags_llm(excerpt, lang=lang, platform=platform, game=game)
+    if ai_tags is None:
+        ai_tags = hashtags_mod.suggest_hashtags(
+            excerpt, content_type=getattr(clip, "kind", "talking"),
+            platform=platform, game=game)
+
+    return {
+        "titles": titles,
+        "description": desc or "",
+        "hashtags": ai_tags,
+        "excerpt": excerpt[:200],
+    }

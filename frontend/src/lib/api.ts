@@ -8,6 +8,7 @@ import type {
   ImportSettings,
   Project,
   ProjectSummary,
+  PublishContent,
   StatusPayload,
   StyleTemplate,
 } from "./types";
@@ -87,6 +88,11 @@ export interface CreateProjectInput {
 
 export const api = {
   health: () => fetch("/api/health").then((r) => json<Health>(r)),
+
+  /** AI-generated publish-ready content for a clip (titles, description, hashtags). */
+  publishContent: (projectId: string, clipId: string, platform?: string) =>
+    fetch(`/api/projects/${projectId}/clips/${clipId}/publish-content?platform=${platform ?? "generic"}`)
+      .then((r) => json<PublishContent>(r)),
 
   /** Grouped capability inventory for the diagnostics panel. */
   capabilities: () =>
