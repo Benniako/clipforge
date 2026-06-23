@@ -29,6 +29,7 @@ log = logging.getLogger("clipforge.reframe")
 # BUCKET_SIZE=0.5 means two clips whose starts differ by <0.5s share a cache entry.
 _FACE_CACHE: dict[tuple[str, int, int], list[tuple[float, float]] | None] = {}
 _FACE_CACHE_BUCKET = 2  # 1/bucket = 0.5s resolution
+_FACE_CACHE_MAX = 200   # max entries before eviction (LRU-style oldest-first)
 
 SAMPLE_FPS = 3.0          # frames/sec sampled for tracking
 SAMPLE_WIDTH = 480        # downscale for fast detection (cx is a fraction, so OK)
@@ -112,7 +113,7 @@ def compute_reframe(src: str, start: float, end: float, src_aspect: float,
     if not centers and s.has_opencv:
         # Frame cache: overlapping clips on the same source extract the same
         # frames. Bucket the time range so {:.1f}-precision differences don't
-        # miss the cache.
+        # miss the cache. Cache is bounded to _FACE_CACHE_MAX entries.
         cache_key = (src, round(start * _FACE_CACHE_BUCKET),
                      round(end * _FACE_CACHE_BUCKET))
         cached = _FACE_CACHE.get(cache_key)
@@ -120,6 +121,8 @@ def compute_reframe(src: str, start: float, end: float, src_aspect: float,
             centers = cached
         else:
             centers = _track_faces(src, start, end, speech)
+            if len(_FACE_CACHE) >= _FACE_CACHE_MAX:
+                _FACE_CACHE.clear()  # bounded: evict all when hit cap
             _FACE_CACHE[cache_key] = centers
     if not centers:
         return Reframe(layout=LayoutType.center,
