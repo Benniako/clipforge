@@ -2619,7 +2619,10 @@ def test_capabilities_endpoint_returns_both_views():
 def test_ollama_detection_never_raises():
     """_detect_ollama must return a bool in any environment (socket/port probe)."""
     from app.config import _detect_ollama
-    assert isinstance(_detect_ollama(), bool)
+    result = _detect_ollama()
+    assert isinstance(result, tuple) and len(result) == 2
+    assert isinstance(result[0], bool)
+    assert isinstance(result[1], str)
 
 
 # --------------------------------------------------------------------------- #
