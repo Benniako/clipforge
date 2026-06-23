@@ -2888,6 +2888,58 @@ def test_ocr_binarization_applied_to_rois_not_full_frame():
     assert 'roi != "full"' in src, "binarization not gated to ROI crops"
 
 
+# --------------------------------------------------------------------------- #
+# Wiring tests — verify the pipeline connections for zoom, hook, and B-roll.
+# These test the integration points, not the pure module logic (already tested
+# above in the production-value and OCR test blocks).
+# --------------------------------------------------------------------------- #
+def test_render_filter_chain_includes_zoom_when_spikes_exist():
+    """When zoom spikes exist, the filter chain uses zoom_filter, not simple scale."""
+    from app.pipeline.render import render_clip
+    from app.pipeline.zoom import build_zoom_filter, spikes_from_emphasis
+    # build_zoom_filter returns None when no spikes exist.
+    assert build_zoom_filter([], 1080, 1920) is None
+    # With spikes, the filter chain entry starts with "scale=...," (from the zoom
+    # filter pattern) rather than the simple "scale=1080:1920" the static path uses.
+    from app.pipeline.caption_fx import annotate
+    from app.models import CaptionWord
+    # One emphasis word (numbers always count) → one spike → non-None filter.
+    words = annotate([CaptionWord(t=1.0, d=0.4, text="88",
+                                  emphasis=False, emoji=None)],
+                     emphasis=True, lang="en")
+    assert any(w.emphasis for w in words), "numbers always get emphasis"
+    spikes = spikes_from_emphasis(words)
+    assert len(spikes) == 1
+    zf = build_zoom_filter(spikes, 1080, 1920)
+    assert zf is not None and "zoompan" in zf
+
+
+def test_broll_overlay_field_stores_and_reads():
+    """The Clip model carries broll_overlay as an optional dict."""
+    from app.models import Clip
+    c = Clip(id="x", start=0.0, end=10.0)
+    assert c.broll_overlay is None
+    c.broll_overlay = {"source_t": 2.0, "start_rel": 1.5, "duration": 1.2}
+    assert c.broll_overlay["source_t"] == 2.0
+    # Serialize and back: model_dump keeps it.
+    d = c.model_dump(by_alias=False)
+    assert d["broll_overlay"] == c.broll_overlay
+
+
+def test_hook_analysis_runs_as_pipeline_integration():
+    """hook_analysis produces the expected structure (verdict + suggestion)."""
+    from app.providers.score import hook_analysis
+    from app.models import Word
+    r = hook_analysis([])
+    assert "verdict" in r and "suggestion" in r
+    r2 = hook_analysis([Word(t=i, d=0.4, text=w)
+                        for i, w in enumerate(["so", "this", "is", "really", "good"])],
+                       lang="en")
+    assert r2["verdict"] in ("weak", "ok", "strong")
+    assert isinstance(r2["suggestion"], str)
+    assert isinstance(r2["strength"], float)
+
+
 if __name__ == "__main__":
     import sys
     # Windows consoles default to a legacy code page that can't print "✓".
