@@ -2629,17 +2629,24 @@ def test_ollama_detection_never_raises():
 def test_llm_wraps_untrusted_transcript_in_a_data_fence():
     """suggest_title's prompt must fence the transcript as DATA, not inline it."""
     from app.providers import llm
-    # Capture the prompt without actually calling Ollama.
-    orig = llm._generate
+    # Patch both _generate AND available — in CI there's no Ollama server, so
+    # available() returns False and suggest_title returns None without ever
+    # calling the fake, making captured["prompt"] raise KeyError.
+    orig_g = llm._generate
+    orig_av = llm.available
     captured = {}
-    def fake(prompt, **kw):
+    def fake_generate(prompt, **kw):
         captured["prompt"] = prompt
         return "A perfectly fine title"
-    llm._generate = fake
+    def fake_available():
+        return True
+    llm._generate = fake_generate
+    llm.available = fake_available
     try:
         llm.suggest_title("some transcript text here", lang="en")
     finally:
-        llm._generate = orig
+        llm._generate = orig_g
+        llm.available = orig_av
     p = captured["prompt"]
     # The transcript is fenced as data, with an explicit "treat as sample" line,
     # never raw-inlined as "Transcript: ...".
