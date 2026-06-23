@@ -11,8 +11,13 @@ export CLIPFORGE_DEFAULT_POWER_MODE="${CLIPFORGE_DEFAULT_POWER_MODE:-max_gpu}"
 export CLIPFORGE_OLLAMA_MODEL="qwen3:8b"
 export HF_TOKEN="${HF_TOKEN:-HF_TOKEN_REVOKED}"
 export CLIPFORGE_ASD_DIR="${CLIPFORGE_ASD_DIR:-C:\Users\benni\Documents\Codex\2026-06-15\use-github-or-my-uploaded-code\work\clipforge\backend\data\models\LR-ASD}"
+# Suppress HF symlink warning (symlinks need Windows Developer Mode).
+export HF_HUB_DISABLE_SYMLINKS_WARNING="${HF_HUB_DISABLE_SYMLINKS_WARNING:-1}"
 # Add deno + tesseract to PATH so the capability detector finds them.
-export PATH="$PATH:/c/Users/benni/AppData/Local:/c/Program Files/Tesseract-OCR"
+DENO_PATH="/c/Users/benni/AppData/Local"
+TESS_PATH="/c/Program Files/Tesseract-OCR"
+if [ -d "$DENO_PATH" ] && [[ ":$PATH:" != *":$DENO_PATH:"* ]]; then export PATH="$DENO_PATH:$PATH"; fi
+if [ -d "$TESS_PATH" ] && [[ ":$PATH:" != *":$TESS_PATH:"* ]]; then export PATH="$TESS_PATH:$PATH"; fi
 if command -v ollama >/dev/null 2>&1 && command -v curl >/dev/null 2>&1; then
   if ! curl -fsS --max-time 2 http://127.0.0.1:11434/api/tags >/dev/null 2>&1; then
     (ollama serve >/dev/null 2>&1 &)

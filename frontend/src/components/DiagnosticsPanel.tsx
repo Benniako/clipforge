@@ -95,6 +95,12 @@ export default function DiagnosticsPanel({ onClose }: { onClose: () => void }) {
                     <div className="diag-item-body">
                       <span className="diag-item-label">
                         {it.label}
+                        {/* Show installed Ollama model names as pills */}
+                        {it.key === "ollama" && it.impact.includes("Models:") && (
+                          <span className="ollama-models">
+                            {it.impact.split("Models:")[1]?.split(".")[0] || ""}
+                          </span>
+                        )}
                         <span className={"diag-state " + (it.available ? "ok" : "muted")}>
                           {it.available ? t("diag.available") : t("diag.missing")}
                         </span>
