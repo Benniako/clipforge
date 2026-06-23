@@ -522,6 +522,17 @@ class Engine:
                     [c.transcript_excerpt for c in clips], lang=transcript.language)
                 for i, t in titles.items():
                     clips[i].title = t
+            # Hook/first-3s analysis: warn the user if their opener is weak.
+            if clips:
+                first = clips[0]
+                hook_words = [w for w in transcript.words
+                              if w.end > first.start and w.t < first.end]
+                h = score_mod.hook_analysis(hook_words, lang=transcript.language)
+                if h["verdict"] == "weak" and h["suggestion"]:
+                    with store.mutate(project_id) as p:
+                        p.add_warning(
+                            f"Hook: {h['suggestion']}",
+                            severity="warning", code="hook")
             bscope = feedback.bound_scope("talking", plat)
 
         # Optional speech-emotion excitement (emotion2vec): a high-arousal
@@ -619,6 +630,38 @@ class Engine:
             gameplay_mod.apply_title_fallbacks(clips)
 
         clips.sort(key=lambda c: c.score, reverse=True)
+        # B-roll candidate selection: find strong visual moments (scene cuts and
+        # high-motion regions) that could serve as PiP cutaways during static
+        # talking spans. The actual render-time composite is future work — the
+        # selection runs here so the data is available on each clip as
+        # ``clip.broll_overlay``.
+        if kind == "talking" and settings.has_scenedetect:
+            try:
+                from . import broll as broll_mod
+                all_cuts = scenes_mod.scene_cuts(src_path, 0.0, info.duration)
+                if all_cuts:
+                    cands = list(broll_mod.candidates_from_cuts(
+                        all_cuts, window=1.5, clip_end=info.duration))
+                    for clip in clips:
+                        # Pick the B-roll window closest to the middle of the
+                        # clip but at least 2s in (viewer has settled after the
+                        # hook). Skip clips shorter than 5s.
+                        dur = clip.end - clip.start
+                        if dur < 5.0 or not cands or cands[0].start < clip.start:
+                            clip.broll_overlay = None
+                            continue
+                        mid = clip.start + dur / 2
+                        best = min(cands, key=lambda c: abs(c.start - mid))
+                        if best.start < clip.start or best.end > clip.end:
+                            clip.broll_overlay = None
+                        else:
+                            clip.broll_overlay = {
+                                "source_t": best.start,
+                                "start_rel": round(best.start - clip.start, 2),
+                                "duration": round(best.end - best.start, 2),
+                            }
+            except Exception as e:
+                log.debug("b-roll selection skipped: %s", e)
         with store.mutate(project_id) as p:
             p.clips = clips
             if kind == "gameplay":

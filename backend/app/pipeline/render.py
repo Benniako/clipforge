@@ -26,6 +26,9 @@ from ..media import ffmpeg
 from ..media.ffmpeg import MediaInfo
 from ..models import Clip, LayoutType, Rect, StyleTemplate
 from . import captions as captions_mod
+# Zoom is a time-varying punch-in on emphasis words and scene cuts. Pure module,
+# tested; build_zoom_filter returns None when no spikes exist (filter skipped).
+from . import zoom as zoom_mod
 
 # Share of the canvas height the facecam strip takes in the split layout, and
 # the PiP width fraction in the framed layout — the proportions gaming TikToks
@@ -223,6 +226,31 @@ def render_clip(clip: Clip, src_path: str, info: MediaInfo, style: StyleTemplate
             parts.append(
                 f"zoompan=z='min(1+{0.06 / frames:.8f}*on,1.06)'"
                 f":x='(iw-iw/zoom)/2':y='(ih-ih/zoom)/2':d=1:s={out_w}x{out_h}:fps={fps:.3f}")
+        # Auto zoom (AI Boost): brief punch-in on emphasis words, gated by the
+        # clip's settings (default on for most presets). build_zoom_filter
+        # returns None when no spikes exist, so the existing scale+setsar chain
+        # is unchanged.
+        if motion != "push" and not composed and not tightened:
+            # Generate zoom spikes from caption emphasis. The emphasis marks
+            # are set by caption_fx.annotate during build_ass; we re-annotate
+            # here (pure function, no-op when emphasis is off on the style).
+            from .caption_fx import annotate as annotate_words
+            ann_words = annotate_words(
+                clip.captions.words, lang=clip.captions.lang or "en",
+                emphasis=style.emphasis, emoji=style.emoji,
+                max_words_per_line=clip.captions.max_words_per_line)
+            zoom_spikes = zoom_mod.spikes_from_emphasis(ann_words)
+            if zoom_spikes:
+                zoom_filter = zoom_mod.build_zoom_filter(
+                    zoom_spikes, out_w, out_h)
+                if zoom_filter:
+                    # Replace scale + setsar with the dynamic zoom filter.
+                    # The zoom filter itself already handles the final
+                    # dimensions (s=out_wxout_h), so setsar isn't needed.
+                    parts[1] = zoom_filter
+                    parts[2] = ""  # setsar consumed by zoom filter
+        # Remove empty parts (e.g. the setsar slot when zoom replaced it).
+        parts = [p for p in parts if p]
         if ass_part:
             parts.append(ass_part)
         vchain = ",".join(parts)
