@@ -259,6 +259,10 @@ class Clip(BaseModel):
     export_url: str | None = None
     thumb_url: str | None = None
     error: str | None = None
+    # B-roll overlay: a PiP cutaway from a strong visual moment in the source,
+    # displayed during a static talking span. ``start_rel`` is offset from the
+    # clip's start; the overlay lasts ``duration`` seconds.
+    broll_overlay: dict | None = None
 
     @property
     def duration(self) -> float:
