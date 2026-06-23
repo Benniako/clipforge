@@ -1,0 +1,61 @@
+# ClipForge optional power-ups — the models that make detection/captions/reframe
+# smarter. ALL optional and auto-detected at runtime: with none installed the
+# core pipeline runs exactly as before. setup.bat / setup.sh install these
+# best-effort (a failed wheel never aborts setup). They pull PyTorch and are
+# multi-GB; a CUDA GPU is strongly recommended.
+#
+#   pip install -r backend/requirements-extras.txt
+#
+# Some of these pin different torch builds; if a later one downgrades torch and
+# something breaks, install just the ones you want.
+
+# Captions that start/stop on exact speech (tiny, fast, CPU-friendly).
+silero-vad>=5.1
+onnxruntime>=1.17
+
+# Better scene-cut snapping (adaptive detector). Light.
+scenedetect[opencv]>=0.6.4
+
+# Gameplay on-screen text (kill banners / scorelines / VICTORY). PaddleOCR v6
+# is tried first when installed; EasyOCR remains the robust fallback.
+paddleocr>=3.2
+paddlepaddle>=3.2
+transformers>=4.45
+easyocr>=1.7
+rapidfuzz>=3.0
+
+# Speech-emotion excitement signal (laughs/hype/rage) for virality.
+funasr>=1.1
+modelscope>=1.15
+
+# Content-aware vertical reframe — tracks people/objects through cuts.
+# Default is YOLO11 nano. Opt into YOLO26 with CLIPFORGE_YOLO_MODEL=yolo26n.pt.
+ultralytics>=8.4
+
+# Higher-quality transcription: forced word alignment + speaker diarization.
+# Diarization also needs a Hugging Face token (HF_TOKEN).
+whisperx>=3.1
+
+# Audio-event detection (PANNs / CNN14 on AudioSet) — score cheering, laughter,
+# applause, explosions as an explainable virality signal. Zero-shot (no per-game
+# cue needed). Pulls torch (installed above).
+panns-inference>=0.1.1
+
+# Zero-shot audio cue detection with text prompts ("cheering", "laughter",
+# "explosion") when PANNs is not available or misses a moment. Heavy, optional.
+laion-clap>=1.1.4
+
+# Vocal isolation (Demucs) — separate the voice from music/game audio so speech
+# and captions sound studio-clean. Heavy; a CUDA GPU is strongly recommended.
+demucs>=4.0
+
+# Vision-language virality second opinion: scores how a clip *looks* from a few
+# keyframes via a local Ollama vision model — no pip install, just pull one, e.g.
+#   ollama pull qwen3-vl      (or qwen2.5vl / llava / llama3.2-vision / minicpm-v)
+# Auto-detected; set CLIPFORGE_VLM_MODEL to force a specific model.
+
+# Active-speaker detection (LR-ASD / Light-ASD) is a GitHub checkout, not a pip
+# package. To enable: clone https://github.com/Junhua-Liao/LR-ASD , then set
+# CLIPFORGE_ASD_DIR to the checkout path. It needs torch (installed above).
+python_speech_features>=0.6
+gdown>=5.2

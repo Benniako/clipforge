@@ -1,0 +1,316 @@
+<div align="center">
+
+# ◆ ClipForge
+
+![CI](https://github.com/Benniako/clipforge/actions/workflows/ci.yml/badge.svg)
+
+**One long video in. A batch of ranked, vertical, captioned short clips out.**
+
+Drop in a podcast, interview, webinar, or talk → ClipForge finds the best moments,
+reframes them to 9:16 with the speaker in frame, burns in animated captions, and
+ranks every clip by a transparent virality score.
+
+<img src="assets/sample_frame.png" width="240" alt="English clip with karaoke captions"/> &nbsp; <img src="assets/sample_frame_de.png" width="240" alt="German clip with karaoke captions"/>
+
+*Real rendered output (1080×1920): word-by-word karaoke captions, safe-zone placement, speaker-aware crop. English & German.*
+
+</div>
+
+---
+
+## What it does
+
+The whole product is one happy path (PRD §2.1):
+
+```
+Upload  →  Transcribe  →  Detect moments  →  Score & rank  →  Reframe 9:16  →  Caption  →  Render  →  Review  →  Export
+```
+
+You bring a video; ClipForge returns a grid of publish-ready short clips sorted by
+predicted reach. Open any clip in a light editor to nudge the trim, fix a caption,
+restyle, or override the crop — edits re-render **only that clip**, never the batch,
+and never touch the original.
+
+## The four pillars
+
+Everything is built around the four things the PRD says the product is judged on
+(§3). Each lives behind a small provider boundary so a hosted model could replace
+the local default without touching the pipeline.
+
+| Pillar | How it works here |
+| --- | --- |
+| **Moment detection** | Segments the transcript into sentences on punctuation + speech pauses, grows candidates that fit the target length, ranks them by an explainable salience blend, and de-duplicates overlaps (non-max suppression). Snaps to natural speech edges so a clip never cuts a word. |
+| **Auto-captions** | Word-timed captions from Whisper, rendered as ASS for **libass**: large, high-contrast, uppercase, positioned in the safe zone, with the spoken word **highlighted + popped** one at a time (TikTok style). Editable, with line-wrapping for phone readability. |
+| **Vertical reframing** | Samples frames, tracks the dominant face with OpenCV, and builds a **smoothed, velocity-limited** crop path so the camera glides instead of jittering. Falls back to a steady center crop when there's no face (screen-share, graphics). Manual override in the editor. |
+| **Virality scoring** | A 0–100 score that is a **transparent weighted sum** of signal features (hook, emotional payoff, standalone clarity, pace, quotability, length fit, list payoff). Weights are tuned per platform. The top contributing factors are shown verbatim as the "reasons" — never a black box. When a local LLM (Ollama) is running, it adds an **explainable second-opinion re-rank** (±12 pts, shown as its own factor) — it refines the order, never overrides the signal sum. |
+
+Beyond talking-head content, ClipForge also handles **gameplay**: it auto-detects
+talking vs gameplay, and for games finds **audio-energy highlights** (kills,
+goals, clutches, jump-scares) tuned by an optional **per-game profile**
+(Valorant / CS2 / EA FC / Rocket League / Horror / generic — works for any game).
+It also reads the screen: an optional **OCR pass** (PaddleOCR → EasyOCR →
+Tesseract, whichever is installed) catches on-screen viral markers — a
+**VICTORY** / **DEFEAT** / **ELIMINATED** banner, a **GOAL!**, a kill-feed entry —
+and opens a clip on that guaranteed beat. Matched audio cues and OCR hits are
+**saved on the project** so you can see exactly what each highlight keyed off.
+A streamer **facecam** is found automatically (the one face that never moves —
+YuNet when available, Haar fallback); clips then use the TikTok-standard
+**stacked layout** (cam strip on top, gameplay below) or a **PiP overlay**, the
+cam's **reaction energy** feeds the virality score ("streamer reacts hard"), and
+the gameplay crop follows the **motion centroid** instead of blindly centering —
+all overridable per clip in the editor.
+If NVIDIA background removal makes the rectangular webcam hard to see, the
+optional YOLO fallback looks for a stable small person cutout and uses that as
+the facecam region.
+Outputs in **9:16, 4:5, 1:1, or 16:9** (horizontal for YouTube / NLE editing),
+captions optionally burned in, plus **montages** that stitch chosen clips into one
+video with its own virality score. All **local, no APIs**.
+
+It also **learns from your feedback, locally**: 👍/👎 (and your trims, downloads)
+re-weight the *explainable* scoring features toward the clips you keep, and your
+trims teach a damped, clamped **boundary correction** so future clips land on the
+moment more precisely. Cold-start safe (learned↔default blended by confidence),
+fully transparent (`/api/learning` shows what it learned), and resettable.
+
+## Architecture
+
+```
+┌─────────────┐     REST + polling      ┌──────────────────────────────────────┐
+│  React SPA  │ ───────────────────────▶│             FastAPI app               │
+│ (5 screens) │ ◀─────────────────────── │  routes ─ store(SQLite) ─ /media      │
+└─────────────┘    clips, progress, mp4  └───────────────┬──────────────────────┘
+                                                          │ enqueue
+                                          ┌───────────────▼──────────────────────┐
+                                          │  Background worker (job orchestrator) │
+                                          │  transcribe→detect→score→reframe→     │
+                                          │  caption→render  (render fans out)    │
+                                          └───────────────┬──────────────────────┘
+              providers (pluggable)  ┌───────────────────┼───────────────────┐
+                                     ▼                    ▼                   ▼
+                            Whisper / synthetic    OpenCV face track     ffmpeg + libass
+```
+
+- **Async & re-entrant** (PRD §5.2): processing is a background job; the UI polls
+  honest per-stage progress and you can leave and come back. Clips render in
+  parallel and stream into the grid as they finish.
+- **Graceful degradation**: every heavy dependency is optional and auto-detected.
+  No Whisper → synthetic word-timed transcript. No OpenCV → center crop. No
+  ffprobe → ffmpeg-based probe. The core loop always runs; the active path is
+  reported at `/api/health` and surfaced in the UI.
+- **Persistence**: each project is one JSON document in SQLite (the nested object
+  graph from PRD §6 — Project, Transcript, Clip, CaptionSet, Reframe, StyleTemplate).
+  Media lives on disk under `backend/data/media/` and is served with HTTP range
+  support so clips scrub in the browser.
+
+## Tech stack
+
+- **Backend** — Python 3.11, FastAPI, SQLite (stdlib), a static **ffmpeg/ffprobe**
+  (bundled via `static-ffmpeg`, no system install needed).
+- **AI/media** — `faster-whisper` (word-timed transcription), OpenCV (face
+  tracking), ffmpeg + **libass** (crop/scale/caption burn-in/H.264 encode).
+- **Frontend** — React 18 + TypeScript + Vite.
+
+## Quickstart
+
+**Prerequisites (install once):** [Python **3.12**](https://www.python.org/downloads/release/python-3120/)
+(tick *Add to PATH*; the AI libraries don't support 3.13/3.14 yet) and
+[Node.js LTS](https://nodejs.org). On Windows also install the
+[VC++ Redistributable](https://aka.ms/vs/17/release/vc_redist.x64.exe) (Whisper needs it).
+
+### Easiest — Windows (double-click)
+1. **Double-click `setup.bat`** — creates an isolated Python 3.12 env, installs
+   everything, pulls the strongest local Qwen/Ollama text + vision models that
+   fit your GPU/RAM when possible, guides you through the private Hugging Face
+   token needed for speaker diarization, sets up LR-ASD active-speaker tracking
+   when possible, and builds the UI. (Run once.)
+2. **Double-click `run.bat`** — starts the server and opens
+   **http://localhost:8000**. That's it — one window, one URL.
+
+   Setup also makes later runs simple: `run.bat` starts Ollama if it exists,
+   leaves model choice on auto, and ClipForge picks the strongest installed
+   local text/vision model by default.
+
+### macOS / Linux (or Git Bash)
+```bash
+./setup.sh      # one-time
+./run.sh        # starts http://localhost:8000
+```
+
+### Manual / dev mode (hot reload)
+```bash
+cd backend && pip install -r requirements.txt && uvicorn app.main:app --reload --port 8000
+cd frontend && npm install && npm run dev      # http://localhost:5173
+```
+
+The scripts build the frontend and let the backend serve it, so the whole product
+runs from a **single process on http://localhost:8000** — no second terminal.
+
+### Configuration (env vars)
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `CLIPFORGE_WHISPER_MODEL` | *auto* | **Auto-selected for your hardware** (GPU→`large-v3`, strong CPU→`small`, weak→`tiny`). Set to override. |
+| `CLIPFORGE_TRANSCRIBER` | `auto` | `auto` (whisperX if installed, else faster-whisper), or force `whisperx`/`faster`/`synthetic`. |
+| `CLIPFORGE_DEVICE` | *auto* | `cuda` when a usable GPU is detected, else `cpu`. Set to force. |
+| `HF_TOKEN` | – | Hugging Face token; enables whisperX **speaker diarization** (gated pyannote model). |
+| `CLIPFORGE_DIARIZATION_MODEL` | `pyannote/speaker-diarization-community-1` | WhisperX/pyannote diarization model to load once `HF_TOKEN` is valid. |
+| `CLIPFORGE_OLLAMA_URL` | `http://localhost:11434` | Local LLM (Ollama) for AI titles/hooks; used only if reachable. |
+| `CLIPFORGE_LLM_MODEL` | *auto* | Ollama model for titles — auto-picks the strongest installed (qwen3 → llama3.1 → …). Set to force. |
+| `CLIPFORGE_RENDER_WORKERS` | *auto* | Parallel clip renders (scaled to CPU cores). |
+| `CLIPFORGE_CODEC` | `h264` | `av1` opts into av1_nvenc (RTX 40/50 series) — better quality per bitrate. |
+| `CLIPFORGE_WHISPER_BATCH` | `8` | Batched-inference batch size for faster-whisper on GPU (keeps the card saturated). |
+| `CLIPFORGE_YOLO_MODEL` | `yolo11n.pt` | YOLO subject-tracking model. Set `yolo26n.pt` to opt into YOLO26 when `ultralytics>=8.4` is installed. |
+| `CLIPFORGE_ASD_DIR` | – | Path to an [LR-ASD](https://github.com/Junhua-Liao/LR-ASD) checkout to enable active-speaker attribution. |
+| `CLIPFORGE_DATA_DIR` | `backend/data` | Where the DB + media live. |
+| `CLIPFORGE_MAX_UPLOAD_MB` | `0` (unlimited) | Upload / URL-import size cap in MB; set only to guard a small disk. |
+| `FFMPEG_BIN` / `FFPROBE_BIN` | auto | Override binary resolution. |
+
+By default, `setup.bat` pulls the strongest hardware-fit local models it can:
+on a 16 GB NVIDIA GPU / 32 GB RAM machine this is the strongest installed
+compatible vision model (`qwen3-vl` if available, then `qwen2.5vl`) for visual
+scoring and `qwen3:14b` / `gemma4` tier models for titles/virality. `run.bat`
+starts Ollama when available, sets `CLIPFORGE_DEFAULT_POWER_MODE=max_gpu`, and
+leaves `CLIPFORGE_LLM_MODEL` / `CLIPFORGE_VLM_MODEL` unset so ClipForge
+automatically chooses the strongest installed compatible model. Set either
+variable only when you want to force a specific model.
+
+For German-heavy videos on a strong GPU, set `CLIPFORGE_WHISPER_MODEL=large-v3`
+when accuracy matters more than speed. The default auto/turbo path stays faster
+for everyday batches, but `large-v3` is the better quality choice for dense
+German speech.
+
+Default spoken language is **German** (English/auto selectable per project).
+Game events can be pinpointed by matching reference **audio cues** — see
+[docs/GAME_CUES.md](docs/GAME_CUES.md) — including a **Common (all games)** cue
+pack (airhorn, hype, laugh…) that's matched for every profile. Optional **AI
+titles** and the **virality re-rank** use a local [Ollama](https://ollama.com)
+model when running (otherwise heuristic titles/scores). **On-screen text
+detection (OCR)** is optional and auto-detected — install any one of
+`pip install paddleocr` (most accurate), `easyocr`, or `pytesseract` (+ the
+Tesseract binary); with none installed, the audio/cue path still finds highlights.
+
+**Transcription engines (auto-selected, with fallback):** whisperX → faster-whisper
+→ synthetic. Install the optional, higher-quality engine with `pip install whisperx`
+(adds forced word-level alignment + speaker diarization; PyTorch-heavy, GPU
+recommended). When absent, faster-whisper is used; the active engine shows in the nav bar.
+
+## Optional power-ups (auto-detected)
+
+Every one of these is optional and **graceful** — install it and ClipForge uses
+it automatically; skip it and the core pipeline runs exactly as before. The
+setup scripts install the whole set best-effort (a failed wheel is skipped):
+
+```bash
+pip install -r backend/requirements-extras.txt
+```
+
+| Power-up | What it adds | How |
+| --- | --- | --- |
+| **Silero VAD** | Captions snapped to the *exact* speech — words clear the instant talking stops. | `silero-vad` |
+| **PySceneDetect** | More robust scene-cut snapping (adaptive detector) than the ffmpeg score. | `scenedetect` |
+| **emotion2vec** | A speech-emotion **excitement** signal (laughs/hype/rage) folded into virality as an explainable factor. | `funasr` |
+| **PANNs audio events** | Hears the *sounds* that signal a highlight — **cheering, laughter, applause, explosions** — as an explainable, zero-shot virality factor (no per-game cue needed). | `panns-inference` |
+| **Demucs clean voice** | Isolates the **voice** from background music / game audio so speech and captions sound studio-clean. Opt-in per project (*Clean voice*). | `demucs` |
+| **VLM vision read** | A local **vision-language second opinion** on virality from a clip's keyframes (expression, action, framing) — bounded & explainable, like the text re-rank. | `ollama pull qwen2.5vl` |
+| **OCR** | On-screen game text (kill banners, scorelines, VICTORY) → highlights, and **learns reusable audio cues** from them. | `easyocr` / `paddleocr` |
+| **YOLO reframe** | Content-aware 9:16 — tracks people/objects through cuts when no face is visible. | `ultralytics` |
+| **LR-ASD** | Active-speaker detection: crop & captions follow the *real* talker in multi-person shots. | clone [LR-ASD](https://github.com/Junhua-Liao/LR-ASD), set `CLIPFORGE_ASD_DIR` |
+| **whisperX** | Forced word alignment + speaker diarization. | `whisperx` (+ `HF_TOKEN`) |
+
+The nav bar shows which are live in your environment.
+
+## Language support
+
+Transcription auto-detects the spoken language. Moment detection and scoring are
+**language-aware**: the signal lexicons (hooks, emotion, payoff, weak openers,
+enumerations) exist for **English and German**, and the active set is chosen from
+the transcript's detected language — so a German talk gets German-tuned moment
+picks and scores. Pick *Auto-detect / English / German* at import, or set the
+default with the per-project language hint. Unknown languages fall back to English
+lexicons (transcription still works for any Whisper-supported language).
+
+## API overview
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/health` | Version + detected capabilities |
+| `POST` | `/api/projects` | Import (multipart file **or** `url`) + settings; enqueues processing |
+| `GET` | `/api/projects` | Recent projects (summaries) |
+| `GET` | `/api/projects/{id}` | Full project (clips, factors, transcript) |
+| `GET` | `/api/projects/{id}/status` | Lightweight polling: status + per-stage progress + clip cards |
+| `PATCH` | `/api/projects/{id}/clips/{cid}` | Edit (trim / title / style / caption text / crop) → re-renders that clip |
+| `GET` | `/api/projects/{id}/clips/{cid}/download` | Download one clip |
+| `POST` | `/api/projects/{id}/reprocess` | Re-run on the stored source (applies ratings/cues/overrides) |
+| `GET` | `/api/projects/{id}/clips/{cid}/captions.srt` | Caption sidecar for NLE editing |
+| `POST` | `/api/projects/{id}/montage` | Stitch chosen clips into one scored montage |
+| `GET` | `/api/projects/{id}/montages/{mid}/download` | Download a montage |
+| `POST` | `/api/projects/{id}/clips/{cid}/feedback` | 👍/👎 a clip — teaches the local scorer |
+| `GET` | `/api/learning` | What the local learner has picked up (transparency) |
+| `POST` | `/api/learning/reset` | Forget learned preferences |
+| `GET` | `/api/projects/{id}/export` | Zip of all rendered clips |
+| `GET` | `/api/styles` | Caption style templates |
+| `DELETE` | `/api/projects/{id}` | Delete project + media |
+
+## Project structure
+
+```
+backend/
+  app/
+    main.py              FastAPI app, /media, SPA serving, health
+    config.py            settings + capability detection
+    models.py            domain objects (PRD §6)
+    store.py             SQLite document store
+    styles.py            caption style templates
+    media/ffmpeg.py      ffmpeg/ffprobe wrappers (probe, audio, thumbs)
+    providers/           pluggable "AI" stages
+      transcribe.py        Whisper + synthetic fallback (en/de)
+      signals.py           language-aware, explainable signal features
+      detect.py            moment detection
+      score.py             virality scoring (per-platform weights)
+    pipeline/
+      orchestrator.py      job queue + stage sequencing + progress
+      ingest.py            upload / URL import + probe
+      captionize.py        transcript → clip caption set
+      captions.py          caption set → ASS (libass)
+      reframe.py           face tracking → smoothed 9:16 crop path
+      render.py            ffmpeg cut + crop + caption burn + encode
+  tests/                 unit + end-to-end smoke tests
+frontend/
+  src/screens/           Upload, ProjectView (Processing/Grid), ClipEditor
+  src/components/         ClipCard, ScoreBadge, ProcessingView, ClipGridView
+  src/lib/               api client, types, formatting
+```
+
+## Testing
+
+```bash
+cd backend
+python -m tests.test_units        # fast pure-logic units (no ffmpeg/Whisper)
+python -m tests.smoke_pipeline    # end-to-end on a generated video
+python -m tests.real_pipeline     # end-to-end with real TTS speech + Whisper (needs piper voice)
+```
+
+## How this maps to the PRD
+
+**Built (Must-have, PRD §4 — "prove the loop"):** one-video import (file + URL),
+moment detection, 9:16 reframe with speaker tracking, burned-in word-timed
+captions, virality score with reasons, sortable/filterable clip grid, lightweight
+editor (trim, caption text, style, crop override), MP4 export + batch zip.
+**Should-have also in:** caption style templates, platform-specific scoring,
+project library/history, reframe override.
+
+**Deferred (PRD §4 "Could/Won't have v1"):** branding/intros,
+direct posting/scheduling, team workspaces, full timeline editing.
+Speaker **diarization** runs when whisperX + an HF token are present (real
+per-speaker labels); the editor then lets you **toggle each speaker in/out of the
+captions** (handy when one mic catches cross-talk). Reframe uses face tracking,
+not audio-visual active-speaker detection.
+
+**On the PRD's open questions (§9):** scoring is explainable and platform-tunable
+without historical data (transparent weighted signals); language is multi
+(English + German) with auto-detection rather than single-language.
+
+---
+
+*v0.1 — exploration build. The goal, per the PRD: drop in a long video, get back a
+set of genuinely good short clips you'd actually post.*

@@ -1,0 +1,5 @@
+# Normalize line endings; shell scripts must stay LF or bash chokes on \r.
+* text=auto
+*.sh text eol=lf
+*.bat text eol=crlf
+*.png binary
