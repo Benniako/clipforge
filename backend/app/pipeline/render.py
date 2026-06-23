@@ -296,10 +296,38 @@ def render_clip(clip: Clip, src_path: str, info: MediaInfo, style: StyleTemplate
             audio = (["-map", "[ao]", "-c:a", "aac", "-b:a", "128k", "-ac", "2"]
                      if info.has_audio else ["-an"])
         else:
-            (Path(tmp) / "graph.txt").write_text("setpts=PTS-STARTPTS," + vchain,
-                                                 encoding="utf-8")
-            base = ["-ss", f"{clip.start:.3f}", "-i", src_abs,
-                    "-t", f"{clip.duration:.3f}", "-filter_script:v", "graph.txt"]
+            # B-roll PiP overlay: when the clip carries a broll_overlay, the
+            # talking head gets a picture-in-picture showing the strong visual
+            # moment during the designated window. We switch from a simple
+            # one-input -filter_script:v to a two-input -filter_complex_script.
+            broll = None
+            broll_dur = 0.0
+            if hasattr(clip, "broll_overlay") and clip.broll_overlay:
+                broll = clip.broll_overlay
+                broll_dur = min(float(broll.get("duration", 0)),
+                                clip.duration - float(broll.get("start_rel", 0)))
+            if broll and broll_dur > 0.300:
+                ov_start = float(broll.get("start_rel", 0))
+                ov_end = ov_start + broll_dur
+                pip_w = _even(out_w * 0.30)
+                pip_h = _even(pip_w * out_h / out_w)
+                lines = [
+                    f"[0:v]setpts=PTS-STARTPTS,{vchain}[bg];",
+                    f"[1:v]setpts=PTS-STARTPTS,"
+                    f"scale={pip_w}:{pip_h}:flags=lanczos[br];",
+                    f"[bg][br]overlay=x=W-w-20:y=20"
+                    f":enable='between(t,{ov_start:.2f},{ov_end:.2f})'[vo]",
+                ]
+                (Path(tmp) / "graph.txt").write_text("\n".join(lines), encoding="utf-8")
+                base = ["-ss", f"{clip.start:.3f}", "-i", src_abs,
+                        "-ss", f"{float(broll['source_t']):.3f}", "-i", src_abs,
+                        "-t", f"{clip.duration:.3f}",
+                        "-filter_complex_script", "graph.txt", "-map", "[vo]"]
+            else:
+                (Path(tmp) / "graph.txt").write_text("setpts=PTS-STARTPTS," + vchain,
+                                                     encoding="utf-8")
+                base = ["-ss", f"{clip.start:.3f}", "-i", src_abs,
+                        "-t", f"{clip.duration:.3f}", "-filter_script:v", "graph.txt"]
             if info.has_audio:
                 # Normalise loudness so clips sound consistent across a batch.
                 audio = ["-af", "loudnorm=I=-16:TP=-1.5:LRA=11",
