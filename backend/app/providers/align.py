@@ -158,8 +158,9 @@ def _load_aligner(lang: str):
         _align_bundle = False
         return None
     try:
-        import torch
-        import torchaudio
+        # Probe torchaudio availability (torch is pulled lazily by _torch_cuda).
+        # Importing torchaudio here both verifies the dep and binds `bundle`.
+        import torchaudio  # noqa: F401
         from torchaudio.pipelines import MMS_FA as bundle  # multilingual aligner
     except Exception as e:  # torchaudio not installed — degrade silently
         log.info("forced alignment unavailable (torchaudio missing): %s", e)

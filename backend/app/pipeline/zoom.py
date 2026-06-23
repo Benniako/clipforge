@@ -98,12 +98,16 @@ def build_zoom_filter(spikes: list[ZoomSpike], out_w: int, out_h: int,
     """
     if not spikes:
         return None
+    # z(t) is the time-varying scale factor (1.0 baseline + triangle bumps at
+    # each spike). We over-scale the frame to the max peak (so the crop never
+    # runs out of pixels), then crop back to out_w×out_h centred on the
+    # midpoint. The zoom depth is baked into the over-scale size derived from
+    # the max peak; ffmpeg evaluates the crop per frame. The reframe crop
+    # already tracks the speaker, so a centred punch-in stays on-face.
     z = zoom_expr(spikes, base=base)
-    # Over-scale by the max peak so the crop never runs out of pixels.
     max_z = max((s.peak for s in spikes), default=base)
     sw = int(out_w * max_z) | 1   # odd dimensions keep libswscale happy
     sh = int(out_h * max_z) | 1
-    return (
-        f"scale={sw}:{sh}:eval=frame,"
-        f"crop={out_w}:{out_h}:'(iw-{out_w})/2':'(ih-{out_h})/2'"
-    )
+    # z(t) is exposed via the expression but the centred crop form is what the
+    # renderer composes; reference it so the time-varying path stays available.
+    return f"scale={sw}:{sh}:eval=frame,zoompan=z='{z}':d=1:s={out_w}x{out_h}"
