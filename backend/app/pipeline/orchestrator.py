@@ -647,15 +647,18 @@ class Engine:
                         # clip but at least 2s in (viewer has settled after the
                         # hook). Skip clips shorter than 5s.
                         dur = clip.end - clip.start
-                        if dur < 5.0 or not cands or cands[0].start < clip.start:
+                        if dur < 5.0 or not cands:
                             clip.broll_overlay = None
                             continue
                         mid = clip.start + dur / 2
-                        best = min(cands, key=lambda c: abs(c.start - mid))
-                        if best.start < clip.start or best.end > clip.end:
+                        # Find candidates that actually fall within this clip.
+                        valid = [c for c in cands
+                                 if c.start >= clip.start and c.end <= clip.end]
+                        if not valid:
                             clip.broll_overlay = None
-                        else:
-                            clip.broll_overlay = {
+                            continue
+                        best = min(valid, key=lambda c: abs(c.start - mid))
+                        clip.broll_overlay = {
                                 "source_t": best.start,
                                 "start_rel": round(best.start - clip.start, 2),
                                 "duration": round(best.end - best.start, 2),
