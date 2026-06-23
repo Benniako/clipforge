@@ -320,6 +320,8 @@ class Settings:
     has_paddleocr: bool = False  # OCR engine (best accuracy overall)
     has_easyocr: bool = False    # OCR engine (best on noisy frames)
     has_tesseract: bool = False  # OCR engine (fallback)
+    has_scrfd: bool = False      # SCRFD face detection (upgrade from YuNet)
+    has_surya: bool = False      # Surya OCR (vision-language based OCR)
 
     # --- pipeline tunables ----------------------------------------------
     whisper_model: str = os.environ.get("CLIPFORGE_WHISPER_MODEL", "tiny")
@@ -432,6 +434,9 @@ class Settings:
                 item("asd", self.has_asd,
                      "LR-ASD active speaker",
                      "Ties transcript words to the on-screen speaker for multi-person content."),
+                item("scrfd", self.has_scrfd,
+                     "SCRFD face detection",
+                     "Improved face detection. Replaces YuNet. ONNX GPU-accelerated."),
             ]},
             {"name": "ocr", "items": [
                 item("paddleocr", self.has_paddleocr,
@@ -440,6 +445,8 @@ class Settings:
                      "EasyOCR", "Better than PaddleOCR on noisy/bitrate-starved frames."),
                 item("tesseract", self.has_tesseract,
                      "Tesseract", "Fallback OCR engine."),
+                item("surya", self.has_surya,
+                     "Surya OCR", "Vision-language based OCR (90+ langs, GPU). Alternative to PaddleOCR."),
                 item("ocr_selected", bool(self.ocr_engine),
                      f"Active OCR: {self.ocr_engine or 'none'}",
                      "Selected automatically from the engines above. None = OCR detection skipped."),
@@ -593,6 +600,8 @@ class Settings:
             "paddleocr": self.has_paddleocr,
             "easyocr": self.has_easyocr,
             "tesseract": self.has_tesseract,
+            "scrfd": self.has_scrfd,
+            "surya": self.has_surya,
         }
 
 
@@ -648,6 +657,8 @@ def get_settings() -> Settings:
         has_paddleocr=_has_module("paddleocr"),
         has_easyocr=_has_module("easyocr"),
         has_tesseract=bool(_has_module("pytesseract") and shutil.which("tesseract")),
+        has_scrfd=_has_module("scrfd"),
+        has_surya=_has_module("surya"),
         device=device,
         whisper_model=whisper_model,
         render_workers=render_workers,
