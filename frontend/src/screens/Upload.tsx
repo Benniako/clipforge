@@ -706,6 +706,10 @@ export default function Upload({ health }: { health: Health | null }) {
           {busy ? (
             pct < 100 && file ? (
               <>{t("up.uploading", { pct })}</>
+            ) : url ? (
+              <>
+                <span className="spinner" /> {t("up.downloading")}
+              </>
             ) : (
               <>
                 <span className="spinner" /> {t("up.starting")}
