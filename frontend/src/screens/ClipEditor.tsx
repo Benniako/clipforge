@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api } from "../lib/api";
 import type { Clip, Project, Rect, StyleTemplate } from "../lib/types";
@@ -34,6 +34,96 @@ export default function ClipEditor() {
   const [cam, setCam] = useState<Rect | null>(null);
   const [aspect, setAspect] = useState<string>(""); // "" = project default
   const [capSpeakers, setCapSpeakers] = useState<number[] | null>(null); // null = all
+  const [showShortcuts, setShowShortcuts] = useState(false);
+
+  // Refs for keyboard-driven controls
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const videoWrapperRef = useRef<HTMLDivElement | null>(null);
+
+  // Keyboard shortcuts for the editor. Uses refs so the handler never goes stale.
+  const keyboardRefs = useRef({
+    start, end, srcDur, dirty, busy, apply: async () => {},
+  });
+  keyboardRefs.current = { start, end, srcDur, dirty, busy, apply };
+  
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      // Don't capture when typing in an input or textarea.
+      const tag = (e.target as HTMLElement).tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+
+      const st = keyboardRefs.current;
+      const video = videoRef.current;
+      const step = e.shiftKey ? 0.1 : 0.5;
+      const dur = st.srcDur;
+
+      switch (e.code) {
+        case "Space":
+          e.preventDefault();
+          if (video) {
+            if (video.paused) video.play();
+            else video.pause();
+          }
+          break;
+        case "KeyJ":
+          e.preventDefault();
+          if (video) {
+            video.playbackRate = Math.max(0.25, video.playbackRate - 0.5);
+            if (video.paused) video.play();
+          }
+          break;
+        case "KeyK":
+          e.preventDefault();
+          if (video) { video.pause(); video.playbackRate = 1; }
+          break;
+        case "KeyL":
+          e.preventDefault();
+          if (video) {
+            video.playbackRate = Math.min(4, video.playbackRate + 0.5);
+            if (video.paused) video.play();
+          }
+          break;
+        case "KeyI":
+          e.preventDefault();
+          if (video) setStart(Math.max(0, Math.min(video.currentTime, st.end - 1)));
+          break;
+        case "KeyO":
+          e.preventDefault();
+          if (video) setEnd(Math.max(st.start + 1, Math.min(video.currentTime, dur)));
+          break;
+        case "ArrowLeft":
+          e.preventDefault();
+          if (video) video.currentTime = Math.max(0, video.currentTime - step);
+          break;
+        case "ArrowRight":
+          e.preventDefault();
+          if (video) video.currentTime = Math.min(dur, video.currentTime + step);
+          break;
+        case "Enter":
+          e.preventDefault();
+          if (st.dirty && !st.busy) st.apply();
+          break;
+        case "Slash":
+          if (!e.shiftKey) {
+            e.preventDefault();
+            setShowShortcuts((s) => !s);
+          }
+          break;
+        case "Escape":
+          setShowShortcuts(false);
+          break;
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, []);
+  // Mutable refs so the keyboard handler always sees the latest state.
+  const stateRef = useRef({
+    start: 0, end: 0, srcDur: 0,
+    dirty: false, busy: false,
+    apply: async () => {},
+  });
+  const applyRef = useRef<() => Promise<void>>(async () => {});
 
   useEffect(() => {
     alive.current = true;
@@ -65,6 +155,92 @@ export default function ClipEditor() {
       live = false;
     };
   }, [projectId, clipId]);
+
+  // Keyboard shortcuts for the editor.
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      // Don't capture when typing in an input or textarea.
+      const tag = (e.target as HTMLElement).tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+
+      const video = videoRef.current;
+      const step = e.shiftKey ? 0.1 : 0.5;
+      const dur = srcDur;
+
+      switch (e.code) {
+        case "Space":
+          e.preventDefault();
+          if (video) {
+            if (video.paused) video.play();
+            else video.pause();
+          }
+          break;
+        case "KeyJ":
+          e.preventDefault();
+          if (video) {
+            video.playbackRate = Math.max(0.25, video.playbackRate - 0.5);
+            if (video.paused) video.play();
+          }
+          break;
+        case "KeyK":
+          e.preventDefault();
+          if (video) { video.pause(); video.playbackRate = 1; }
+          break;
+        case "KeyL":
+          e.preventDefault();
+          if (video) {
+            video.playbackRate = Math.min(4, video.playbackRate + 0.5);
+            if (video.paused) video.play();
+          }
+          break;
+        case "KeyI":
+          e.preventDefault();
+          if (video) setStart(Math.max(0, Math.min(video.currentTime, end - 1)));
+          break;
+        case "KeyO":
+          e.preventDefault();
+          if (video) setEnd(Math.max(start + 1, Math.min(video.currentTime, dur)));
+          break;
+        case "ArrowLeft":
+          e.preventDefault();
+          if (video) {
+            video.currentTime = Math.max(0, video.currentTime - step);
+          }
+          break;
+        case "ArrowRight":
+          e.preventDefault();
+          if (video) {
+            video.currentTime = Math.min(dur, video.currentTime + step);
+          }
+          break;
+        case "Enter":
+          e.preventDefault();
+          if (dirty && !busy) apply();
+          break;
+        case "KeyZ":
+          if (e.metaKey || e.ctrlKey) {
+            e.preventDefault();
+            if (e.shiftKey) {
+              // Redo — handled by the undo system (next phase).
+            } else {
+              // Undo — handled by the undo system (next phase).
+            }
+          }
+          break;
+        case "Slash":
+          if (!e.shiftKey) {
+            e.preventDefault();
+            setShowShortcuts((s) => !s);
+          }
+          break;
+        case "Escape":
+          setShowShortcuts(false);
+          break;
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [dirty, busy, start, end, srcDur, apply]);
 
   const hydrate = (c: Clip) => {
     setClip(c);
@@ -257,10 +433,11 @@ export default function ClipEditor() {
               {t("ce.tabOriginal")}
             </button>
           </div>
-          <div className="video-wrap">
+          <div className="video-wrap" ref={videoWrapperRef}>
             {videoSrc ? (
               <video
                 key={videoSrc}
+                ref={videoRef}
                 src={videoSrc}
                 controls
                 playsInline
@@ -291,6 +468,10 @@ export default function ClipEditor() {
                 ))}
               </div>
             )}
+            <div className="shortcuts-hint muted tiny" style={{ marginTop: 10, cursor: "pointer" }}
+                 onClick={() => setShowShortcuts(true)}>
+              ⌨️ <span className="muted">{t("ce.shortcuts")}</span>
+            </div>
           </div>
         </div>
 
@@ -499,6 +680,45 @@ export default function ClipEditor() {
       </div>
 
       {msg && <div className={"toast" + (msg.includes("fail") ? " err" : "")}>{msg}</div>}
+
+      {/* Keyboard shortcuts overlay */}
+      {showShortcuts && (
+        <div className="modal-overlay" onClick={() => setShowShortcuts(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}
+               style={{ maxWidth: 420, padding: 24 }}>
+            <h3 style={{ marginBottom: 16 }}>⌨️ {t("ce.shortcuts")}</h3>
+            <div className="shortcuts-grid" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px 24px" }}>
+              {[
+                ["Space", "ce.shortcutPlay"],
+                ["J", "ce.shortcutRewind"],
+                ["K", "ce.shortcutPause"],
+                ["L", "ce.shortcutForward"],
+                ["I", "ce.shortcutIn"],
+                ["O", "ce.shortcutOut"],
+                ["← →", "ce.shortcutStepBack"],
+                ["⇧ ← →", "ce.shortcutFineBack"],
+                ["Enter", "ce.shortcutApply"],
+                ["?", "ce.shortcuts"],
+              ].map(([key, labelKey]) => (
+                <div key={key} className="row" style={{ justifyContent: "space-between", gap: 12 }}>
+                  <kbd style={{
+                    background: "var(--bg)",
+                    border: "1px solid var(--border)",
+                    borderRadius: 4, padding: "2px 8px",
+                    fontFamily: "monospace", fontSize: 13,
+                    minWidth: 32, textAlign: "center",
+                  }}>{key}</kbd>
+                  <span className="muted" style={{ fontSize: 13 }}>{t(labelKey)}</span>
+                </div>
+              ))}
+            </div>
+            <button className="btn ghost sm" style={{ marginTop: 16 }}
+                    onClick={() => setShowShortcuts(false)}>
+              {t("diag.close")}
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
