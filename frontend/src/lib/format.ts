@@ -48,5 +48,4 @@ export function timeAgo(
   if (diff < 86400) return `vor ${Math.floor(diff / 3600)} Std`;
   return `vor ${Math.floor(diff / 86400)} Tg`;
 }
-}
 
