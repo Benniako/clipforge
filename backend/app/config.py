@@ -86,7 +86,7 @@ def _detect_ocr() -> str:
         return "paddleocr"
     if _has_module("easyocr"):
         return "easyocr"
-    if _has_module("surya") and shutil.which("docker"):
+    if _has_module("surya"):
         return "surya"
     if _has_module("pytesseract") and shutil.which("tesseract"):
         return "tesseract"
@@ -704,7 +704,7 @@ def get_settings() -> Settings:
         has_easyocr=_has_module("easyocr"),
         has_tesseract=bool(_has_module("pytesseract") and shutil.which("tesseract")),
         has_scrfd=_has_module("scrfd"),
-        has_surya=bool(_has_module("surya") and shutil.which("docker")),
+        has_surya=_has_module("surya"),
         device=device,
         whisper_model=whisper_model,
         render_workers=render_workers,
