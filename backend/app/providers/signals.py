@@ -27,6 +27,7 @@ class Lexicon:
     second_person: frozenset[str]  # "you/your" equivalents
     quote_extra: frozenset[str]    # extra punchy/quotable words
     enumeration: frozenset[str]    # list/steps markers
+    controversy: frozenset[str] = frozenset()  # polarising/argument-triggering words
 
     @property
     def quote(self) -> frozenset[str]:
@@ -62,6 +63,14 @@ _EN = Lexicon(
     enumeration=frozenset({
         "first", "second", "third", "three", "two", "steps", "ways", "reasons", "tips",
     }),
+    controversy=frozenset({
+        "controversial", "unpopular", "opinion", "actually", "wrong", "hate",
+        "nobody tells you", "truth", "real reason", "why everyone", "change my mind",
+        "fight me", "prove me wrong", "hot take", "debate", "argue",
+        "overrated", "underrated", "worst", "terrible", "awful",
+        "cancel", "toxic", "problematic", "divisive",
+        "conspiracy", "unpopular opinion",
+    }),
 )
 
 _DE = Lexicon(
@@ -93,6 +102,14 @@ _DE = Lexicon(
     enumeration=frozenset({
         "erstens", "zweitens", "drittens", "drei", "zwei", "schritte", "wege",
         "gründe", "tipps", "punkte",
+    }),
+    controversy=frozenset({
+        "kontrovers", "unpopular", "meinung", "eigentlich", "falsch", "hassen",
+        "sagt niemand", "wahrheit", "echter grund", "warum alle", "beweis mir",
+        "heißer take", "diskutieren", "streiten", "überbewertet",
+        "unterbewertet", "schlimmste", "furchtbar",
+        "toxisch", "problematisch", "spaltend",
+        "verschwörung", "unbeliebte meinung",
     }),
 )
 
@@ -289,3 +306,52 @@ def list_payoff(words: list[Word], lex: Lexicon = _EN) -> tuple[float, str]:
     enumeration = any(t in lex.enumeration for t in toks)
     raw = _clamp(0.6 * has_num + 0.6 * enumeration)
     return raw, "Concrete, list-style payoff"
+
+
+def controversy(words: list[Word], lex: Lexicon = _EN) -> tuple[float, str]:
+    """Polarising/argument-triggering language that drives comments.
+
+    Controversial statements are the strongest engagement driver on short-form
+    platforms — people comment to argue, correct, or agree. We detect trigger
+    phrases (hot takes, unpopular opinions, direct challenges) and rate the
+    clip's controversy density.
+    """
+    if not words:
+        return 0.0, ""
+    toks = _tokens(words)
+    if not toks:
+        return 0.0, ""
+    hits = sum(1 for t in toks if t in lex.controversy)
+    # Multi-word phrases need sliding window matching
+    text = " ".join(toks).lower()
+    phrase_hits = sum(1 for p in lex.controversy
+                      if " " in p and p in text)
+    total = hits + phrase_hits * 2  # phrases are stronger signals
+    density = total / max(len(toks), 1)
+    raw = _clamp(density * 15.0)
+    return raw, "Controversial — drives comments"
+
+
+def qa_pattern(words: list[Word], lex: Lexicon = _EN) -> tuple[float, str]:
+    """Does the clip start with a question and answer within its span?
+
+    Question→answer clips have high retention (the viewer stays for the answer)
+    and high shareability. We check if any sentence near the start ends with
+    '?', and if the following text contains an answer marker.
+    """
+    if not words:
+        return 0.0, ""
+    # Find question marks in the first ~40% of words
+    split_at = max(len(words) // 5, 3)  # first 20% or 3 words
+    head = words[:split_at]
+    question = any(w.text.rstrip().endswith("?") for w in head)
+    if not question:
+        return 0.0, ""
+    # Look for answer markers after the question
+    answer_markers = {"because", "so", "reason", "explain", "means", "actually",
+                      "turns out", "the truth", "answer", "weil", "deshalb",
+                      "deswegen", "erklärung", "bedeutet", "eigentlich"}
+    rest = " ".join(w.text.lower() for w in words[split_at:])
+    has_answer = any(m in rest for m in answer_markers)
+    raw = _clamp(0.8 if has_answer else 0.4)
+    return raw, "Question triggers then answers — drives retention"

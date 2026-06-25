@@ -9,8 +9,7 @@ export CLIPFORGE_WHISPER_MODEL="${CLIPFORGE_WHISPER_MODEL:-large-v3-turbo}"
 export CLIPFORGE_WHISPER_BATCH="${CLIPFORGE_WHISPER_BATCH:-24}"
 export CLIPFORGE_DEFAULT_POWER_MODE="${CLIPFORGE_DEFAULT_POWER_MODE:-max_gpu}"
 export CLIPFORGE_OLLAMA_MODEL="qwen3:8b"
-export HF_TOKEN="${HF_TOKEN:-HF_TOKEN_REVOKED}"
-export CLIPFORGE_ASD_DIR="${CLIPFORGE_ASD_DIR:-C:\Users\benni\Documents\Codex\2026-06-15\use-github-or-my-uploaded-code\work\clipforge\backend\data\models\LR-ASD}"
+# HF_TOKEN: set this in your environment or .env file to enable speaker diarization.
 # Suppress HF symlink warning (symlinks need Windows Developer Mode).
 export HF_HUB_DISABLE_SYMLINKS_WARNING="${HF_HUB_DISABLE_SYMLINKS_WARNING:-1}"
 # Add deno + tesseract to PATH so the capability detector finds them.
@@ -21,7 +20,13 @@ if [ -d "$TESS_PATH" ] && [[ ":$PATH:" != *":$TESS_PATH:"* ]]; then export PATH=
 if command -v ollama >/dev/null 2>&1 && command -v curl >/dev/null 2>&1; then
   if ! curl -fsS --max-time 2 http://127.0.0.1:11434/api/tags >/dev/null 2>&1; then
     (ollama serve >/dev/null 2>&1 &)
-    sleep 2
+    # Retry loop — Ollama may take >2s on a slow machine or first launch.
+    for i in $(seq 1 10); do
+      if curl -fsS --max-time 2 http://127.0.0.1:11434/api/tags >/dev/null 2>&1; then
+        break
+      fi
+      sleep 1
+    done
   fi
 fi
 echo "ClipForge running at http://localhost:8000  (Ctrl+C to stop)"

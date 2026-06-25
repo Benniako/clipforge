@@ -9,12 +9,11 @@ status check for which cues you've added. Drop files (any audio format) named
 from __future__ import annotations
 
 import re
-import shutil
 import tempfile
 import urllib.parse
-import urllib.request
 from pathlib import Path
 
+from ._util import http_download
 from .config import get_settings
 from .media import ffmpeg
 from .providers.detect_cues import CUE_EXTS
@@ -107,9 +106,7 @@ def audio_url_from_html(html: str, base_url: str) -> str | None:
 
 
 def _download(url: str, dest: Path) -> None:
-    req = urllib.request.Request(url, headers={"User-Agent": "ClipForge/0.1"})
-    with urllib.request.urlopen(req, timeout=60) as r, open(dest, "wb") as f:
-        shutil.copyfileobj(r, f)
+    http_download(url, dest)
 
 
 def install_cue_from_url(game: str, event: str, url: str) -> None:

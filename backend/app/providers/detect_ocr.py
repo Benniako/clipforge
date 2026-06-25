@@ -17,10 +17,14 @@ no OCR dependency so they're unit-tested without a backend.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import os
 import re
 import tempfile
+import threading
+import time
 import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
@@ -282,6 +286,8 @@ def dedupe_events(events: list[OcrEvent], *, min_gap: float = 4.0) -> list[OcrEv
 # --------------------------------------------------------------------------- #
 _reader = None  # cached backend instance
 _easyocr_ok: bool | None = None  # cached availability probe for the low-conf retry
+_reader_lock = threading.Lock()
+_easyocr_lock = threading.Lock()
 
 
 def _easyocr_available() -> bool:
@@ -289,17 +295,19 @@ def _easyocr_available() -> bool:
 
     Cached after the first check so the per-frame fallback path never pays for a
     repeated import probe on a long VOD. ``False`` once it has failed once.
+    Thread-safe via ``_easyocr_lock``.
     """
     global _easyocr_ok
-    if _easyocr_ok is not None:
-        return _easyocr_ok
-    try:
-        import easyocr  # noqa: F401
+    with _easyocr_lock:
+        if _easyocr_ok is not None:
+            return _easyocr_ok
+        try:
+            import easyocr  # noqa: F401
 
-        _easyocr_ok = True
-    except Exception:
-        _easyocr_ok = False
-    return _easyocr_ok
+            _easyocr_ok = True
+        except Exception:
+            _easyocr_ok = False
+        return _easyocr_ok
 
 
 def _crop_hash(path: str) -> str | None:
@@ -312,7 +320,8 @@ def _crop_hash(path: str) -> str | None:
     """
     try:
         from PIL import Image
-        im = Image.open(path).convert("L").resize((9, 8))
+        with Image.open(path) as _tmp:
+            im = _tmp.convert("L").resize((9, 8))
         pixels = list(im.getdata())
         return "".join("1" if pixels[i] > pixels[i + 1] else "0"
                        for i in range(len(pixels) - 1))
@@ -393,37 +402,54 @@ def _make_easyocr(gpu: bool, langs: list[str] | None = None):
     return easyocr.Reader(langs or ["en"], gpu=gpu, verbose=False)
 
 
+def _make_surya():
+    """Construct a Surya OCR RecognitionPredictor (VLM-based, GPU-accelerated).
+
+    Returns a ``RecognitionPredictor`` that runs full-page OCR on images.
+    Unlike PaddleOCR/EasyOCR, Surya is a single vision-language call per page
+    and doesn't return per-character confidence scores in the same way.
+    """
+    from surya.inference import SuryaInferenceManager
+    from surya.recognition import RecognitionPredictor
+
+    manager = SuryaInferenceManager()
+    return RecognitionPredictor(manager)
+
+
 def _get_reader(engine: str, lang: str = "en"):
     global _reader
-    if _reader is not None:
-        return _reader
-    s = get_settings()
-    gpu = s.device == "cuda"
-    ocr_langs = {"de": ["de", "en"], "en": ["en"]}.get(lang[:2].lower(), ["en"])
-    attempts = []
-    if engine == "paddleocr":
-        attempts.append(("paddleocr", lambda: _make_paddle(gpu, lang)))
-        # GPU→CPU fallback per engine (#9): when GPU PaddleOCR fails (OOM,
-        # runtime), retry with CPU PaddleOCR before falling to EasyOCR. A CUDA
-        # OOM shouldn't skip PaddleOCR entirely — CPU inference is slower but
-        # still more accurate than EasyOCR on clean HUD text.
-        if gpu:
-            attempts.append(("paddleocr", lambda: _make_paddle(False, lang)))
-        attempts.append(("easyocr", lambda: _make_easyocr(gpu, ocr_langs)))
-    elif engine == "easyocr":
-        attempts.append(("easyocr", lambda: _make_easyocr(gpu, ocr_langs)))
-    elif engine == "tesseract":
-        attempts.append(("tesseract", lambda: None))
-    for kind, make in attempts:
-        try:
-            # GPU model loads can hang indefinitely (CUDA deadlock). Wrap the
-            # constructor with a timeout so the CPU fallback gets a chance.
-            _reader = (kind, _try_with_timeout(make, timeout=15.0))
+    with _reader_lock:
+        if _reader is not None:
             return _reader
-        except Exception as e:
-            log.warning("%s OCR unavailable, trying fallback if present: %s", kind, e)
-    _reader = ("", None)
-    return _reader
+        s = get_settings()
+        gpu = s.device == "cuda"
+        ocr_langs = {"de": ["de", "en"], "en": ["en"]}.get(lang[:2].lower(), ["en"])
+        attempts = []
+        if engine == "paddleocr":
+            attempts.append(("paddleocr", lambda: _make_paddle(gpu, lang)))
+            # GPU→CPU fallback per engine (#9): when GPU PaddleOCR fails (OOM,
+            # runtime), retry with CPU PaddleOCR before falling to EasyOCR. A CUDA
+            # OOM shouldn't skip PaddleOCR entirely — CPU inference is slower but
+            # still more accurate than EasyOCR on clean HUD text.
+            if gpu:
+                attempts.append(("paddleocr", lambda: _make_paddle(False, lang)))
+            attempts.append(("easyocr", lambda: _make_easyocr(gpu, ocr_langs)))
+        elif engine == "easyocr":
+            attempts.append(("easyocr", lambda: _make_easyocr(gpu, ocr_langs)))
+        elif engine == "tesseract":
+            attempts.append(("tesseract", lambda: None))
+        elif engine == "surya":
+            attempts.append(("surya", lambda: _make_surya()))
+        for kind, make in attempts:
+            try:
+                # GPU model loads can hang indefinitely (CUDA deadlock). Wrap the
+                # constructor with a timeout so the CPU fallback gets a chance.
+                _reader = (kind, _try_with_timeout(make, timeout=15.0))
+                return _reader
+            except Exception as e:
+                log.warning("%s OCR unavailable, trying fallback if present: %s", kind, e)
+        _reader = ("", None)
+        return _reader
 
 
 def _paddle_read(reader, path: str) -> tuple[str, float]:
@@ -505,6 +531,37 @@ def _is_garbled(text: str, threshold: float = 0.40) -> bool:
     return clean / len(text) < (1.0 - threshold)
 
 
+def _surya_read(reader, path: str) -> tuple[str, float]:
+    """Read text from one image via Surya VLM (full-page OCR).
+
+    Returns ``(text, confidence)`` where confidence is the mean score across
+    detected text blocks, or 0.0 when the backend doesn't report scores.
+    """
+    from PIL import Image
+
+    try:
+        with Image.open(path) as _pil:
+            results = reader([_pil.convert("RGB")], full_page=True)
+    except Exception as e:
+        log.warning("surya read failed for %s: %s", path, e)
+        return "", 0.0
+    if not results:
+        return "", 0.0
+    blocks = results[0].blocks
+    if not blocks:
+        return "", 0.0
+    lines: list[str] = []
+    scores: list[float] = []
+    for blk in blocks:
+        if not blk.label:
+            continue
+        lines.append(blk.label)
+        if blk.confidence is not None:
+            scores.append(float(blk.confidence))
+    mean = sum(scores) / len(scores) if scores else 0.0
+    return " ".join(lines), max(0.0, min(1.0, mean))
+
+
 def _ocr_image(path: str, engine: str, lang: str = "en") -> str:
     """Read all text from one image with the active backend → one string."""
     return _ocr_image_conf(path, engine, lang)[0]
@@ -527,9 +584,13 @@ def _ocr_image_conf(path: str, engine: str, lang: str = "en") -> tuple[str, floa
             # ("VICTORY", "MATCH WON") and short banners, not dense paragraphs.
             # The default PSM 3 assumes a book page and hallucinates punctuation/
             # garbage trying to find sentence structure where there is none.
-            return (pytesseract.image_to_string(
-                Image.open(path), config=f"--psm 11 --lang {tesseract_lang}"),
-                    0.0)
+            from PIL import Image
+            with Image.open(path) as _pil:
+                return (pytesseract.image_to_string(
+                    _pil, config=f"--psm 11 --lang {tesseract_lang}"),
+                        0.0)
+        if kind == "surya":
+            return _surya_read(reader, path)
     except Exception as e:  # one bad frame mustn't sink detection
         log.warning("ocr read failed for %s: %s", path, e)
     return "", 0.0
@@ -616,7 +677,8 @@ def _ocr_frame_images(frame: Path, tmpd: Path, idx: int,
     try:
         from PIL import Image, ImageOps
 
-        im = Image.open(frame).convert("RGB")
+        with Image.open(frame) as _tmp:
+            im = _tmp.convert("RGB")
         w, h = im.size
         specs: list[tuple[str, tuple[int, int, int, int]]] = []
         if name in {"valorant", "cs2"}:
@@ -775,8 +837,7 @@ def find_text_events(src_path: str, info: MediaInfo,
                 frame = tmpd / f"f{i}.png"
                 try:
                     # Downscale to 720p wide — plenty for banner/feed text, fast.
-                    ffmpeg.run(["-ss", f"{t:.3f}", "-i", src_path, "-frames:v", "1",
-                                "-vf", "scale=1280:-2", str(frame)], timeout=30)
+                    ffmpeg.grab_frame(src_path, frame, t=t, width=1280, timeout=30)
                 except Exception as e:
                     log.warning("ocr frame grab failed at %.1fs: %s", t, e)
                     continue

@@ -33,7 +33,7 @@ export default function DiagnosticsPanel({ onClose }: { onClose: () => void }) {
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [onClose]);
 
   const cats = (detail?.categories ?? []).slice().sort(
     (a, b) => CATEGORY_ORDER.indexOf(a.name) - CATEGORY_ORDER.indexOf(b.name),

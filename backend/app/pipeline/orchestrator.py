@@ -13,6 +13,7 @@ import queue
 import threading
 import traceback
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from pathlib import Path
 
 from .. import feedback, store
 from ..config import get_settings
@@ -421,6 +422,14 @@ class Engine:
                         p.add_warning(msg, severity="warn", code="detector")
             if not gcs:
                 raise RuntimeError("no highlights found in this footage")
+            # Collect OCR labels + raw text from detected on-screen text
+            # events so hashtags capture both the canonical marker (e.g.
+            # "victory") AND the actual in-game text ("Ace", "1v5 Clutch")
+            # the transcript alone doesn't contain.
+            ocr_labels = [e.label for e in detected
+                          if getattr(e, "source", "") == "ocr" and e.label] if detected else []
+            ocr_texts = [e.detail for e in detected
+                         if getattr(e, "source", "") == "ocr" and e.detail] if detected else []
             # Learn reusable AUDIO cues from the on-screen (OCR) events: snip the
             # game sound at each banner and save it, so the cheap audio matcher
             # catches that event on future videos even with OCR off.
@@ -509,6 +518,8 @@ class Engine:
             # Optional: a local LLM (Ollama) gives a second opinion on virality
             # (re-ranks within ±12 pts, explainable) and writes sharper titles —
             # concurrent, budgeted so a slow model can't stall the pipeline.
+            # When a tool-calling agent is wired (agent_virality), its multi-step
+            # read (OCR + audio + facecam) takes priority over the single-shot LLM.
             if llm_mod.available():
                 self._advance(project_id, 2, "AI reading virality…")
                 reads = llm_mod.score_virals(
@@ -523,7 +534,8 @@ class Engine:
                 for i, t in titles.items():
                     clips[i].title = t
             # Hook/first-3s analysis: warn the user if their opener is weak.
-            if clips:
+            # Gated by the AI Boost hookCheck toggle (default on).
+            if clips and project.settings.ai_boost.hookCheck:
                 first = clips[0]
                 hook_words = [w for w in transcript.words
                               if w.end > first.start and w.t < first.end]
@@ -731,7 +743,8 @@ class Engine:
             clip.hashtags = hashtags_mod.suggest_hashtags(
                 clip.transcript_excerpt or clip.title,
                 content_type=kind, platform=project.settings.platform.value,
-                game=project.settings.game_profile if kind == "gameplay" else None)
+                game=project.settings.game_profile if kind == "gameplay" else None,
+                ocr_terms=(ocr_labels + ocr_texts) or None)
         with store.mutate(project_id) as p:
             # The user may have rated a clip while this stage ran; don't wipe
             # the marker with our (older) local copies.
@@ -761,7 +774,8 @@ class Engine:
         self._advance(project_id, 5, "Rendering clips…")
         self._render_all(project_id, clips, render_src, info, out_w, out_h,
                          project.settings.burn_captions, project.settings.motion,
-                         project.settings.power_mode.value)
+                         project.settings.power_mode.value,
+                         ai_boost=project.settings.ai_boost)
 
         self._finish_render_progress(project_id)
         log.info("project %s complete", project_id)
@@ -797,7 +811,8 @@ class Engine:
     def _render_all(self, project_id: str, clips: list[Clip], src_path: str,
                     info: MediaInfo, out_w: int, out_h: int,
                     burn_captions: bool = True, motion: str = "none",
-                    power_mode: str | None = None) -> None:
+                    power_mode: str | None = None,
+                    ai_boost=None) -> None:
         settings = get_settings()
         done = 0
         total = len(clips)
@@ -813,7 +828,7 @@ class Engine:
                 except StopIteration:
                     return False
                 futs[ex.submit(self._render_one, project_id, clip, src_path, info,
-                               out_w, out_h, burn_captions, motion)] = clip
+                               out_w, out_h, burn_captions, motion, ai_boost)] = clip
                 return True
 
             for _ in range(n):
@@ -832,7 +847,8 @@ class Engine:
 
     def _render_one(self, project_id: str, clip: Clip, src_path: str,
                     info: MediaInfo, out_w: int, out_h: int,
-                    burn_captions: bool = True, motion: str = "none") -> None:
+                    burn_captions: bool = True, motion: str = "none",
+                    ai_boost=None) -> None:
         # A clip may carry its own output aspect (editor override); it wins
         # over the project default passed in.
         dims = ASPECTS.get(clip.aspect or "")
@@ -851,7 +867,7 @@ class Engine:
             with self._clip_lock(project_id, clip.id):
                 self._render_one_locked(project_id, clip, src_path, info,
                                         out_w, out_h, burn_captions, motion,
-                                        out, thumb, style, settings)
+                                        out, thumb, style, settings, ai_boost)
         except Exception as e:  # one bad clip shouldn't sink the batch
             log.error("clip %s render failed: %s", clip.id, e)
             with store.mutate(project_id) as p:
@@ -860,11 +876,24 @@ class Engine:
                     c.status = ClipStatus.failed
                     c.error = str(e)
 
-    def _render_one_locked(self, project_id, clip, src_path, info, out_w, out_h,
-                           burn_captions, motion, out, thumb, style, settings) -> None:
+    def _render_one_locked(self, project_id: str, clip: Clip, src_path: str,
+                           info: MediaInfo, out_w: int, out_h: int,
+                           burn_captions: bool, motion: str,
+                           out: Path, thumb: Path,
+                           style, settings,
+                           ai_boost=None) -> None:
+        # Override style emphasis/emoji from AI Boost when present — the
+        # per-project toggle wins over the style template default so users can
+        # turn these off without switching to a different caption preset.
+        if ai_boost is not None:
+            style = style.model_copy(update={
+                "emphasis": style.emphasis and ai_boost.emphasis,
+                "emoji": style.emoji and ai_boost.emoji,
+            })
         render_mod.render_clip(clip, src_path, info, style, out, thumb,
                                out_w=out_w, out_h=out_h,
-                               burn_captions=burn_captions, motion=motion)
+                               burn_captions=burn_captions, motion=motion,
+                               ai_boost=ai_boost)
         with store.mutate(project_id) as p:
             c = p.clip(clip.id)
             if c:
@@ -936,7 +965,8 @@ class Engine:
             self._mark_clip_failed(project_id, clip_id, e)
             return
         self._render_one(project_id, clip, src_path, info, out_w, out_h, burn,
-                         project.settings.motion)
+                         project.settings.motion,
+                         ai_boost=project.settings.ai_boost)
 
     def rerender_all(self, project_id: str) -> None:
         """Re-render every clip with the current settings (e.g. after a
@@ -952,7 +982,8 @@ class Engine:
             self._render_all(project_id, project.clips, src_path, info,
                              out_w, out_h, project.settings.burn_captions,
                              project.settings.motion,
-                             project.settings.power_mode.value)
+                             project.settings.power_mode.value,
+                             ai_boost=project.settings.ai_boost)
             self._finish_render_progress(project_id)
         except Exception as e:
             log.error("re-render all failed for %s: %s", project_id, e)
@@ -984,7 +1015,8 @@ class Engine:
             self._render_all(project_id, clips, src_path, info,
                              out_w, out_h, project.settings.burn_captions,
                              project.settings.motion,
-                             project.settings.power_mode.value)
+                             project.settings.power_mode.value,
+                             ai_boost=project.settings.ai_boost)
             self._finish_render_progress(project_id, selected_ids=wanted)
         except Exception as e:
             log.error("selected re-render failed for %s: %s", project_id, e)

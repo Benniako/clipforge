@@ -133,6 +133,14 @@ h3 {
 .caps-badge.ok { background: rgba(61, 220, 151, 0.15); color: var(--good); }
 .caps-badge.warn { background: rgba(245, 197, 24, 0.15); color: var(--warn); }
 .caps-badge.bad { background: rgba(255, 92, 92, 0.15); color: var(--bad); }
+.caps-summary {
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 280px;
+}
 .cap-dot {
   width: 7px;
   height: 7px;
@@ -440,15 +448,22 @@ h3 {
 }
 .settings-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 14px;
-  margin-top: 18px;
+  /* 220px floor (up from 180px) yields fewer, wider columns so controls get
+     breathing room instead of packing 5-6 abreast and looking cramped. */
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 18px 20px;
+  margin-top: 22px;
 }
 .settings-grid > *,
 .field {
   min-width: 0;
 }
 .field.wide {
+  grid-column: 1 / -1;
+}
+/* AI Boost needs the full row width: its 2-column inner grid would otherwise be
+   squeezed into a single ~180px settings-grid cell and break. */
+.field.ai-boost {
   grid-column: 1 / -1;
 }
 .field label {
@@ -520,8 +535,18 @@ select.input {
   font-size: 13px;
   font-weight: 700;
 }
+/* Label span must shrink/truncate so long German text never overflows into
+   the status pill or the on/off chip. min-width: 0 defeats flexbox's default
+   min-content sizing that otherwise makes the row grow past its container. */
+.toggle > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .toggle i {
   min-width: 34px;
+  flex: none;
   border-radius: 999px;
   background: var(--panel-2);
   color: var(--muted);
@@ -535,6 +560,7 @@ select.input {
   font-size: 10px;
   font-weight: 700;
   margin-left: auto;
+  flex: none;
   max-width: 110px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -551,6 +577,12 @@ select.input {
 .capability-toggles .toggle {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto auto;
+}
+/* Grid items default to min-width: auto, which lets long content blow out the
+   column and re-overflow the toggle. Forcing min-width: 0 lets the label
+   column honour its minmax(0, 1fr) and truncate. */
+.capability-toggles .toggle > * {
+  min-width: 0;
 }
 .timing-controls input[type="range"] {
   width: 100%;
@@ -805,6 +837,7 @@ select.input {
 }
 .card-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   margin-top: auto;
 }
@@ -1300,18 +1333,26 @@ input[type="range"] {
 }
 @media (max-width: 860px) {
   .nav {
-    gap: 10px;
-    padding: 12px 18px;
+    gap: 8px;
+    padding: 10px 12px;
   }
   .nav .spacer {
     display: none;
   }
-  .caps {
+  /* On mobile the caps-summary can be long, so push the caps-btn to its own line */
+  .caps-btn {
     flex: 1 1 100%;
-    flex-wrap: wrap;
     order: 3;
+    min-width: 0;
   }
-  .caps span {
+  .caps {
+    width: 100%;
+    justify-content: space-between;
+  }
+  .caps-summary {
+    max-width: 70%;
+  }
+  .caps > span {
     white-space: nowrap;
   }
   .editor {
@@ -1353,6 +1394,20 @@ input[type="range"] {
   }
   .cue-use-toggle {
     width: 100%;
+  }
+  /* ClipEditor action bar: many buttons in one row overflow on mobile. */
+  .editor ~ .toast,
+  .container > .row:first-child {
+    flex-wrap: wrap;
+  }
+  /* ProjectView view-switch: swipe button + webhook URL must wrap. */
+  .view-switch {
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+  }
+  .view-switch code {
+    word-break: break-all;
   }
 }
 
@@ -1542,18 +1597,24 @@ input[type="range"] {
 }
 
 /* AI Boost panel — grouped viral-effect toggles. */
+/* The grid sits inside a full-width .field. auto-fit lets it collapse to one
+   column on narrow viewports without a media query. minmax(260px, 1fr) keeps
+   each toggle wide enough for long German compound words to wrap cleanly. */
 .ai-boost-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 6px 18px;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 4px 20px;
+}
+.ai-boost-grid > * {
+  min-width: 0;
 }
 .toggle-row {
   display: flex;
   align-items: flex-start;
-  gap: 10px;
+  gap: 12px;
   cursor: pointer;
-  padding: 6px 4px;
-  border-radius: 6px;
+  padding: 8px 8px;
+  border-radius: 8px;
 }
 .toggle-row:hover { background: var(--bg); }
 .toggle-row.disabled { opacity: 0.5; cursor: not-allowed; }
@@ -1563,16 +1624,28 @@ input[type="range"] {
   pointer-events: none;
 }
 .toggle-switch {
+  /* Must be inline-block: this is a <span>, and inline elements ignore
+     width/height — so the 34x20 track would collapse to 0x0 and only the
+     absolutely-positioned knob would show (a floating dot, no pill). */
+  display: inline-block;
   width: 34px;
   height: 20px;
   border-radius: 10px;
+  /* Border makes the OFF track visible against the dark panel; --border-2
+     alone blends into the background so off switches read as "missing". */
   background: var(--border-2);
+  border: 1px solid var(--muted-2);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.35);
   position: relative;
-  flex-shrink: 0;
+  flex: none;
   margin-top: 2px;
-  transition: background 0.15s;
+  transition: background 0.15s, border-color 0.15s;
 }
-.toggle-switch.on { background: var(--accent); }
+.toggle-switch.on {
+  background: var(--accent);
+  border-color: var(--accent);
+  box-shadow: none;
+}
 .toggle-knob {
   position: absolute;
   top: 2px;
@@ -1585,9 +1658,9 @@ input[type="range"] {
   box-shadow: 0 1px 2px rgba(0,0,0,0.3);
 }
 .toggle-switch.on .toggle-knob { transform: translateX(14px); }
-.toggle-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
-.toggle-label { font-size: 13px; font-weight: 600; }
-.toggle-hint { line-height: 1.3; }
+.toggle-text { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1 1 auto; }
+.toggle-label { font-size: 13px; font-weight: 600; line-height: 1.3; }
+.toggle-hint { font-size: 11px; line-height: 1.35; }
 
 /* Diagnostics panel — grouped capability inventory modal. */
 .diagnostics-panel .diag-head { align-items: flex-start; }

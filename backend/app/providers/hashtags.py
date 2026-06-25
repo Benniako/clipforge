@@ -48,7 +48,8 @@ _PROFILE_TAGS = {
 
 
 def suggest_hashtags(text: str, *, content_type: str, platform: str,
-                     limit: int = 7, game: str | None = None) -> list[str]:
+                     limit: int = 7, game: str | None = None,
+                     ocr_terms: list[str] | None = None) -> list[str]:
     tags: list[str] = []
     toks = [w.lower() for w in _WORD.findall(text or "")]
 
@@ -60,9 +61,26 @@ def suggest_hashtags(text: str, *, content_type: str, platform: str,
         for t in toks:
             if t in _GAMES and _GAMES[t] not in tags:
                 tags.append(_GAMES[t])
+        # Inject tags from on-screen text signals (OCR-detected labels like
+        # "victory", "kill_feed", etc.) so the hashtags reflect actual in-game
+        # events even when the transcript doesn't mention them.
+        if ocr_terms:
+            for ocr_label in ocr_terms:
+                clean = re.sub(r"[^a-z0-9]", "", ocr_label.lower().replace(" ", ""))
+                if clean and len(clean) >= 3:
+                    tag = "#" + clean
+                    if tag not in tags:
+                        tags.append(tag)
     else:
         # top content keywords from the clip's words
         freq = Counter(t for t in toks if t not in _STOP)
+        # also count any OCR terms as high-weight keyword evidence
+        if ocr_terms:
+            for ocr_label in ocr_terms:
+                clean = ocr_label.lower().replace(" ", "").replace("_", "")
+                for w in _WORD.findall(clean):
+                    if w not in _STOP:
+                        freq[w] += 10  # boost on-screen text matches
         for word, _ in freq.most_common(4):
             tag = _slug(word)
             if tag not in tags and len(tag) > 2:

@@ -9,9 +9,9 @@ from __future__ import annotations
 
 import logging
 import shutil
-import urllib.request
 from pathlib import Path
 
+from .._util import http_download
 from ..config import get_settings
 from ..media import ffmpeg
 from ..models import Project, SourceMedia
@@ -145,16 +145,8 @@ def _download_http(url: str, dest_stem: Path) -> Path:
     if ext not in VIDEO_EXTS:
         ext = ".mp4"
     dest = dest_stem.with_suffix(ext)
-    # Same cap as file uploads (None = unlimited, the default).
     cap = get_settings().upload_cap_bytes
-    size = 0
-    req = urllib.request.Request(url, headers={"User-Agent": "ClipForge/0.1"})
-    with urllib.request.urlopen(req, timeout=60) as resp, open(dest, "wb") as f:
-        while chunk := resp.read(1 << 20):
-            size += len(chunk)
-            if cap is not None and size > cap:
-                raise ValueError("download exceeds the upload size limit")
-            f.write(chunk)
+    http_download(url, dest, cap_bytes=cap)
     return dest
 
 

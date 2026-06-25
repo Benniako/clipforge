@@ -26,9 +26,9 @@ from starlette.background import BackgroundTask
 
 from .. import store
 from ..config import get_settings
-from ..models import (ASPECTS, ContentType, GameProfileConfig, ImportSettings,
-                      Platform, PowerMode, Project, ProjectStatus,
-                      ProjectSummary)
+from ..models import (ASPECTS, AiBoostSettings, ContentType, GameProfileConfig,
+                      ImportSettings, Platform, PowerMode, Project,
+                      ProjectStatus, ProjectSummary)
 from ..pipeline import ingest
 from ..pipeline.captions import build_srt
 from ..pipeline.nle_export import build_cmx3600, ready_clips_for_edl
@@ -218,6 +218,13 @@ async def create_project(
     vlm_visual_prompts: str = Form(""),
     audio_prompts: str = Form(""),
     audio_negative_prompts: str = Form(""),
+    # AI Boost toggles (production-value passes, each on by default).
+    ai_boost_emphasis: bool = Form(True),
+    ai_boost_emoji: bool = Form(True),
+    ai_boost_speaker_colors: bool = Form(True),
+    ai_boost_auto_zoom: bool = Form(True),
+    ai_boost_broll: bool = Form(False),
+    ai_boost_hook_check: bool = Form(True),
     file: UploadFile | None = File(None),
 ) -> Project:
     if not file and not url:
@@ -261,6 +268,14 @@ async def create_project(
         use_audio_events=use_audio_events,
         cue_learning=cue_learning,
         auto_length=auto_length,
+        ai_boost=AiBoostSettings(
+            emphasis=ai_boost_emphasis,
+            emoji=ai_boost_emoji,
+            speakerColors=ai_boost_speaker_colors,
+            autoZoom=ai_boost_auto_zoom,
+            broll=ai_boost_broll,
+            hookCheck=ai_boost_hook_check,
+        ),
         lead_seconds=_clamp_pad(lead_seconds),
         tail_seconds=_clamp_pad(tail_seconds),
         game_config=_game_config_from_form(
@@ -346,6 +361,9 @@ def _progress_timing(p) -> dict:
     ETA extrapolates from how long it took to reach the current percent — it is
     self-correcting as the run proceeds and stays None until there's enough
     signal (a few percent in) to avoid wild early guesses.
+
+    The frontend also receives ``rendered_count`` and ``target_clips`` so it
+    can compute a render-specific ETA from clip throughput when needed.
     """
     import time
     prog = p.progress
@@ -490,6 +508,14 @@ class Reprocess(BaseModel):
     lead_seconds: float | None = None
     tail_seconds: float | None = None
     game_config: GameProfileConfig | None = None
+    # AI Boost overrides — let users toggle production-value passes after import
+    # without re-uploading. Each field is Optional so the caller can send a subset.
+    ai_boost_emphasis: bool | None = None
+    ai_boost_emoji: bool | None = None
+    ai_boost_speaker_colors: bool | None = None
+    ai_boost_auto_zoom: bool | None = None
+    ai_boost_broll: bool | None = None
+    ai_boost_hook_check: bool | None = None
 
 
 @router.post("/{project_id}/reprocess", response_model=Project)
@@ -559,6 +585,19 @@ def reprocess(project_id: str, body: Reprocess | None = None) -> Project:
             s.game_config = body.game_config
         if body.min_len is not None and body.max_len is not None:
             s.min_len, s.max_len = _clamp_lengths(body.min_len, body.max_len)
+        # AI Boost overrides — merge whichever fields the caller sent.
+        if body.ai_boost_emphasis is not None:
+            s.ai_boost.emphasis = body.ai_boost_emphasis
+        if body.ai_boost_emoji is not None:
+            s.ai_boost.emoji = body.ai_boost_emoji
+        if body.ai_boost_speaker_colors is not None:
+            s.ai_boost.speakerColors = body.ai_boost_speaker_colors
+        if body.ai_boost_auto_zoom is not None:
+            s.ai_boost.autoZoom = body.ai_boost_auto_zoom
+        if body.ai_boost_broll is not None:
+            s.ai_boost.broll = body.ai_boost_broll
+        if body.ai_boost_hook_check is not None:
+            s.ai_boost.hookCheck = body.ai_boost_hook_check
         if body.target_clips is not None:
             s.target_clips = max(1, min(body.target_clips, 30))
         if s.auto_length:

@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { api } from "../lib/api";
 import type { PublishContent } from "../lib/types";
+import { useT } from "../lib/i18n";
 
 const PLATFORMS = ["generic", "tiktok", "reels", "shorts"];
 
@@ -16,13 +17,14 @@ export default function PublishPanel({
   projectId: string;
   clipId: string;
 }) {
+  const { t } = useT();
   const [data, setData] = useState<PublishContent | null>(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [platform, setPlatform] = useState("generic");
   const [copied, setCopied] = useState<string | null>(null);
 
-  const load = (plat: string) => {
+  const load = useCallback((plat: string) => {
     setLoading(true);
     setErr(null);
     api
@@ -30,11 +32,11 @@ export default function PublishPanel({
       .then(setData)
       .catch((e) => setErr(String(e)))
       .finally(() => setLoading(false));
-  };
+  }, [projectId, clipId]);
 
   useEffect(() => {
     load(platform);
-  }, [platform]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [platform, load]);
 
   const copy = (text: string, label: string) => {
     navigator.clipboard.writeText(text).then(() => {
@@ -49,18 +51,21 @@ export default function PublishPanel({
   if (loading && !data) {
     return (
       <div className="panel section">
-        <h4>Generate publish content…</h4>
+        <h4>{t("ce.publishGenerating")}</h4>
         <p className="muted tiny">
-          <span className="spinner" /> Asking the local LLM…
+          <span className="spinner" /> {t("ce.publishAskingLlm")}
         </p>
       </div>
     );
   }
 
+  const platLabel = (p: string) =>
+    p === "generic" ? t("ce.publishAllPlatforms") : p.charAt(0).toUpperCase() + p.slice(1);
+
   return (
     <div className="panel section">
       <div className="row" style={{ justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-        <h4 style={{ margin: 0 }}>Publish</h4>
+        <h4 style={{ margin: 0 }}>{t("ce.publishTitle")}</h4>
         <select
           className="input"
           style={{ width: "auto", fontSize: 12 }}
@@ -69,7 +74,7 @@ export default function PublishPanel({
         >
           {PLATFORMS.map((p) => (
             <option key={p} value={p}>
-              {p === "generic" ? "All platforms" : p.charAt(0).toUpperCase() + p.slice(1)}
+              {platLabel(p)}
             </option>
           ))}
         </select>
@@ -80,23 +85,23 @@ export default function PublishPanel({
           {err}
         </p>
       )}
-      {loading && <p className="tiny muted">Updating for {platform}…</p>}
+      {loading && <p className="tiny muted">{t("ce.publishUpdating", { platform: platLabel(platform) })}</p>}
 
       {data && (
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           {/* Titles */}
           <div>
-            <label className="tiny muted" style={{ fontWeight: 700 }}>Titles</label>
+            <label className="tiny muted" style={{ fontWeight: 700 }}>{t("ce.publishTitles")}</label>
             <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 4 }}>
-              {data.titles.map((t, i) => (
+              {data.titles.map((title, i) => (
                 <div key={i} className="row" style={{ gap: 4 }}>
                   <span className="tiny muted" style={{ width: 18 }}>#{i + 1}</span>
-                  <span style={{ flex: 1, fontSize: 14 }}>{t}</span>
+                  <span style={{ flex: 1, fontSize: 14 }}>{title}</span>
                   <button
                     className="btn ghost sm"
-                    onClick={() => copy(t, `title-${i}`)}
+                    onClick={() => copy(title, `title-${i}`)}
                   >
-                    {copied === `title-${i}` ? "✓" : "📋"}
+                    {copied === `title-${i}` ? t("ce.publishCopied") : t("ce.publishCopy")}
                   </button>
                 </div>
               ))}
@@ -105,7 +110,7 @@ export default function PublishPanel({
 
           {/* Description */}
           <div>
-            <label className="tiny muted" style={{ fontWeight: 700 }}>Description</label>
+            <label className="tiny muted" style={{ fontWeight: 700 }}>{t("ce.publishDescription")}</label>
             <div className="row" style={{ gap: 4, marginTop: 4, alignItems: "flex-start" }}>
               <pre
                 style={{
@@ -114,37 +119,37 @@ export default function PublishPanel({
                   margin: 0, maxHeight: 120, overflowY: "auto",
                 }}
               >
-                {fullDesc || "(no description)"}
+                {fullDesc || t("ce.publishNoDescription")}
               </pre>
               <button
                 className="btn ghost sm"
                 onClick={() => copy(fullDesc, "desc")}
                 style={{ whiteSpace: "nowrap" }}
               >
-                {copied === "desc" ? "✓" : "📋"}
+                {copied === "desc" ? t("ce.publishCopied") : t("ce.publishCopy")}
               </button>
             </div>
           </div>
 
           {/* Hashtags */}
           <div>
-            <label className="tiny muted" style={{ fontWeight: 700 }}>Hashtags</label>
+            <label className="tiny muted" style={{ fontWeight: 700 }}>{t("ce.publishHashtags")}</label>
             <div className="row" style={{ gap: 4, marginTop: 4 }}>
               <span style={{ flex: 1, fontSize: 13, color: "var(--accent)" }}>
-                {tags || "(no tags)"}
+                {tags || t("ce.publishNoTags")}
               </span>
               <button
                 className="btn ghost sm"
                 onClick={() => copy(tags, "tags")}
               >
-                {copied === "tags" ? "✓" : "📋"}
+                {copied === "tags" ? t("ce.publishCopied") : t("ce.publishCopy")}
               </button>
             </div>
           </div>
 
           {/* Refresh */}
           <button className="btn ghost sm" onClick={() => load(platform)}>
-            {loading ? "…" : "Re-generate"}
+            {loading ? "…" : t("ce.publishRegenerate")}
           </button>
         </div>
       )}

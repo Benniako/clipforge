@@ -31,8 +31,18 @@ export function scoreColor(score: number): string {
   return "var(--bad)";
 }
 
-export function timeAgo(epochSeconds: number): string {
+export function timeAgo(
+  epochSeconds: number,
+  t?: (key: string, vars?: Record<string, string | number>) => string,
+): string {
   const diff = Date.now() / 1000 - epochSeconds;
+  if (t) {
+    if (diff < 60) return t("timeAgo.justNow");
+    if (diff < 3600) return t("timeAgo.minutes", { n: Math.floor(diff / 60) });
+    if (diff < 86400) return t("timeAgo.hours", { n: Math.floor(diff / 3600) });
+    return t("timeAgo.days", { n: Math.floor(diff / 86400) });
+  }
+  // Legacy fallback (German) when no t function is provided.
   if (diff < 60) return "gerade eben";
   if (diff < 3600) return `vor ${Math.floor(diff / 60)} Min`;
   if (diff < 86400) return `vor ${Math.floor(diff / 3600)} Std`;

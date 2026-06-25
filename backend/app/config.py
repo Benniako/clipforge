@@ -10,11 +10,15 @@ This module centralises two concerns:
 """
 from __future__ import annotations
 
+import logging
 import os
 import shutil
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
+
+
+log = logging.getLogger("clipforge.config")
 
 
 def _resolve_ffmpeg() -> tuple[str | None, str | None]:
@@ -41,8 +45,8 @@ def _resolve_ffmpeg() -> tuple[str | None, str | None]:
         sff, sfp = _sfr.get_or_fetch_platform_executables_else_raise()
         ffmpeg = ffmpeg or sff
         ffprobe = ffprobe or sfp
-    except Exception:
-        pass
+    except Exception as exc:
+        log.debug("static_ffmpeg unavailable: %s", exc)
 
     # 2. system binaries on PATH.
     ffmpeg = ffmpeg or shutil.which("ffmpeg")
@@ -54,8 +58,8 @@ def _resolve_ffmpeg() -> tuple[str | None, str | None]:
             import imageio_ffmpeg
 
             ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("imageio_ffmpeg unavailable: %s", exc)
 
     return ffmpeg, ffprobe
 
@@ -82,6 +86,8 @@ def _detect_ocr() -> str:
         return "paddleocr"
     if _has_module("easyocr"):
         return "easyocr"
+    if _has_module("surya") and shutil.which("docker"):
+        return "surya"
     if _has_module("pytesseract") and shutil.which("tesseract"):
         return "tesseract"
     return ""
@@ -97,15 +103,15 @@ def _detect_ollama() -> tuple[bool, str]:
     models = ""
     if shutil.which("ollama"):
         try:
-            import subprocess
-            out = subprocess.run(["ollama", "list"], capture_output=True, text=True, timeout=5)
+            from ._util import run_subprocess
+            out = run_subprocess(["ollama", "list"], timeout=5, check=False, log_label="ollama")
             lines = out.stdout.splitlines()
             if len(lines) > 1:
                 names = [l.split()[0] for l in lines[1:] if l.strip()]
                 if names:
                     models = ", ".join(names)
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("ollama list unavailable: %s", exc)
         if models:
             return True, models
     import socket
@@ -199,8 +205,8 @@ def _detect_cuda() -> bool:
 
         if ctranslate2.get_cuda_device_count() > 0:
             return True
-    except Exception:
-        pass
+    except Exception as exc:
+        log.debug("ctranslate2 GPU check: %s", exc)
     return _torch_cuda_available()
 
 
@@ -213,41 +219,44 @@ def _detect_nvenc(ffmpeg: str | None) -> tuple[bool, bool]:
     if not ffmpeg:
         return False, False
     try:
-        import subprocess
-
-        out = subprocess.run([ffmpeg, "-hide_banner", "-encoders"],
-                             capture_output=True, text=True, timeout=20)
+        from ._util import run_subprocess
+        out = run_subprocess([ffmpeg, "-hide_banner", "-encoders"],
+                             timeout=20, check=False, log_label="ffmpeg-encoders")
         return "h264_nvenc" in out.stdout, "av1_nvenc" in out.stdout
-    except Exception:
+    except Exception as exc:
+        log.debug("nvenc encoder probe: %s", exc)
         return False, False
 
 
 def _detect_nvidia_gpu() -> bool:
     """True if an NVIDIA GPU + driver is actually present (via nvidia-smi)."""
     import shutil
-    import subprocess
 
     if not shutil.which("nvidia-smi"):
         return False
     try:
-        return subprocess.run(["nvidia-smi"], capture_output=True, timeout=10).returncode == 0
-    except Exception:
+        from ._util import run_subprocess
+        return run_subprocess(["nvidia-smi"], timeout=10, check=False,
+                              log_label="nvidia-smi").returncode == 0
+    except Exception as exc:
+        log.debug("nvidia-smi unavailable: %s", exc)
         return False
 
 
 def _detect_vram_mb() -> int:
     """Total VRAM of the first NVIDIA GPU in MB (0 if none)."""
     import shutil
-    import subprocess
 
     if not shutil.which("nvidia-smi"):
         return 0
     try:
-        out = subprocess.run(
+        from ._util import run_subprocess
+        out = run_subprocess(
             ["nvidia-smi", "--query-gpu=memory.total", "--format=csv,noheader,nounits"],
-            capture_output=True, text=True, timeout=10)
+            timeout=10, check=False, log_label="nvidia-smi-vram")
         return int(out.stdout.strip().splitlines()[0])
-    except Exception:
+    except Exception as exc:
+        log.debug("nvidia-smi VRAM query: %s", exc)
         return 0
 
 
@@ -479,6 +488,12 @@ class Settings:
                 item("scenedetect", self.has_scenedetect,
                      "PySceneDetect", "Snaps clip boundaries to real scene cuts."),
             ]},
+            {"name": "extras", "items": [
+                item("image_gen", False,
+                     "AI Cover Image Generation",
+                     "Generate stylised thumbnails from clip titles using a local "
+                     "diffusion model (Krea-2-Raw or ideogram). Install deps to enable."),
+            ]},
         ]}
 
     @property
@@ -620,6 +635,7 @@ def get_settings() -> Settings:
     device = os.environ.get("CLIPFORGE_DEVICE") or ("cuda" if has_cuda else "cpu")
 
     cpu = os.cpu_count() or 4
+    _ollama_result = _detect_ollama()  # call once, use for both availability + models string
     model_env = os.environ.get("CLIPFORGE_WHISPER_MODEL")
     whisper_model = model_env or _auto_whisper_model(has_cuda, vram_mb, cpu)
     workers_env = os.environ.get("CLIPFORGE_RENDER_WORKERS")
@@ -651,14 +667,14 @@ def get_settings() -> Settings:
         vram_mb=vram_mb,
         auto_model=model_env is None,
         has_deno=bool(shutil.which("deno")),
-        has_ollama=_detect_ollama()[0],
-        ollama_models=_detect_ollama()[1],
+        has_ollama=_ollama_result[0],
+        ollama_models=_ollama_result[1],
         has_torchaudio=_has_module("torchaudio"),
         has_paddleocr=_has_module("paddleocr"),
         has_easyocr=_has_module("easyocr"),
         has_tesseract=bool(_has_module("pytesseract") and shutil.which("tesseract")),
         has_scrfd=_has_module("scrfd"),
-        has_surya=_has_module("surya"),
+        has_surya=bool(_has_module("surya") and shutil.which("docker")),
         device=device,
         whisper_model=whisper_model,
         render_workers=render_workers,

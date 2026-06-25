@@ -11,20 +11,22 @@ like the text read: bounded, explainable, never overriding the signal sum.
 Fully optional and budgeted: no vision model ⇒ :func:`available` is False and the
 pipeline is unchanged; a slow model can never stall a run (per-clip timeout +
 overall budget). Runs entirely on the user's own GPU.
+
+The Ollama mechanics are shared with the text LLM via ``ollama_client``; this
+module keeps only the vision-model picker, the prompt text, and the
+menu/lobby-reason clamp.
 """
 from __future__ import annotations
 
 import base64
-import json
 import logging
 import os
 import re
-import time
-import urllib.request
+
+from . import ollama_client as _oc
 
 log = logging.getLogger("clipforge.vlm")
 
-_URL = os.environ.get("CLIPFORGE_OLLAMA_URL", "http://localhost:11434").rstrip("/")
 _MODEL = os.environ.get("CLIPFORGE_VLM_MODEL", "")  # empty = auto-pick
 
 # Vision-capable Ollama families. Within a family the largest installed size
@@ -32,9 +34,6 @@ _MODEL = os.environ.get("CLIPFORGE_VLM_MODEL", "")  # empty = auto-pick
 _VISION_PREFERRED = ("qwen3-vl", "qwen2.5vl", "qwen2.5-vl", "qwen2-vl",
                      "llama3.2-vision", "llava-llama3", "llava",
                      "bakllava", "minicpm-v", "moondream", "gemma3")
-_SIZE_RE = re.compile(r"(?::|-)(\d+(?:\.\d+)?)b\b", re.IGNORECASE)
-
-_avail: tuple[float, bool, str | None] | None = None  # (checked_at, ok, model)
 
 
 def _is_vision(tag: str) -> bool:
@@ -42,16 +41,11 @@ def _is_vision(tag: str) -> bool:
     return any(name == p or name.startswith(p) for p in _VISION_PREFERRED)
 
 
-def _size_b(tag: str) -> float:
-    m = _SIZE_RE.search(tag.lower())
-    return float(m.group(1)) if m else 0.0
-
-
 def _rank_vision_model(tag: str) -> tuple[int, int, float, str]:
     low = tag.lower()
     family = next((i for i, name in enumerate(_VISION_PREFERRED)
                    if low == name or low.startswith(name)), len(_VISION_PREFERRED))
-    return (1 if _is_vision(low) else 0, -family, _size_b(low), low)
+    return (1 if _is_vision(low) else 0, -family, _oc.size_b(low), low)
 
 
 def _resolve_model(tags: list[str]) -> str | None:
@@ -61,32 +55,17 @@ def _resolve_model(tags: list[str]) -> str | None:
     return max(vision, key=_rank_vision_model) if vision else None
 
 
-def _refresh() -> None:
-    global _avail
-    now = time.time()
-    if _avail and now - _avail[0] < 60:
-        return
-    ok, model = False, None
-    try:
-        with urllib.request.urlopen(_URL + "/api/tags", timeout=1.5) as r:
-            data = json.loads(r.read())
-            tags = [m.get("name", "") for m in data.get("models", []) if m.get("name")]
-            model = _resolve_model(tags)
-            ok = r.status == 200 and model is not None
-    except Exception:
-        ok, model = False, None
-    _avail = (now, ok, model)
+# Shared availability cache, wired to the vision-model picker.
+_cache = _oc.AvailabilityCache(resolver=_resolve_model)
 
 
 def available() -> bool:
     """True if Ollama answers and has a usable vision model. Cached 60s."""
-    _refresh()
-    return _avail[1] if _avail else False
+    return _cache.available()
 
 
 def active_model() -> str | None:
-    _refresh()
-    return _avail[2] if _avail and _avail[1] else None
+    return _cache.active_model()
 
 
 def keyframe_times(start: float, end: float, n: int = 3) -> list[float]:
@@ -109,16 +88,17 @@ def _grab_frames_b64(src_path: str, start: float, end: float, n: int) -> list[st
         for i, t in enumerate(keyframe_times(start, end, n)):
             f = Path(tmp) / f"k{i}.jpg"
             try:
-                ffmpeg.run(["-ss", f"{t:.3f}", "-i", src_path, "-frames:v", "1",
-                            "-vf", "scale=384:-2", str(f)], timeout=30)
+                ffmpeg.grab_frame(src_path, f, t=t, width=384)
                 out.append(base64.b64encode(f.read_bytes()).decode("ascii"))
             except Exception as e:
                 log.warning("vlm frame grab at %.1fs failed: %s", t, e)
     return out
 
 
-_SCORE_RE = re.compile(r"(\d{1,3})")
-_THINK_RE = re.compile(r"<think>.*?(?:</think>|$)", re.DOTALL)
+# Re-exposed shared regex/parsers for the helpers below.
+_THINK_RE = _oc.THINK_RE
+_SCORE_RE = _oc.SCORE_RE
+
 _NEGATIVE_REASON_TERMS = (
     "menu", "lobby", "loading", "black screen", "static", "desktop",
     "scoreboard only", "boring", "transition", "blurry", "unclear",
@@ -164,20 +144,12 @@ def _prompt_for(lang: str | None, cues: list[str] | None = None) -> str:
 
 
 def _parse(text: str) -> tuple[float, str] | None:
-    text = _THINK_RE.sub("", text or "").strip()
-    line = next((ln for ln in text.splitlines() if "score" in ln.lower()), text)
-    m = _SCORE_RE.search(line)
-    if not m:
-        return None
-    val = max(0.0, min(100.0, float(m.group(1)))) / 100.0
-    reason = ""
-    if "reason" in line.lower():
-        reason = line[line.lower().index("reason") + len("reason"):].lstrip(": ").strip()
-    reason = reason.strip(' "\'.|')[:48]
-    low_reason = reason.lower()
-    if any(term in low_reason for term in _NEGATIVE_REASON_TERMS):
-        val = min(val, 0.35)
-    return val, (reason or "AI vision read")
+    """Parse a SCORE|REASON reply, clamping menu/lobby reads below 0.35."""
+    return _oc.parse_score_reason(
+        text,
+        clamp_reason_below=0.35,
+        negative_terms=_NEGATIVE_REASON_TERMS,
+    )
 
 
 def score_visual(src_path: str, start: float, end: float, *,
@@ -192,25 +164,9 @@ def score_visual(src_path: str, start: float, end: float, *,
     if not model or not images:
         return None
     prompt = _prompt_for(lang, cues)
-    body = {"model": model, "prompt": prompt, "images": images, "stream": False,
-            "think": False, "options": {"temperature": 0.4, "num_predict": 60}}
-    for payload in (body, {k: v for k, v in body.items() if k != "think"}):
-        req = urllib.request.Request(
-            _URL + "/api/generate", data=json.dumps(payload).encode(),
-            headers={"Content-Type": "application/json"})
-        try:
-            with urllib.request.urlopen(req, timeout=timeout) as r:
-                return _parse(json.loads(r.read()).get("response", ""))
-        except urllib.error.HTTPError as e:
-            detail = e.read().decode("utf-8", errors="ignore")
-            if "think" in detail.lower() and "think" in payload:
-                continue
-            log.warning("vlm generate failed: %s %s", e, detail[:200])
-            return None
-        except Exception as e:
-            log.warning("vlm generate failed: %s", e)
-            return None
-    return None
+    out = _oc.generate(model=model, prompt=prompt, images=images,
+                       timeout=timeout, temperature=0.4, num_predict=60)
+    return _parse(out) if out else None
 
 
 def score_visuals(src_path: str, spans: list[tuple[float, float]], *,
@@ -222,22 +178,8 @@ def score_visuals(src_path: str, spans: list[tuple[float, float]], *,
 
     Returns {index: (viral, reason)} for whatever finished in time; the rest keep
     their existing score — a slow model can never stall a run."""
-    import concurrent.futures as cf
-
-    if not available():
-        return {}
-    out: dict[int, tuple[float, str]] = {}
-    ex = cf.ThreadPoolExecutor(max_workers=max(1, max_workers))
-    futs = {ex.submit(score_visual, src_path, a, b,
-                      n_frames=n_frames, timeout=timeout, lang=lang, cues=cues): i
-            for i, (a, b) in enumerate(spans)}
-    done, _ = cf.wait(futs, timeout=budget)
-    for f in done:
-        try:
-            r = f.result()
-            if r is not None:
-                out[futs[f]] = r
-        except Exception:
-            pass
-    ex.shutdown(wait=False, cancel_futures=True)
-    return out
+    indexed = list(enumerate(spans))
+    items = [(src_path, a, b, n_frames, timeout, lang, cues) for _, (a, b) in indexed]
+    result, _ = _oc.run_budgeted(lambda a: score_visual(*a), items,
+                              budget=budget, max_workers=max_workers, logger=log)
+    return {indexed[pos][0]: val for pos, val in result.items()}

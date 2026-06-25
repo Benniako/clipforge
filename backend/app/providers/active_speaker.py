@@ -83,14 +83,13 @@ def track_centers(src_path: str, start: float, end: float) -> list[tuple[float, 
         if get_settings().ffmpeg:
             env["PATH"] = str(Path(get_settings().ffmpeg).parent) + os.pathsep + env.get("PATH", "")
 
+        from .._util import run_subprocess
+
         try:
-            proc = subprocess.run(
-                cmd,
-                cwd=str(asd_dir),
-                env=env,
-                capture_output=True,
-                text=True,
+            proc = run_subprocess(
+                cmd, cwd=str(asd_dir), env=env, check=False,
                 timeout=max(300, int(dur * 30)),
+                log_label="LR-ASD",
             )
         except subprocess.TimeoutExpired:
             log.warning("LR-ASD timed out after %.1fs; using fallback reframe", dur)

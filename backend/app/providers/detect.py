@@ -83,13 +83,17 @@ def _salience(words: list[Word], duration: float, st: ImportSettings,
         "length": signals.length_fit(duration, st.min_len, st.max_len)[0],
         "pace": signals.pace_energy(words, duration)[0],
         "list": signals.list_payoff(words, lex)[0],
+        "controversy": signals.controversy(words, lex)[0],
+        "qa": signals.qa_pattern(words, lex)[0],
     }
     if weights:  # personalised ranking — same weights as scoring
         return sum(v * weights.get(k, 0.0) for k, v in vals.items())
-    return (0.20 * vals["instant_hook"] + 0.14 * vals["swipe"]
-            + 0.18 * vals["hook"] + 0.14 * vals["emotion"]
-            + 0.16 * vals["clarity"] + 0.10 * vals["quote"]
-            + 0.04 * vals["length"] + 0.04 * vals["pace"])
+    return (0.18 * vals["instant_hook"] + 0.12 * vals["swipe"]
+            + 0.16 * vals["hook"] + 0.12 * vals["emotion"]
+            + 0.14 * vals["clarity"] + 0.08 * vals["quote"]
+            + 0.04 * vals["length"] + 0.04 * vals["pace"]
+            + 0.06 * vals["list"] + 0.03 * vals["controversy"]
+            + 0.03 * vals["qa"])
 
 
 def _make_title(words: list[Word]) -> str:

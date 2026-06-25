@@ -17,10 +17,10 @@ from . import signals
 # Per-platform default feature weights (sum ~1.0). TikTok/Reels reward a hard
 # hook and energy; Shorts reward clarity/payoff; "generic" is balanced.
 BASE_WEIGHTS: dict[Platform, dict[str, float]] = {
-    Platform.tiktok:  {"instant_hook": 0.18, "swipe": 0.12, "hook": 0.22, "emotion": 0.16, "clarity": 0.10, "quote": 0.09, "pace": 0.08, "length": 0.03, "list": 0.02},
-    Platform.reels:   {"instant_hook": 0.16, "swipe": 0.12, "hook": 0.20, "emotion": 0.18, "clarity": 0.12, "quote": 0.09, "pace": 0.08, "length": 0.03, "list": 0.02},
-    Platform.shorts:  {"instant_hook": 0.14, "swipe": 0.15, "hook": 0.18, "emotion": 0.14, "clarity": 0.18, "quote": 0.08, "pace": 0.07, "length": 0.04, "list": 0.02},
-    Platform.generic: {"instant_hook": 0.15, "swipe": 0.12, "hook": 0.20, "emotion": 0.16, "clarity": 0.16, "quote": 0.09, "pace": 0.07, "length": 0.03, "list": 0.02},
+    Platform.tiktok:  {"instant_hook": 0.17, "swipe": 0.11, "hook": 0.20, "emotion": 0.15, "clarity": 0.09, "quote": 0.08, "pace": 0.07, "length": 0.03, "list": 0.02, "controversy": 0.04, "qa": 0.04},
+    Platform.reels:   {"instant_hook": 0.15, "swipe": 0.11, "hook": 0.18, "emotion": 0.17, "clarity": 0.11, "quote": 0.08, "pace": 0.07, "length": 0.03, "list": 0.02, "controversy": 0.04, "qa": 0.04},
+    Platform.shorts:  {"instant_hook": 0.13, "swipe": 0.14, "hook": 0.16, "emotion": 0.13, "clarity": 0.17, "quote": 0.07, "pace": 0.06, "length": 0.04, "list": 0.02, "controversy": 0.04, "qa": 0.04},
+    Platform.generic: {"instant_hook": 0.14, "swipe": 0.11, "hook": 0.18, "emotion": 0.15, "clarity": 0.15, "quote": 0.08, "pace": 0.06, "length": 0.03, "list": 0.02, "controversy": 0.04, "qa": 0.04},
 }
 
 FEATURE_LABELS = {
@@ -33,6 +33,8 @@ FEATURE_LABELS = {
     "pace": "pace & energy",
     "length": "length fit",
     "list": "concrete payoff",
+    "controversy": "controversial — drives comments",
+    "qa": "question-answer pattern",
 }
 
 
@@ -54,6 +56,8 @@ def extract_features(words: list[Word], duration: float, settings: ImportSetting
         "pace": signals.pace_energy(words, duration),
         "length": signals.length_fit(duration, settings.min_len, settings.max_len),
         "list": signals.list_payoff(words, lex),
+        "controversy": signals.controversy(words, lex),
+        "qa": signals.qa_pattern(words, lex),
     }
 
 
@@ -74,7 +78,7 @@ def hook_analysis(words: list[Word], *, lang: str = "en",
     if not words:
         return {"strength": 0.0, "verdict": "weak",
                 "suggestion": "", "first_words": ""}
-    lex = signals.get_lexicon(lang) if hasattr(signals, "get_lexicon") else signals._EN
+    lex = signals.get_lexicon(lang)
     score_val, _ = signals.instant_hook(words, lex)
     start = words[0].t
     head = [w for w in words if w.t - start < 3.0] or words[:6]
@@ -87,18 +91,33 @@ def hook_analysis(words: list[Word], *, lang: str = "en",
     else:
         verdict = "weak"
     # Deterministic suggestion keyed off what's missing in the opener.
+    # Language-aware: use German templates when the transcript is German.
     toks = {w.text.lower() for w in head}
     has_question = any(w.text.rstrip("?!,.") in lex.quote for w in head)
     if verdict == "strong":
         suggestion = ""
     elif not first_words:
-        suggestion = "Open on speech in the first second — silence kills retention."
+        suggestion = (
+            "Open on speech in the first second — silence kills retention."
+            if lang != "de" else
+            "Sprich in der ersten Sekunde — Stille killt die Verweildauer."
+        )
     elif not has_question and not (toks & lex.payoff):
-        suggestion = ("Lead with a question or a payoff promise in the first "
-                      "two seconds (e.g. 'The reason this works…' / 'Nobody tells you…').")
+        suggestion = (
+            "Lead with a question or a payoff promise in the first "
+            "two seconds (e.g. 'The reason this works…' / 'Nobody tells you…')."
+            if lang != "de" else
+            "Starte mit einer Frage oder einem Versprechen in den ersten "
+            "zwei Sekunden (z.B. 'Der Grund, warum das funktioniert…')."
+        )
     else:
-        suggestion = ("Tighten the opener — cut any warm-up and land the hook "
-                      "inside the first 1.5 seconds.")
+        suggestion = (
+            "Tighten the opener — cut any warm-up and land the hook "
+            "inside the first 1.5 seconds."
+            if lang != "de" else
+            "Straffe den Einstieg — schneide Aufwärmphasen weg und setze "
+            "den Hook in die ersten 1,5 Sekunden."
+        )
     return {"strength": round(score_val, 2), "verdict": verdict,
             "suggestion": suggestion, "first_words": first_words[:120]}
 

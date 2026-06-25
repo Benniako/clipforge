@@ -90,8 +90,14 @@ def build_srt(captions: CaptionSet) -> str:
 
 
 def build_ass(captions: CaptionSet, style: StyleTemplate,
-              out_w: int, out_h: int) -> str:
-    """Return a complete ASS document for one clip."""
+              out_w: int, out_h: int, *, ai_boost=None) -> str:
+    """Return a complete ASS document for one clip.
+
+    ``ai_boost`` is an optional ``AiBoostSettings`` instance. When provided, its
+    ``speakerColors`` flag gates the per-speaker colour pass so the project-level
+    AI Boost toggle works. Default (None) preserves the old behaviour — speaker
+    colours are always on when multiple speakers are present.
+    """
     primary = _ass_color(style.primary)
     highlight = _ass_color(style.highlight)
     outline = _ass_color(style.outline)
@@ -125,9 +131,11 @@ Format: Layer, Start, End, Style, MarginL, MarginR, MarginV, Effect, Text
     # give each their own primary colour so a podcast reads as a conversation
     # (host vs guest) rather than a monochrome wall. The style's primary is
     # still used as speaker 0's colour so a single-speaker clip is unchanged.
+    # Gated by ai_boost.speakerColors (default on) so the per-project toggle
+    # in the AI Boost panel can disable it.
     speakers = sorted({getattr(w, "speaker", 0) or 0 for w in words})
     speaker_colors: dict[int, str] = {}
-    if len(speakers) > 1:
+    if len(speakers) > 1 and (ai_boost is None or ai_boost.speakerColors):
         palette = ["F4F4F8", "FFD166", "06D6A0", "EF476F", "8338EC", "3A86FF"]
         for i, sp in enumerate(speakers):
             speaker_colors[sp] = _ass_color(palette[i % len(palette)])
@@ -185,7 +193,9 @@ def _dialogue(line, active_idx, start, end, primary, highlight, upper) -> str:
 
 
 def write_ass(captions: CaptionSet, style: StyleTemplate,
-              out_w: int, out_h: int, dst: str | Path) -> Path:
+              out_w: int, out_h: int, dst: str | Path, *,
+              ai_boost=None) -> Path:
     dst = Path(dst)
-    dst.write_text(build_ass(captions, style, out_w, out_h), encoding="utf-8")
+    dst.write_text(build_ass(captions, style, out_w, out_h, ai_boost=ai_boost),
+                   encoding="utf-8")
     return dst

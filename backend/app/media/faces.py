@@ -14,6 +14,7 @@ import os
 import threading
 from pathlib import Path
 
+from .._util import http_download
 from ..config import get_settings
 
 log = logging.getLogger("clipforge.faces")
@@ -54,13 +55,10 @@ def _yunet_path() -> Path:
 
 def _fetch_yunet(dst: Path) -> bool:
     """One best-effort model download (offline installs just use Haar)."""
-    import urllib.request
-
     try:
         dst.parent.mkdir(parents=True, exist_ok=True)
         tmp = dst.with_suffix(".part")
-        with urllib.request.urlopen(YUNET_URL, timeout=15) as resp, open(tmp, "wb") as f:
-            f.write(resp.read())
+        http_download(YUNET_URL, tmp, timeout=15)
         if tmp.stat().st_size < _YUNET_MIN_BYTES:
             tmp.unlink(missing_ok=True)
             return False

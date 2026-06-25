@@ -25,3 +25,15 @@ easyocr>=1.7
 # match the viral-marker lexicon. Tiny, pure-Python wheel, no native deps. When
 # absent, ClipForge falls back to exact substring matching automatically.
 rapidfuzz>=3.0
+
+# Surya OCR (vision-language based, 90+ languages, GPU) — detected by config.py
+# when installed, but NOT yet wired into detect_ocr.py. The installed `surya`
+# package is just scaffolding; the actual detector and recognizer model repos
+# need separate install:
+#   pip install surya-detection surya-recognition
+# These pull ~2GB of model weights. When both are present, add the dispatch
+# branch in detect_ocr._ocr_image_conf alongside the existing paddle/easyocr/
+# tesseract branches.
+# surya>=0.4
+# surya-detection>=0.2
+# surya-recognition>=0.2

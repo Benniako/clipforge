@@ -127,7 +127,18 @@ export default function ClipEditor() {
     setBusy(true);
     setMsg(t("ce.rendering"));
     try {
-      const edit: any = {};
+      const edit: Partial<{
+        title: string;
+        start: number;
+        end: number;
+        style_id: string;
+        reframe_cx: number;
+        caption_words: { t: number; d: number; text: string }[];
+        caption_speakers: number[] | null;
+        layout: string;
+        facecam: { x: number; y: number; w: number; h: number };
+        aspect: string;
+      }> = {};
       if (title !== clip.title) edit.title = title;
       if (spanChanged) {
         edit.start = start;

@@ -65,6 +65,8 @@ export default function ClipCard({ clip, projectId, rank, selected, onToggleSele
         style={clip.thumb_url ? { backgroundImage: `url(${clip.thumb_url})` } : undefined}
         onClick={open}
         role="button"
+        tabIndex={0}
+        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } }}
       >
         <StatusChip status={clip.status} />
         <RankRibbon rank={rank} />
@@ -102,7 +104,8 @@ export default function ClipCard({ clip, projectId, rank, selected, onToggleSele
         <div className="row" style={{ justifyContent: "space-between" }}>
           <ScoreBadge score={clip.score} />
         </div>
-        <div className="clip-title" onClick={open} role="button">
+        <div className="clip-title" onClick={open} role="button" tabIndex={0}
+             onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } }}>
           {clip.title || t("cc.untitled")}
         </div>
         <div className="factors">

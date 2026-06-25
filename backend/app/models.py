@@ -326,6 +326,19 @@ ASPECTS: dict[str, tuple[int, int]] = {
 }
 
 
+class AiBoostSettings(BaseModel):
+    """Per-project AI Boost — the viral-effect toggles that control the
+    production-value passes (caption emphasis/emoji, speaker colours, auto-zoom,
+    B-roll, hook check). Each maps to a toggle in the upload panel's AI Boost
+    group so the user sees the whole "make it look pro" surface in one place."""
+    emphasis: bool = True       # Keyword colour+scale across the line
+    emoji: bool = True           # Tasteful auto-emoji on power words
+    speakerColors: bool = True  # Per-speaker caption colour (podcast look)
+    autoZoom: bool = True       # Punch-in zoom on emphasis words/cuts
+    broll: bool = False         # Smart cutaway B-roll (opt-in; changes the cut)
+    hookCheck: bool = True      # First-3s hook strength warning
+
+
 class ImportSettings(BaseModel):
     platform: Platform = Platform.generic
     power_mode: PowerMode = Field(default_factory=_default_power_mode)
@@ -363,6 +376,12 @@ class ImportSettings(BaseModel):
     use_cues: bool = True
     use_audio_events: bool = True
     cue_learning: bool = True
+    # AI Boost — per-project production-value toggles that drive the
+    # caption_fx emphasis/emoji, speaker colours, auto-zoom, B-roll cutaways,
+    # and hook-check passes. On by default: they ship the "professionally
+    # edited" Submagic/OpusClip look at import time. Set per-project in the
+    # upload panel's AI Boost group.
+    ai_boost: AiBoostSettings = Field(default_factory=AiBoostSettings)
     # Let ClipForge pick a platform/content tuned range instead of the manual
     # length preset.
     auto_length: bool = False

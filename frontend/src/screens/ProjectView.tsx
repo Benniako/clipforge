@@ -58,7 +58,8 @@ export default function ProjectView() {
       ws = new WebSocket(`${proto}://${location.host}/api/projects/${projectId}/ws`);
       ws.onmessage = (ev) => {
         if (!alive) return;
-        const s = JSON.parse(ev.data);
+        let s: any;
+        try { s = JSON.parse(ev.data); } catch { return; }
         if (s.error) {
           setError(s.error);
           done = true;

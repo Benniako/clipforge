@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import subprocess
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 
 from ..config import get_settings
@@ -70,11 +71,16 @@ def run(args: list[str], *, timeout: int | None = 600,
     return proc.stderr
 
 
+@lru_cache(maxsize=64)
 def probe(path: str | Path) -> MediaInfo:
     """Return basic stream info for a media file.
 
     Uses ffprobe when available; otherwise parses an ffmpeg ``-i`` probe pass so
     the system still works with only an ffmpeg binary present.
+
+    Cached per path (max 64 entries) — during a project run the same source file
+    is probed multiple times (once in _process, again per rerender_all/clips/one).
+    Source files are read-only after import, so the cache is always valid.
     """
     s = get_settings()
     path = str(path)
@@ -148,10 +154,34 @@ def extract_audio_wav(src: str | Path, dst: str | Path, *, sample_rate: int = 16
     return dst
 
 
+def grab_frame(src: str | Path, dst: str | Path, *, t: float = 0.0,
+               width: int | None = None, quality: int | None = None,
+               fps: float | None = None, timeout: float = 60.0) -> Path:
+    """Extract one frame at time ``t`` seconds, scaled to ``width`` (keeps AR).
+
+    Single source of truth for the "grab a frame" ffmpeg filtergraph that was
+    previously inlined ~6× across the pipeline (classify, facecam, reframe,
+    detect_ocr, vlm, make_thumbnail). ``quality`` sets JPEG quality (``-q:v``);
+    ``fps`` adds an ``fps=`` filter (used by sampling paths that want a fixed
+    frame rate before the scale). Returns the destination path.
+    """
+    dst = Path(dst)
+    vf = []
+    if fps is not None:
+        vf.append(f"fps={fps}")
+    if width is not None:
+        vf.append(f"scale={width}:-2")
+    args = ["-ss", f"{max(t, 0):.3f}", "-i", str(src), "-frames:v", "1"]
+    if vf:
+        args += ["-vf", ",".join(vf)]
+    if quality is not None:
+        args += ["-q:v", str(quality)]
+    args.append(str(dst))
+    run(args, timeout=timeout)
+    return dst
+
+
 def make_thumbnail(src: str | Path, dst: str | Path, *, at: float = 0.0,
                    width: int = 540) -> Path:
     """Grab a single frame at ``at`` seconds, scaled to ``width`` (keeps AR)."""
-    dst = Path(dst)
-    run(["-ss", f"{max(at, 0):.3f}", "-i", str(src), "-frames:v", "1",
-         "-vf", f"scale={width}:-2", str(dst)])
-    return dst
+    return grab_frame(src, dst, t=at, width=width)

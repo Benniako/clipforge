@@ -732,6 +732,8 @@ export default function Upload({ health }: { health: Health | null }) {
                 className="proj-row"
                 onClick={() => nav(`/p/${p.id}`)}
                 role="button"
+                tabIndex={0}
+                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); nav(`/p/${p.id}`); } }}
               >
                 <div className="col" style={{ flex: 1 }}>
                   <span className="name">{p.name}</span>
@@ -740,7 +742,7 @@ export default function Upload({ health }: { health: Health | null }) {
                       duration: fmtDuration(p.duration),
                       ready: p.ready_clips,
                       total: p.clip_count,
-                      ago: timeAgo(p.created_at),
+                      ago: timeAgo(p.created_at, t),
                     })}
                   </span>
                 </div>

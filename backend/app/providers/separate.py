@@ -64,8 +64,9 @@ def denoise_source(src_path: str, dst_path: str) -> str | None:
 
 def _run_demucs(audio: Path, out_root: Path) -> Path | None:
     """Run Demucs separation and return the path to the vocals stem, or None."""
-    import subprocess
     import sys
+
+    from .._util import run_subprocess
 
     device = "cuda" if get_settings().device == "cuda" else "cpu"
     # --two-stems=vocals only computes vocals vs the rest — ~2x faster than the
@@ -73,7 +74,7 @@ def _run_demucs(audio: Path, out_root: Path) -> Path | None:
     # interpreter/venv Demucs is installed in.
     cmd = [sys.executable, "-m", "demucs", "--two-stems", "vocals",
            "-d", device, "-o", str(out_root), str(audio)]
-    subprocess.run(cmd, check=True, capture_output=True, timeout=3600)
+    run_subprocess(cmd, timeout=3600, log_label="demucs")
     # Demucs writes <out_root>/<model>/<track>/vocals.wav
     hits = list(out_root.glob("*/*/vocals.wav"))
     return hits[0] if hits else None

@@ -3,8 +3,12 @@
 A project is a nested document (clips, transcript, captions, reframe paths), so
 we store it as one JSON blob per row in SQLite. SQLite gives us durability and
 atomic writes for free; the JSON column keeps the rich object graph intact
-without an ORM. A new connection is opened per operation (WAL mode) which keeps
-the store safe to use from the API threadpool and the background worker alike.
+without an ORM.
+
+Connections are held per-thread (``threading.local()``) so a worker or API
+handler reuses one connection across its lifetime. WAL mode with NORMAL sync
+means reads don't block writes and vice-versa, and the WAL cache stays warm
+between operations.
 """
 from __future__ import annotations
 
@@ -29,6 +33,10 @@ CREATE INDEX IF NOT EXISTS idx_projects_created ON projects(created_at);
 # Serialise read-modify-write cycles on a single project. v1 is single-user, so
 # one process-wide lock is simpler than per-id locks and plenty fast.
 _write_lock = threading.RLock()
+# Per-thread connection pool -- one connection per thread, opened on first
+# access, reused for the thread's lifetime. Avoids opening/closing a connection
+# on every store operation (~100+ times per project).
+_local = threading.local()
 
 
 def init_db() -> None:
@@ -36,16 +44,42 @@ def init_db() -> None:
         con.executescript(_SCHEMA)
 
 
+def _get_conn() -> sqlite3.Connection:
+    """Return the calling thread's persistent connection, creating it if needed.
+    
+    The connection stays open for the thread's lifetime (WAL mode is designed
+    for long-lived connections). Closed explicitly on shutdown via ``close_all()``.
+    """
+    conn = getattr(_local, "conn", None)
+    if conn is None:
+        conn = sqlite3.connect(get_settings().db_path, timeout=30)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        _local.conn = conn
+    return conn
+
+
+def close_all() -> None:
+    """Close every thread-local connection. Call on shutdown."""
+    for name in dir(_local):
+        attr = getattr(_local, name)
+        if isinstance(attr, sqlite3.Connection):
+            try:
+                attr.close()
+            except Exception:
+                pass
+
+
 @contextmanager
 def _connect():
-    con = sqlite3.connect(get_settings().db_path, timeout=30)
-    con.execute("PRAGMA journal_mode=WAL")
-    con.execute("PRAGMA synchronous=NORMAL")
+    """Yield a connection and commit on success."""
+    con = _get_conn()
     try:
         yield con
         con.commit()
-    finally:
-        con.close()
+    except Exception:
+        con.rollback()
+        raise
 
 
 def save(project: Project) -> Project:

@@ -61,6 +61,9 @@ async def lifespan(app: FastAPI):
     s = get_settings()
     logging.getLogger("clipforge").info("capabilities: %s", s.capability_report())
     yield
+    # Graceful shutdown: close thread-local SQLite connections so WAL is
+    # checkpointed cleanly and no ResourceWarning is raised on exit.
+    store.close_all()
 
 
 def create_app() -> FastAPI:
@@ -125,6 +128,13 @@ def create_app() -> FastAPI:
     # Optionally serve a built SPA so `uvicorn app.main:app` runs the whole thing.
     dist = Path(__file__).resolve().parents[2] / "frontend" / "dist"
     if dist.is_dir():
+        # Check whether the built SPA may be stale relative to the source.
+        src = dist.parent / "src"
+        if src.is_dir():
+            dist_mtime = max((p.stat().st_mtime for p in dist.rglob("*") if p.is_file()), default=0)
+            src_mtime = max((p.stat().st_mtime for p in src.rglob("*") if p.is_file()), default=0)
+            if src_mtime > dist_mtime:
+                print("[WARN] Frontend source is newer than dist/ — run `npx vite build` in frontend/")
         app.mount("/", SPAStaticFiles(directory=str(dist), html=True), name="spa")
 
     return app

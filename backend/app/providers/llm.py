@@ -7,21 +7,23 @@ pure, safe upgrade. Runs on the user's own GPU via Ollama.
 
 Enable by installing Ollama (https://ollama.com) and pulling a small model, e.g.
 ``ollama pull llama3.2``. Configure with CLIPFORGE_OLLAMA_URL / CLIPFORGE_LLM_MODEL.
+
+The Ollama mechanics (availability cache, the ``/api/generate`` call, the
+budget-capped batch runner, the score parser) are shared with the VLM provider
+via ``ollama_client``; this module keeps only the text-model picker, the prompt
+text, the prompt-injection defence, and the output cleaning.
 """
 from __future__ import annotations
 
-import json
 import logging
 import os
 import re
-import time
-import urllib.request
+
+from . import ollama_client as _oc
 
 log = logging.getLogger("clipforge.llm")
 
-_URL = os.environ.get("CLIPFORGE_OLLAMA_URL", "http://localhost:11434").rstrip("/")
-# Empty = auto-pick the strongest installed model (see _PREFERRED).
-_MODEL = os.environ.get("CLIPFORGE_LLM_MODEL", "")
+_MODEL = os.environ.get("CLIPFORGE_LLM_MODEL", "")  # empty = auto-pick
 
 # Auto-pick order when CLIPFORGE_LLM_MODEL isn't set. Within each family the
 # largest installed size wins, so pulling qwen3:32b later automatically upgrades
@@ -31,14 +33,6 @@ _FAMILY_RANK = (
     "mistral", "llama3.2", "deepseek-r1",
 )
 _VISION_HINTS = ("vl", "vision", "llava", "moondream", "minicpm-v")
-_SIZE_RE = re.compile(r"(?::|-)(\d+(?:\.\d+)?)b\b", re.IGNORECASE)
-
-_avail: tuple[float, bool, str | None] | None = None  # (checked_at, ok, model)
-
-
-def _size_b(tag: str) -> float:
-    m = _SIZE_RE.search(tag.lower())
-    return float(m.group(1)) if m else 0.0
 
 
 def _rank_text_model(tag: str) -> tuple[int, int, float, str]:
@@ -46,7 +40,7 @@ def _rank_text_model(tag: str) -> tuple[int, int, float, str]:
     family = next((i for i, name in enumerate(_FAMILY_RANK)
                    if low == name or low.startswith(name)), len(_FAMILY_RANK))
     non_vision = 0 if any(h in low for h in _VISION_HINTS) else 1
-    return (non_vision, -family, _size_b(low), low)
+    return (non_vision, -family, _oc.size_b(low), low)
 
 
 def _resolve_model(tags: list[str]) -> str | None:
@@ -63,67 +57,27 @@ def _resolve_model(tags: list[str]) -> str | None:
     return max(text, key=_rank_text_model) if text else None
 
 
-def _refresh() -> None:
-    global _avail
-    now = time.time()
-    if _avail and now - _avail[0] < 60:
-        return
-    ok, model = False, None
-    try:
-        with urllib.request.urlopen(_URL + "/api/tags", timeout=1.5) as r:
-            data = json.loads(r.read())
-            tags = [m.get("name", "") for m in data.get("models", [])]
-            model = _resolve_model([t for t in tags if t])
-            ok = r.status == 200 and model is not None
-    except Exception:
-        ok, model = False, None
-    _avail = (now, ok, model)
+# Shared availability cache, wired to the text-model picker.
+_cache = _oc.AvailabilityCache(resolver=_resolve_model)
 
 
 def available() -> bool:
     """True if an Ollama server answers and has a usable model. Cached 60s."""
-    _refresh()
-    return _avail[1] if _avail else False
+    return _cache.available()
 
 
 def active_model() -> str | None:
     """The model that will actually write titles, or None."""
-    _refresh()
-    return _avail[2] if _avail and _avail[1] else None
+    return _cache.active_model()
 
 
 def _generate(prompt: str, *, timeout: float = 30.0) -> str | None:
-    # "think": False — reasoning models (qwen3, deepseek-r1) otherwise spend
-    # the whole token budget thinking and return an empty response. Models or
-    # Ollama versions that don't know the flag get a retry without it (their
-    # inline <think> text, if any, is stripped by _clean_title).
-    model = active_model()
-    if not model:
-        return None
-    payload: dict = {
-        "model": model, "prompt": prompt, "stream": False, "think": False,
-        "options": {"temperature": 0.7, "num_predict": 80},
-    }
-    for body in (payload, {k: v for k, v in payload.items() if k != "think"}):
-        req = urllib.request.Request(_URL + "/api/generate",
-                                     data=json.dumps(body).encode(),
-                                     headers={"Content-Type": "application/json"})
-        try:
-            with urllib.request.urlopen(req, timeout=timeout) as r:
-                return json.loads(r.read()).get("response", "").strip()
-        except urllib.error.HTTPError as e:
-            detail = e.read().decode("utf-8", errors="ignore")
-            if "think" in detail.lower() and "think" in body:
-                continue  # flag unsupported here — retry plain
-            log.warning("ollama generate failed: %s %s", e, detail[:200])
-            return None
-        except Exception as e:
-            log.warning("ollama generate failed: %s", e)
-            return None
-    return None
+    """One-shot completion via the shared Ollama caller (think-retry built in)."""
+    return _oc.generate(model=active_model() or "", prompt=prompt, timeout=timeout)
 
 
-_THINK_RE = re.compile(r"<think>.*?(?:</think>|$)", re.DOTALL)
+# Re-exposed shared regex for the _clean_* helpers below.
+_THINK_RE = _oc.THINK_RE
 
 # Prompt-injection defense. Transcript text is untrusted — it comes from
 # Whisper transcribing whatever audio is in the source video, which may contain
@@ -181,7 +135,7 @@ def suggest_title(transcript_excerpt: str, *, lang: str = "de") -> str | None:
     """Return an LLM-written hook title, or None if unavailable/failed."""
     if not transcript_excerpt.strip() or not available():
         return None
-    lang_name = {"de": "German", "en": "English"}.get((lang or "de")[:2].lower(), "the same language")
+    lang_name = _lang_name(lang)
     # System + data separation: the instruction is stated up front, and the
     # transcript is fenced as DATA so the model treats it as sample content to
     # summarise rather than as commands to obey.
@@ -234,7 +188,7 @@ def suggest_title_variants(transcript_excerpt: str, *, lang: str = "de",
         style = styles[i]
         if not transcript_excerpt.strip() or not available():
             break
-        lang_name = {"de": "German", "en": "English"}.get((lang or "de")[:2].lower(), "the same language")
+        lang_name = _lang_name(lang)
         plat = _platform_cfg(platform)["title_style"]
         prompt = (
             "You write viral short-form video titles. "
@@ -263,7 +217,7 @@ def suggest_description(transcript_excerpt: str, *, lang: str = "de",
     if not transcript_excerpt.strip() or not available():
         return None
     cfg = _platform_cfg(platform)
-    lang_name = {"de": "German", "en": "English"}.get((lang or "de")[:2].lower(), "the same language")
+    lang_name = _lang_name(lang)
     lines = [f"You write {lang_name} short-form video {cfg['desc_label']}."]
     if title:
         lines.append(f"The video's hook/title is: \"{title[:80]}\"")
@@ -302,21 +256,35 @@ def suggest_hashtags_llm(transcript_excerpt: str, *,
                          lang: str = "de",
                          platform: str | None = None,
                          game: str | None = None,
+                         ocr_terms: list[str] | None = None,
                          limit: int = 8) -> list[str] | None:
     """AI-powered hashtag suggestions using the local LLM.
 
     Returns a list of hashtag strings, or None when unavailable (caller
     falls back to `hashtags.suggest_hashtags`).
+
+    ``ocr_terms`` are on-screen text signals (scores, round names, player
+    handles) extracted from the video frames — they let the model suggest
+    specific gameplay tags the transcript alone wouldn't surface.
     """
     if not transcript_excerpt.strip() or not available():
         return None
-    lang_name = {"de": "German", "en": "English"}.get((lang or "de")[:2].lower(), "the same language")
+    lang_name = _lang_name(lang)
     plat_tags = {"tiktok": " #tiktok #fyp #viral",
                  "reels": " #reels #instagram",
                  "shorts": " #shorts #youtubeshorts"}.get((platform or "generic").lower(), " #shorts")
     game_hint = f" The content is from the game {game}." if game else ""
+    ocr_hint = ""
+    if ocr_terms:
+        # Sanitise OCR terms before they touch the prompt (untrusted on-screen
+        # text). Only short alphanumeric tokens make it through.
+        clean = [w for w in (str(t).strip() for t in ocr_terms)
+                 if w and re.fullmatch(r"[A-Za-z0-9_+\-]{2,20}", w)]
+        if clean:
+            ocr_hint = (f" On-screen text signals seen in the video: "
+                        f"{', '.join(clean[:10])}. Use relevant ones as hashtag roots.")
     prompt = (
-        f"You suggest {lang_name} hashtags for short-form video clips.{game_hint} "
+        f"You suggest {lang_name} hashtags for short-form video clips.{game_hint}{ocr_hint} "
         f"Read the transcript below, then reply with ONLY {limit} comma-separated "
         f"hashtags (with # prefix). Include at most 2 general tags like{plat_tags}; "
         "the rest must be specific to the clip's topic. "
@@ -327,8 +295,7 @@ def suggest_hashtags_llm(transcript_excerpt: str, *,
     out = _generate(prompt, timeout=15.0)
     if not out:
         return None
-    out = _clean_hashtags(out, limit)
-    return out
+    return _clean_hashtags(out, limit)
 
 
 def _clean_hashtags(text: str, limit: int) -> list[str]:
@@ -342,9 +309,6 @@ def _clean_hashtags(text: str, limit: int) -> list[str]:
     return seen[:limit]
 
 
-_SCORE_RE = re.compile(r"(\d{1,3})")
-
-
 def score_viral(transcript_excerpt: str, *, lang: str = "de"
                 ) -> tuple[float, str] | None:
     """Ask the local model how viral a clip's content is.
@@ -356,7 +320,7 @@ def score_viral(transcript_excerpt: str, *, lang: str = "de"
     """
     if not transcript_excerpt.strip() or not available():
         return None
-    lang_name = {"de": "German", "en": "English"}.get((lang or "de")[:2].lower(), "the same language")
+    lang_name = _lang_name(lang)
     prompt = (
         "You judge short-form video virality. Rate how likely the clip below is "
         "to go viral on TikTok/Reels/Shorts, considering hook strength, emotion, "
@@ -375,17 +339,11 @@ def score_viral(transcript_excerpt: str, *, lang: str = "de"
 
 def _parse_viral(text: str) -> tuple[float, str] | None:
     """Parse 'SCORE: 72 | REASON: strong hook' from a model reply."""
-    text = _THINK_RE.sub("", text or "").strip()
-    line = next((ln for ln in text.splitlines() if "score" in ln.lower()), text)
-    m = _SCORE_RE.search(line)
-    if not m:
+    r = _oc.parse_score_reason(text)
+    if r is None:
         return None
-    val = max(0.0, min(100.0, float(m.group(1)))) / 100.0
-    reason = ""
-    if "reason" in line.lower():
-        reason = line[line.lower().index("reason") + len("reason"):].lstrip(": ").strip()
-    reason = reason.strip(' "\'.|')[:48]
-    return val, (reason or "AI virality read")
+    val, reason = r
+    return val, (reason if reason != "AI read" else "AI virality read")
 
 
 def score_virals(excerpts: list[str], *, lang: str = "de",
@@ -394,24 +352,14 @@ def score_virals(excerpts: list[str], *, lang: str = "de",
 
     Returns {index: (potential, reason)} for whatever finished in time; the rest
     keep their heuristic score untouched — a slow model can never stall a run."""
-    import concurrent.futures as cf
-
     if not available():
         return {}
-    out: dict[int, tuple[float, str]] = {}
-    ex = cf.ThreadPoolExecutor(max_workers=3)
-    futs = {ex.submit(score_viral, text, lang=lang): i
-            for i, text in enumerate(excerpts) if text.strip()}
-    done, _ = cf.wait(futs, timeout=budget)
-    for f in done:
-        try:
-            r = f.result()
-            if r is not None:
-                out[futs[f]] = r
-        except Exception:
-            pass
-    ex.shutdown(wait=False, cancel_futures=True)
-    return out
+    # Keep original indices so duplicate transcripts map correctly.
+    indexed = [(i, t) for i, t in enumerate(excerpts) if t.strip()]
+    items = [(t, lang) for _, t in indexed]
+    result, _ = _oc.run_budgeted(lambda a: score_viral(a[0], lang=a[1]), items,
+                              budget=budget, max_workers=3, logger=log)
+    return {indexed[pos][0]: val for pos, val in result.items()}
 
 
 def suggest_titles(excerpts: list[str], *, lang: str = "de",
@@ -421,26 +369,15 @@ def suggest_titles(excerpts: list[str], *, lang: str = "de",
     Returns {index: title} for whatever finished in time; callers keep their
     heuristic titles for the rest — a slow local model can never stall a run.
     """
-    import concurrent.futures as cf
-
     if not available():
         return {}
-    out: dict[int, str] = {}
-    ex = cf.ThreadPoolExecutor(max_workers=3)
-    futs = {ex.submit(suggest_title, text, lang=lang, platform=platform): i
-            for i, text in enumerate(excerpts) if text.strip()}
-    done, not_done = cf.wait(futs, timeout=budget)
-    for f in done:
-        try:
-            t = f.result()
-            if t:
-                out[futs[f]] = t
-        except Exception:
-            pass
-    # Don't join the in-flight requests — a `with` block would block here for
-    # up to another request-timeout per worker, blowing through the budget.
-    # The stragglers are side-effect-free; let them finish in the background.
-    ex.shutdown(wait=False, cancel_futures=True)
-    if len(out) < len(excerpts):
-        log.info("llm titles: %d/%d within budget", len(out), len(excerpts))
-    return out
+    indexed = [(i, t) for i, t in enumerate(excerpts) if t.strip()]
+    items = [(t, lang, platform) for _, t in indexed]
+    result, _ = _oc.run_budgeted(lambda a: suggest_title(a[0], lang=a[1], platform=a[2]),
+                              items, budget=budget, max_workers=3, logger=log)
+    return {indexed[pos][0]: val for pos, val in result.items()}
+
+
+def _lang_name(lang: str) -> str:
+    """Map an ISO code to a language name for prompts (single source of truth)."""
+    return {"de": "German", "en": "English"}.get((lang or "de")[:2].lower(), "the same language")

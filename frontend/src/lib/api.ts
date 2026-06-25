@@ -38,6 +38,15 @@ export interface VisualCueProfile {
 }
 export type VisualCueMeta = Record<string, VisualCueProfile>;
 
+/** Default timeout (ms) for non-upload requests. */
+const REQUEST_TIMEOUT_MS = 30_000;
+
+function fetchWithTimeout(url: string | URL, options: RequestInit = {}, timeoutMs = REQUEST_TIMEOUT_MS): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  return fetch(url, { ...options, signal: controller.signal }).finally(() => clearTimeout(timer));
+}
+
 async function json<T>(res: Response): Promise<T> {
   if (!res.ok) {
     let detail = res.statusText;
@@ -87,42 +96,42 @@ export interface CreateProjectInput {
 }
 
 export const api = {
-  health: () => fetch("/api/health").then((r) => json<Health>(r)),
+  health: () => fetchWithTimeout("/api/health").then((r) => json<Health>(r)),
 
   /** AI-generated publish-ready content for a clip (titles, description, hashtags). */
   publishContent: (projectId: string, clipId: string, platform?: string) =>
-    fetch(`/api/projects/${projectId}/clips/${clipId}/publish-content?platform=${platform ?? "generic"}`)
+    fetchWithTimeout(`/api/projects/${projectId}/clips/${clipId}/publish-content?platform=${platform ?? "generic"}`)
       .then((r) => json<PublishContent>(r)),
 
   /** Grouped capability inventory for the diagnostics panel. */
   capabilities: () =>
-    fetch("/api/capabilities")
+    fetchWithTimeout("/api/capabilities")
       .then((r) => json<{ flat: Health["capabilities"]; detail: CapabilityDetail }>(r)),
 
-  styles: () => fetch("/api/styles").then((r) => json<StyleTemplate[]>(r)),
+  styles: () => fetchWithTimeout("/api/styles").then((r) => json<StyleTemplate[]>(r)),
 
-  cues: () => fetch("/api/cues").then((r) => json<CuesStatus>(r)),
+  cues: () => fetchWithTimeout("/api/cues").then((r) => json<CuesStatus>(r)),
 
   addCue: (game: string, event: string, opts: { url?: string; file?: File }) => {
     const fd = new FormData();
     if (opts.url) fd.set("url", opts.url);
     if (opts.file) fd.set("file", opts.file);
-    return fetch(`/api/cues/${pathPart(game)}/${pathPart(event)}`, { method: "POST", body: fd }).then(
+    return fetchWithTimeout(`/api/cues/${pathPart(game)}/${pathPart(event)}`, { method: "POST", body: fd }).then(
       (r) => json<CuesStatus>(r),
     );
   },
 
   removeCue: (game: string, event: string) =>
-    fetch(`/api/cues/${pathPart(game)}/${pathPart(event)}`, { method: "DELETE" }).then((r) => json<CuesStatus>(r)),
+    fetchWithTimeout(`/api/cues/${pathPart(game)}/${pathPart(event)}`, { method: "DELETE" }).then((r) => json<CuesStatus>(r)),
 
-  visualCues: () => fetch("/api/cues/visual").then((r) => json<VisualCuesStatus>(r)),
+  visualCues: () => fetchWithTimeout("/api/cues/visual").then((r) => json<VisualCuesStatus>(r)),
 
-  visualCueMeta: () => fetch("/api/cues/visual-meta").then((r) => json<VisualCueMeta>(r)),
+  visualCueMeta: () => fetchWithTimeout("/api/cues/visual-meta").then((r) => json<VisualCueMeta>(r)),
 
   addVisualCue: (game: string, label: string, phrase: string) => {
     const fd = new FormData();
     fd.set("phrase", phrase);
-    return fetch(`/api/cues/visual/${pathPart(game)}/${pathPart(label)}`, { method: "POST", body: fd }).then((r) =>
+    return fetchWithTimeout(`/api/cues/visual/${pathPart(game)}/${pathPart(label)}`, { method: "POST", body: fd }).then((r) =>
       json<VisualCuesStatus>(r),
     );
   },
@@ -140,7 +149,7 @@ export const api = {
     fd.set("h", String(box.h));
     if (opts.name) fd.set("name", opts.name);
     if (opts.phrase) fd.set("phrase", opts.phrase);
-    return fetch(`/api/cues/visual/${pathPart(game)}/${pathPart(label)}/region`, { method: "POST", body: fd }).then((r) =>
+    return fetchWithTimeout(`/api/cues/visual/${pathPart(game)}/${pathPart(label)}/region`, { method: "POST", body: fd }).then((r) =>
       json<VisualCueMeta>(r),
     );
   },
@@ -148,14 +157,14 @@ export const api = {
   markVisualCueFalse: (game: string, label: string, phrase: string) => {
     const fd = new FormData();
     fd.set("phrase", phrase);
-    return fetch(`/api/cues/visual/${pathPart(game)}/${pathPart(label)}/false`, { method: "POST", body: fd }).then((r) =>
-      json<VisualCueMeta>(r),
+    return fetchWithTimeout(`/api/cues/visual/${pathPart(game)}/${pathPart(label)}/false`, { method: "POST", body: fd }).then((r) =>
+      json<VisualCuesStatus>(r),
     );
   },
 
   removeVisualCue: (game: string, label: string, phrase?: string) => {
     const qs = phrase ? `?phrase=${encodeURIComponent(phrase)}` : "";
-    return fetch(`/api/cues/visual/${pathPart(game)}/${pathPart(label)}${qs}`, { method: "DELETE" }).then((r) =>
+    return fetchWithTimeout(`/api/cues/visual/${pathPart(game)}/${pathPart(label)}${qs}`, { method: "DELETE" }).then((r) =>
       json<VisualCuesStatus>(r),
     );
   },
@@ -175,7 +184,7 @@ export const api = {
     fd.set("h", String(box.h));
     if (opts.label) fd.set("label", opts.label);
     fd.set("save", String(!!opts.save));
-    return fetch("/api/cues/lab/ocr", { method: "POST", body: fd }).then((r) =>
+    return fetchWithTimeout("/api/cues/lab/ocr", { method: "POST", body: fd }).then((r) =>
       json<{ text: string; matches: { label: string; phrase: string }[]; saved: boolean; visual: VisualCuesStatus }>(r),
     );
   },
@@ -184,7 +193,7 @@ export const api = {
     const fd = new FormData();
     fd.set("game", game);
     fd.set("file", file);
-    return fetch("/api/cues/lab/audio", { method: "POST", body: fd }).then((r) =>
+    return fetchWithTimeout("/api/cues/lab/audio", { method: "POST", body: fd }).then((r) =>
       json<{ count: number; events: { t: number; label: string; similarity: number; source: string }[] }>(r),
     );
   },
@@ -203,30 +212,30 @@ export const api = {
     fd.set("duration", String(duration));
     fd.set("save", String(!!opts.save));
     if (opts.label) fd.set("label", opts.label);
-    return fetch("/api/cues/lab/audio-window", { method: "POST", body: fd }).then((r) =>
+    return fetchWithTimeout("/api/cues/lab/audio-window", { method: "POST", body: fd }).then((r) =>
       json<{ count: number; saved: boolean; start: number; duration: number; events: { t: number; label: string; similarity: number; source: string }[] }>(r),
     );
   },
 
-  listProjects: () => fetch("/api/projects").then((r) => json<ProjectSummary[]>(r)),
+  listProjects: () => fetchWithTimeout("/api/projects").then((r) => json<ProjectSummary[]>(r)),
 
   getProject: (id: string) =>
-    fetch(`/api/projects/${id}`).then((r) => json<Project>(r)),
+    fetchWithTimeout(`/api/projects/${id}`).then((r) => json<Project>(r)),
 
   status: (id: string) =>
-    fetch(`/api/projects/${id}/status`).then((r) => json<StatusPayload>(r)),
+    fetchWithTimeout(`/api/projects/${id}/status`).then((r) => json<StatusPayload>(r)),
 
   pauseProject: (id: string) =>
-    fetch(`/api/projects/${id}/pause`, { method: "POST" }).then((r) => json<StatusPayload>(r)),
+    fetchWithTimeout(`/api/projects/${id}/pause`, { method: "POST" }).then((r) => json<StatusPayload>(r)),
 
   resumeProject: (id: string) =>
-    fetch(`/api/projects/${id}/resume`, { method: "POST" }).then((r) => json<StatusPayload>(r)),
+    fetchWithTimeout(`/api/projects/${id}/resume`, { method: "POST" }).then((r) => json<StatusPayload>(r)),
 
   deleteProject: (id: string) =>
-    fetch(`/api/projects/${id}`, { method: "DELETE" }).then((r) => json(r)),
+    fetchWithTimeout(`/api/projects/${id}`, { method: "DELETE" }).then((r) => json(r)),
 
   reprocess: (id: string, overrides: Partial<ImportSettings> = {}) =>
-    fetch(`/api/projects/${id}/reprocess`, {
+    fetchWithTimeout(`/api/projects/${id}/reprocess`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(overrides),
@@ -234,7 +243,7 @@ export const api = {
 
   // Re-render all clips in a new output format (no re-detection).
   setAspect: (id: string, aspect: string) =>
-    fetch(`/api/projects/${id}/aspect`, {
+    fetchWithTimeout(`/api/projects/${id}/aspect`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ aspect }),
@@ -262,6 +271,12 @@ export const api = {
       fd.set("tighten", String(input.tighten));
       fd.set("denoise", String(input.denoise));
       fd.set("motion", input.motion);
+      fd.set("ai_boost_emphasis", String(input.ai_boost?.emphasis ?? true));
+      fd.set("ai_boost_emoji", String(input.ai_boost?.emoji ?? true));
+      fd.set("ai_boost_speaker_colors", String(input.ai_boost?.speakerColors ?? true));
+      fd.set("ai_boost_auto_zoom", String(input.ai_boost?.autoZoom ?? true));
+      fd.set("ai_boost_broll", String(input.ai_boost?.broll ?? false));
+      fd.set("ai_boost_hook_check", String(input.ai_boost?.hookCheck ?? true));
       fd.set("facecam_layout", input.facecam_layout);
       fd.set("use_ocr", String(input.use_ocr));
       fd.set("use_vlm", String(input.use_vlm));
@@ -322,26 +337,26 @@ export const api = {
       aspect: string;
     }>,
   ) =>
-    fetch(`/api/projects/${projectId}/clips/${clipId}`, {
+    fetchWithTimeout(`/api/projects/${projectId}/clips/${clipId}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(edit),
     }).then((r) => json<Clip>(r)),
 
   rerenderClip: (projectId: string, clipId: string) =>
-    fetch(`/api/projects/${projectId}/clips/${clipId}/rerender`, {
+    fetchWithTimeout(`/api/projects/${projectId}/clips/${clipId}/rerender`, {
       method: "POST",
     }).then((r) => json<Clip>(r)),
 
   rerenderClips: (projectId: string, clipIds: string[]) =>
-    fetch(`/api/projects/${projectId}/clips/rerender`, {
+    fetchWithTimeout(`/api/projects/${projectId}/clips/rerender`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ clip_ids: clipIds }),
     }).then((r) => json<Project>(r)),
 
   createMontage: (projectId: string, clipIds: string[], title?: string) =>
-    fetch(`/api/projects/${projectId}/montage`, {
+    fetchWithTimeout(`/api/projects/${projectId}/montage`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ clip_ids: clipIds, title }),
@@ -351,14 +366,14 @@ export const api = {
     `/api/projects/${projectId}/montages/${montageId}/download`,
 
   rateClip: (projectId: string, clipId: string, rating: "up" | "down" | "none") =>
-    fetch(`/api/projects/${projectId}/clips/${clipId}/feedback`, {
+    fetchWithTimeout(`/api/projects/${projectId}/clips/${clipId}/feedback`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ rating }),
     }).then((r) => json<Clip>(r)),
 
   learning: () =>
-    fetch("/api/learning").then((r) =>
+    fetchWithTimeout("/api/learning").then((r) =>
       json<{
         total_ratings: number;
         likes: number;
@@ -370,7 +385,7 @@ export const api = {
     ),
 
   resetLearning: (scope?: string) =>
-    fetch("/api/learning/reset", {
+    fetchWithTimeout("/api/learning/reset", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(scope ? { scope } : {}),

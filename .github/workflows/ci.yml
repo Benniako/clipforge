@@ -4,10 +4,15 @@ on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    - cron: "0 6 * * 1"  # every Monday 06:00 UTC
 
 jobs:
   backend-tests:
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
@@ -23,6 +28,11 @@ jobs:
       - name: Unit tests
         working-directory: backend
         run: python -m tests.test_units
+      - name: Coverage report
+        working-directory: backend
+        run: |
+          pip install pytest-cov
+          python -m pytest --cov=app --cov-report=term-missing --cov-report=xml tests/test_units.py || true
 
   frontend-build:
     runs-on: ubuntu-latest
@@ -39,6 +49,9 @@ jobs:
       - name: Type-check
         working-directory: frontend
         run: npm run typecheck
+      - name: Lint
+        working-directory: frontend
+        run: npx eslint src/ --ext .ts,.tsx || true
       - name: Unit tests
         working-directory: frontend
         run: npm test

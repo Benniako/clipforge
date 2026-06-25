@@ -186,66 +186,87 @@ def _composed_graph(clip: Clip, cam: Rect, info: MediaInfo,
 
 def _make_thumbnail(out_path: Path, thumb_path: Path, *, at: float,
                     width: int, title: str | None = None) -> None:
-    """Extract a thumbnail frame and optionally overlay the clip title."""
+    """Extract a thumbnail frame and optionally overlay the clip title.
+
+    When a local diffusion model is wired (``providers.image_gen.detected()``)
+    and a title is available, generate a stylised cover image from the title
+    instead of grabbing a video frame.
+    """
+    if title:
+        from ..providers import image_gen
+        if image_gen.detected():
+            try:
+                gen = image_gen.generate(title, dst=thumb_path)
+                if gen and gen.exists():
+                    return
+            except Exception as e:
+                log.debug("image-gen thumbnail failed (%s); falling back to frame", e)
     ffmpeg.make_thumbnail(out_path, thumb_path, at=at, width=width)
     if not title:
         return
     try:
         from PIL import Image, ImageDraw, ImageFont
         import numpy as np
-        img = Image.open(thumb_path).convert("RGB")
-        w, h = img.size
-        draw = ImageDraw.Draw(img)
-        # Semi-transparent gradient at bottom for text legibility.
-        grad_h = max(h // 3, 30)
-        grad = np.zeros((grad_h, w, 4), dtype=np.uint8)
-        for y in range(grad_h):
-            alpha = int(180 * (1.0 - min(y / grad_h, 1.0)))
-            grad[y, :, 3] = alpha
-        gradient = Image.fromarray(grad, mode="RGBA")
-        img = Image.alpha_composite(img.convert("RGBA"), gradient).convert("RGB")
-        draw = ImageDraw.Draw(img)
-        font_size = max(int(w * 0.065), 20)
-        try:
-            font = ImageFont.truetype("DejaVuSans-Bold.ttf", font_size)
-        except OSError:
-            font = ImageFont.load_default()
-        # Word-wrap title to thumbnail width (minus 24px padding).
-        words = (title or "").split()
-        lines, line = [], ""
-        max_w = w - 32
-        for wd in words:
-            test = f"{line} {wd}" if line else wd
-            bw = draw.textbbox((0, 0), test, font=font)[2]
-            if bw > max_w and line:
+        with Image.open(thumb_path) as _pil_img:
+            img = _pil_img.convert("RGB")
+            w, h = img.size
+            draw = ImageDraw.Draw(img)
+            # Semi-transparent gradient at bottom for text legibility.
+            grad_h = max(h // 3, 30)
+            grad = np.zeros((grad_h, w, 4), dtype=np.uint8)
+            for y in range(grad_h):
+                alpha = int(180 * (1.0 - min(y / grad_h, 1.0)))
+                grad[y, :, 3] = alpha
+            gradient = Image.fromarray(grad, mode="RGBA")
+            img = Image.alpha_composite(img.convert("RGBA"), gradient).convert("RGB")
+            draw = ImageDraw.Draw(img)
+            font_size = max(int(w * 0.065), 20)
+            try:
+                font = ImageFont.truetype("DejaVuSans-Bold.ttf", font_size)
+            except OSError:
+                font = ImageFont.load_default()
+            # Word-wrap title to thumbnail width (minus 24px padding).
+            words = (title or "").split()
+            lines, line = [], ""
+            max_w = w - 32
+            for wd in words:
+                test = f"{line} {wd}" if line else wd
+                bw = draw.textbbox((0, 0), test, font=font)[2]
+                if bw > max_w and line:
+                    lines.append(line)
+                    line = wd
+                else:
+                    line = test
+            if line:
                 lines.append(line)
-                line = wd
-            else:
-                line = test
-        if line:
-            lines.append(line)
-        line_h = int(font_size * 1.35)
-        total_h = len(lines) * line_h
-        start_y = h - 20 - total_h
-        for i, l in enumerate(lines):
-            bw = draw.textbbox((0, 0), l, font=font)[2]
-            tx = (w - bw) / 2
-            draw.text((tx, start_y + i * line_h), l, fill="white",
-                      font=font, stroke_width=3, stroke_color="black")
-        img.save(thumb_path, quality=90)
+            line_h = int(font_size * 1.35)
+            total_h = len(lines) * line_h
+            start_y = h - 20 - total_h
+            for i, l in enumerate(lines):
+                bw = draw.textbbox((0, 0), l, font=font)[2]
+                tx = (w - bw) / 2
+                draw.text((tx, start_y + i * line_h), l, fill="white",
+                          font=font, stroke_width=3, stroke_color="black")
+            img.save(thumb_path, quality=90)
     except Exception as e:
         log.debug("title overlay on thumbnail failed: %s", e)
 
 
 def render_clip(clip: Clip, src_path: str, info: MediaInfo, style: StyleTemplate,
                 out_path: Path, thumb_path: Path, *, out_w: int, out_h: int,
-                burn_captions: bool = True, motion: str = "none") -> None:
+                burn_captions: bool = True, motion: str = "none",
+                ai_boost=None) -> None:
     """Render ``clip`` from ``src_path`` into ``out_path`` (+ a thumbnail).
 
     With ``burn_captions=False`` the clip is reframed/encoded but left clean — for
     re-editing in a desktop NLE where you'd add your own captions. When the clip
     carries jump-cut ``segments``, they're trimmed and concatenated; ``motion``
     "push" adds a slow push-in.
+
+    ``ai_boost`` is an optional ``AiBoostSettings`` instance (from the project's
+    ImportSettings). When provided, its flags gate the auto-zoom punch-ins, B-roll
+    cutaways, and speaker-colour passes so the per-project AI Boost toggles actually
+    control rendering behaviour.
     """
     cw, ch, x_arg = build_crop(clip, info.width, info.height, out_w, out_h)
     static = x_arg.lstrip("-").isdigit()
@@ -268,7 +289,8 @@ def render_clip(clip: Clip, src_path: str, info: MediaInfo, style: StyleTemplate
         # '\' are filtergraph metacharacters and would break parsing).
         ass_part = None
         if burn_captions and clip.captions.words:
-            captions_mod.write_ass(clip.captions, style, out_w, out_h, Path(tmp) / "cap.ass")
+            captions_mod.write_ass(clip.captions, style, out_w, out_h, Path(tmp) / "cap.ass",
+                                     ai_boost=ai_boost)
             ass_part = "ass=f=cap.ass"
 
         parts = [f"crop=w={cw}:h={ch}:x={x_field}:y=(ih-{ch})/2",
@@ -282,8 +304,10 @@ def render_clip(clip: Clip, src_path: str, info: MediaInfo, style: StyleTemplate
         # Auto zoom (AI Boost): brief punch-in on emphasis words, gated by the
         # clip's settings (default on for most presets). build_zoom_filter
         # returns None when no spikes exist, so the existing scale+setsar chain
-        # is unchanged.
-        if motion != "push" and not composed and not tightened:
+        # is unchanged. Disabled when ai_boost.autoZoom is False (per-project
+        # toggle in the AI Boost panel).
+        if (motion != "push" and not composed and not tightened
+                and (ai_boost is None or ai_boost.autoZoom)):
             # Generate zoom spikes from caption emphasis. The emphasis marks
             # are set by caption_fx.annotate during build_ass; we re-annotate
             # here (pure function, no-op when emphasis is off on the style).
@@ -314,7 +338,9 @@ def render_clip(clip: Clip, src_path: str, info: MediaInfo, style: StyleTemplate
             base = ["-ss", f"{clip.start:.3f}", "-i", src_abs,
                     "-t", f"{clip.duration:.3f}",
                     "-filter_complex_script", "graph.txt", "-map", "[vo]"]
-            audio = (["-map", "0:a?", "-af", "loudnorm=I=-16:TP=-1.5:LRA=11",
+            audio = (["-map", "0:a?", "-af",
+                      "loudnorm=I=-16:TP=-1.5:LRA=11,"
+                      "acompressor=threshold=0.3:ratio=4:attack=5:release=100",
                       "-c:a", "aac", "-b:a", "128k", "-ac", "2"]
                      if info.has_audio else ["-an"])
         elif tightened:
@@ -336,7 +362,9 @@ def render_clip(clip: Clip, src_path: str, info: MediaInfo, style: StyleTemplate
             if info.has_audio:
                 pairs = "".join(f"[v{i}][a{i}]" for i in range(n))
                 lines.append(f"{pairs}concat=n={n}:v=1:a=1[vc][ac];")
-                lines.append("[ac]loudnorm=I=-16:TP=-1.5:LRA=11[ao];")
+                lines.append(
+                    "[ac]loudnorm=I=-16:TP=-1.5:LRA=11,"
+                    "acompressor=threshold=0.3:ratio=4:attack=5:release=100[ao];")
             else:
                 pairs = "".join(f"[v{i}]" for i in range(n))
                 lines.append(f"{pairs}concat=n={n}:v=1:a=0[vc];")
@@ -359,7 +387,9 @@ def render_clip(clip: Clip, src_path: str, info: MediaInfo, style: StyleTemplate
                 broll = clip.broll_overlay
                 broll_dur = min(float(broll.get("duration", 0)),
                                 clip.duration - float(broll.get("start_rel", 0)))
-            if broll and broll_dur > 0.300:
+            # Gated by ai_boost.broll (default False — B-roll is opt-in because
+            # it changes the cut structure and may not suit every video).
+            if broll and broll_dur > 0.300 and (ai_boost is None or ai_boost.broll):
                 ov_start = float(broll.get("start_rel", 0))
                 ov_end = ov_start + broll_dur
                 pip_w = _even(out_w * 0.30)
@@ -382,8 +412,10 @@ def render_clip(clip: Clip, src_path: str, info: MediaInfo, style: StyleTemplate
                 base = ["-ss", f"{clip.start:.3f}", "-i", src_abs,
                         "-t", f"{clip.duration:.3f}", "-filter_script:v", "graph.txt"]
             if info.has_audio:
-                # Normalise loudness so clips sound consistent across a batch.
-                audio = ["-af", "loudnorm=I=-16:TP=-1.5:LRA=11",
+                # Normalise + compress for consistent, punchy sound across a batch.
+                audio = ["-af",
+                         "loudnorm=I=-16:TP=-1.5:LRA=11,"
+                         "acompressor=threshold=0.3:ratio=4:attack=5:release=100",
                          "-c:a", "aac", "-b:a", "128k", "-ac", "2"]
             else:
                 audio = ["-an"]

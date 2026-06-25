@@ -30,6 +30,20 @@ export default function ProcessingView({
         ? t("proc.powerQuality")
         : t("proc.powerBalanced");
   const activeStage = stages.find((s) => s.status === "active");
+  // Compute render ETA locally from clip throughput: (remaining / done) × elapsed.
+  // More accurate than the overall pipeline ETA during rendering because it only
+  // counts time actually spent encoding, not transcription/detection/reframing.
+  const rendering = activeStage?.name === "render";
+  let renderEta: number | null = null;
+  if (rendering && timing?.elapsed_seconds != null && timing.elapsed_seconds > 3) {
+    const done = status.rendered_count ?? 0;
+    const total = status.clips?.length ?? status.target_clips ?? 0;
+    if (done > 0 && total > done) {
+      const perClip = timing.elapsed_seconds / done;
+      renderEta = Math.round(perClip * (total - done));
+    }
+  }
+  const etaSeconds = renderEta ?? timing?.eta_seconds ?? null;
 
   const togglePause = async () => {
     setBusy(true);
@@ -86,8 +100,8 @@ export default function ProcessingView({
           <strong style={{ fontSize: 18 }}>
             {paused
               ? t("proc.titlePaused")
-              : timing?.eta_seconds != null
-                ? t("proc.eta", { time: fmtHMS(timing.eta_seconds) })
+              : etaSeconds != null
+                ? t(rendering ? "proc.renderEta" : "proc.eta", { time: fmtHMS(etaSeconds) })
                 : t("proc.etaCalc")}
           </strong>
           <div className="row" style={{ gap: 6, flexWrap: "wrap" }}>

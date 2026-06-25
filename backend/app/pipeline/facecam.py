@@ -59,8 +59,7 @@ def detect_facecam(src_path: str, duration: float) -> Rect | None:
             t = duration * (i + 0.5) / SAMPLE_FRAMES
             fp = Path(tmp) / f"f_{i:03d}.jpg"
             try:
-                ffmpeg.run(["-ss", f"{t:.2f}", "-i", src_path, "-frames:v", "1",
-                            "-vf", f"scale={SAMPLE_WIDTH}:-2", "-q:v", "4", str(fp)])
+                ffmpeg.grab_frame(src_path, fp, t=t, width=SAMPLE_WIDTH, quality=4)
             except Exception:
                 continue
             img = cv2.imread(str(fp))

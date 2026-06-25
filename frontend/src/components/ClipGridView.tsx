@@ -231,7 +231,11 @@ export default function ClipGridView({
     }
   };
 
-  const refresh = async () => onChange(await api.getProject(project.id));
+  const refresh = async () => {
+    try {
+      onChange(await api.getProject(project.id));
+    } catch { /* refresh errors are transient; UI stays consistent */ }
+  };
 
   const rerenderSelected = async () => {
     if (selected.length === 0) return;

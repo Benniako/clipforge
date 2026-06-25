@@ -91,6 +91,14 @@ def _tmp_upload(file: UploadFile, suffix: str | None = None) -> Path:
     return Path(tmp_name)
 
 
+async def _save_upload(file: UploadFile, dst: Path) -> Path:
+    """Stream an uploaded file to disk in 1 MiB chunks."""
+    with open(dst, "wb") as out:
+        while chunk := await file.read(1 << 20):
+            out.write(chunk)
+    return dst
+
+
 @router.post("/lab/ocr")
 async def test_ocr_box(
     game: str = Form("auto"),
@@ -112,13 +120,12 @@ async def test_ocr_box(
     tmp = _tmp_upload(file)
     crop_path: Path | None = None
     try:
-        with open(tmp, "wb") as out:
-            while chunk := await file.read(1 << 20):
-                out.write(chunk)
+        await _save_upload(file, tmp)
         from PIL import Image, ImageOps
 
-        im = Image.open(tmp).convert("RGB")
-        iw, ih = im.size
+        with Image.open(tmp) as img:
+            im = img.convert("RGB")
+            iw, ih = im.size
         x0 = max(0, min(iw - 1, int(x * iw)))
         y0 = max(0, min(ih - 1, int(y * ih)))
         x1 = max(x0 + 1, min(iw, int((x + w) * iw)))
@@ -167,9 +174,7 @@ async def test_audio_cues(
     """Match installed custom sound cues against an uploaded audio/video sample."""
     tmp = _tmp_upload(file)
     try:
-        with open(tmp, "wb") as out:
-            while chunk := await file.read(1 << 20):
-                out.write(chunk)
+        await _save_upload(file, tmp)
         base = get_settings().data_dir / "game_cues"
         games = {game_packs.COMMON_PACK, game_packs._safe(game)}
         events = []
@@ -206,9 +211,7 @@ async def test_audio_window(
     tmp = _tmp_upload(file)
     window = tmp.with_suffix(".cue.wav")
     try:
-        with open(tmp, "wb") as out:
-            while chunk := await file.read(1 << 20):
-                out.write(chunk)
+        await _save_upload(file, tmp)
         start = max(0.0, float(start))
         duration = max(0.25, min(8.0, float(duration)))
         ffmpeg.run([
@@ -256,16 +259,9 @@ async def add_cue(game: str, event: str,
         raise HTTPException(400, "provide a sound url or file")
     try:
         if file is not None:
-            suffix = Path(file.filename or "cue").suffix or ".bin"
-            # Close the fd mkstemp opens, or Windows refuses the unlink below
-            # while the handle is held ([WinError 32]).
-            fd, tmp_name = tempfile.mkstemp(suffix=suffix)
-            os.close(fd)
-            tmp = Path(tmp_name)
+            tmp = _tmp_upload(file)
             try:
-                with open(tmp, "wb") as out:
-                    while chunk := await file.read(1 << 20):
-                        out.write(chunk)
+                await _save_upload(file, tmp)
                 await run_in_threadpool(game_packs.install_cue, game, event, str(tmp))
             finally:
                 tmp.unlink(missing_ok=True)
