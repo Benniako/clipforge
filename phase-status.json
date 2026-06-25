@@ -25,8 +25,28 @@
       "label": "Moats (watch folder, privacy mode, plugin system)",
       "status": "done",
       "commits": ["7a453f5"]
+    },
+    "phase-5": {
+      "label": "Release (tag v0.2.0 + push)",
+      "status": "pending",
+      "commits": []
+    },
+    "phase-6": {
+      "label": "Languages (TR, JP, NL, PL, SV)",
+      "status": "pending",
+      "commits": []
+    },
+    "phase-7": {
+      "label": "Test coverage (new files: watcher, plugins, user_styles)",
+      "status": "pending",
+      "commits": []
+    },
+    "phase-8": {
+      "label": "Features (waveform, background music, auto-thumbnails)",
+      "status": "pending",
+      "commits": []
     }
   },
-  "current_phase": "phase-4",
-  "last_updated": "2026-06-25T14:30:00Z"
+  "current_phase": "phase-5",
+  "last_updated": "2026-06-25T14:45:00Z"
 }
