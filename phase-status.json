@@ -1,30 +1,21 @@
 {
   "branch": "Product-Alpha",
   "phases": {
-    "phase-0":{"label":"Foundation","status":"done","commits":["cbaebfb"]},
-    "phase-1":{"label":"Editor UX","status":"done","commits":["84631ce"]},
-    "phase-2":{"label":"Languages (FR,ES,PT,IT)","status":"done","commits":["f51ca9d"]},
-    "phase-3":{"label":"Feature parity","status":"done","commits":["e732903"]},
-    "phase-4":{"label":"Moats","status":"done","commits":["7a453f5"]},
-    "phase-5":{"label":"Release v0.2.0","status":"done","commits":["v0.2.0"]},
-    "phase-6":{"label":"Languages (TR,JP,NL,PL,SV)","status":"done","commits":["2f2b142"]},
-    "phase-7":{"label":"Test coverage","status":"done","commits":["a9dfef5"]},
-    "phase-8":{"label":"Features (waveform,thumbnails)","status":"done","commits":["97a705e"]},
-    "phase-9":{"label":"Stabilization","status":"done","commits":["535e5a7"]},
-    "phase-10":{"label":"QoL (bg music,titles,name-pattern)","status":"done","commits":["535e5a7"]},
-    "phase-11":{
-      "label":"README overhaul + feature documentation",
-      "status":"pending","commits":[]
-    },
-    "phase-12":{
-      "label":"Example plugins (2-3 working examples)",
-      "status":"pending","commits":[]
-    },
-    "phase-13":{
-      "label":"Performance (GPU decode, parallel workers)",
-      "status":"pending","commits":[]
-    }
+    "phase-0":{"label":"Foundation","status":"done"},
+    "phase-1":{"label":"Editor UX","status":"done"},
+    "phase-2":{"label":"Languages (FR,ES,PT,IT)","status":"done"},
+    "phase-3":{"label":"Feature parity","status":"done"},
+    "phase-4":{"label":"Moats","status":"done"},
+    "phase-5":{"label":"Release v0.2.0","status":"done"},
+    "phase-6":{"label":"Languages (TR,JP,NL,PL,SV)","status":"done"},
+    "phase-7":{"label":"Test coverage","status":"done"},
+    "phase-8":{"label":"Features (waveform,thumbnails)","status":"done"},
+    "phase-9":{"label":"Stabilization","status":"done"},
+    "phase-10":{"label":"QoL (bg music,titles,name-pattern)","status":"done"},
+    "phase-11":{"label":"README overhaul + feature docs","status":"done"},
+    "phase-12":{"label":"Example plugins","status":"done"},
+    "phase-13":{"label":"Performance (GPU decode, parallel workers)","status":"done"}
   },
-  "current_phase": "phase-11",
-  "last_updated": "2026-06-25T15:35:00Z"
+  "current_phase": "complete",
+  "last_updated": "2026-06-25T16:00:00Z"
 }
