@@ -133,7 +133,7 @@ def edit_clip(project_id: str, clip_id: str, edit: ClipEdit) -> Clip:
             clip.tightened_duration = None
 
     if edit.style_id is not None:
-        clip.captions.style_id = get_style(edit.style_id).id
+        clip.captions.style_id = user_styles.get_style(edit.style_id).id
 
     # Per-speaker caption toggle. "caption_speakers" not in the request leaves
     # the clip's keep-set untouched; null resets it to "all speakers".

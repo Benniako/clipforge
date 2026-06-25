@@ -178,8 +178,6 @@ def _parse_ffprobe(data: dict) -> MediaInfo:
 
 
 def _probe_with_ffmpeg(path: str) -> MediaInfo:
-    import re
-
     cmd = [_ffmpeg_bin(), "-hide_banner", "-i", path]
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60)

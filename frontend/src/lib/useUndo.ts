@@ -65,7 +65,6 @@ export function useUndo(initial: UndoState) {
     setState(next);
     return next;
   }, [state]);
-  }, [state]);
 
   const reset = useCallback((newState: UndoState) => {
     past.current = [];
