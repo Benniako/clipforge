@@ -233,8 +233,8 @@ export default function VisualCueCalibration({ project }: { project: Project }) 
     setErr(null);
     setOk(null);
     try {
-      const next = await api.markVisualCueFalse(game, cueLabel, falsePhrase);
-      setMeta(next);
+	      await api.markVisualCueFalse(game, cueLabel, falsePhrase);
+	      setMeta(await api.visualCueMeta());
       setOk(t("vc.marked"));
     } catch (e: any) {
       setErr(e?.message ?? t("vc.markFail"));

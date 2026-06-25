@@ -32,12 +32,20 @@ export function useUndo(initial: UndoState) {
   const past = useRef<UndoState[]>([]);
   const future = useRef<UndoState[]>([]);
   const ticking = useRef(false);
+  const [canUndo, setCanUndo] = useState(false);
+  const [canRedo, setCanRedo] = useState(false);
+
+  const sync = useCallback(() => {
+    setCanUndo(past.current.length > 0);
+    setCanRedo(future.current.length > 0);
+  }, []);
 
   const push = useCallback((next: UndoState) => {
     past.current = [...past.current.slice(-(MAX_HISTORY - 1)), state];
     future.current = [];
     setState(next);
-  }, [state]);
+    sync();
+  }, [state, sync]);
 
   const set = useCallback((next: UndoState) => {
     // Batch rapid changes (e.g. slider drags) — only record every 300ms.
@@ -55,30 +63,33 @@ export function useUndo(initial: UndoState) {
     if (!prev) return state;
     future.current = [...future.current, state];
     setState(prev);
+    sync();
     return prev;
-  }, [state]);
+  }, [state, sync]);
 
   const redo = useCallback(() => {
     const next = future.current.pop();
     if (!next) return state;
     past.current = [...past.current, state];
     setState(next);
+    sync();
     return next;
-  }, [state]);
+  }, [state, sync]);
 
   const reset = useCallback((newState: UndoState) => {
     past.current = [];
     future.current = [];
     setState(newState);
-  }, []);
+    sync();
+  }, [sync]);
 
   return {
     state,
     set,
     undo,
     redo,
-    canUndo: past.current.length > 0,
-    canRedo: future.current.length > 0,
+    canUndo,
+    canRedo,
     reset,
     // Direct setter without history (for initial hydration).
     setSilent: setState,

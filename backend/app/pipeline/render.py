@@ -488,12 +488,12 @@ def _pick_thumbnail_at(out_path: Path, duration: float, default_at: float,
     best_t = duration * 0.5  # fallback: center frame
 
     for t in timestamps:
+        tmp_path: Path | None = None
         try:
             with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
                 tmp_path = Path(tmp.name)
             ffmpeg.make_thumbnail(out_path, tmp_path, at=t, width=width)
             img = cv2.imread(str(tmp_path))
-            tmp_path.unlink(missing_ok=True)
             if img is None:
                 continue
             faces = detect_faces(img, min_size_frac=0.03)
@@ -507,5 +507,8 @@ def _pick_thumbnail_at(out_path: Path, duration: float, default_at: float,
                     best_t = t
         except Exception:
             continue
+        finally:
+            if tmp_path and tmp_path.exists():
+                tmp_path.unlink(missing_ok=True)
 
     return best_t
