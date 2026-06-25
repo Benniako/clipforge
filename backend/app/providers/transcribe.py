@@ -344,6 +344,30 @@ _FILLER = {
         "klein anfangen konsequent bleiben und die ergebnisse mit der zeit "
         "wachsen lassen weil genau dort die wahre magie wirklich passiert"
     ).split(),
+    "fr": (
+        "voici la chose que personne ne vous dit vraiment à propos de ça et ça "
+        "a complètement changé ma façon de penser à tout le problème tu dois "
+        "commencer petit rester constant et laisser les résultats s accumuler "
+        "avec le temps parce que c est là que la vraie magie se produit"
+    ).split(),
+    "es": (
+        "esta es la cosa que nadie te dice realmente sobre esto y eso ha "
+        "cambiado completamente cómo pienso sobre todo el problema tienes que "
+        "empezar pequeño mantenerte constante y dejar que los resultados se "
+        "acumulen con el tiempo porque ahí es donde la verdadera magia sucede"
+    ).split(),
+    "pt": (
+        "então aqui está a coisa que ninguém realmente te conta sobre isso e "
+        "mudou completamente como eu penso sobre todo o problema você tem que "
+        "começar pequeno manter a consistência e deixar os resultados "
+        "acumularem com o tempo porque é aí que a mágica real acontece"
+    ).split(),
+    "it": (
+        "quindi ecco la cosa che nessuno ti dice veramente su questo e ha "
+        "completamente cambiato come penso a tutto il problema devi "
+        "iniziare in piccolo rimanere costante e lasciare che i risultati "
+        "crescano nel tempo perché è lì che la vera magia accade"
+    ).split(),
 }
 
 

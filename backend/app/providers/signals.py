@@ -96,7 +96,161 @@ _DE = Lexicon(
     }),
 )
 
-_LEXICONS: dict[str, Lexicon] = {"en": _EN, "de": _DE}
+# --------------------------------------------------------------------------- #
+# French lexicon
+# --------------------------------------------------------------------------- #
+_FR = Lexicon(
+    hook=frozenset({
+        "comment", "pourquoi", "quoi", "secret", "personne", "tout le monde",
+        "jamais", "toujours", "arrête", "erreur", "vérité", "raison",
+        "en fait", "surprenant", "imagine", "attention", "honnêtement",
+        "fou", "dingue", "incroyable", "jamais", "plus grand", "pire", "meilleur",
+    }),
+    emotion=frozenset({
+        "amour", "haine", "peur", "incroyable", "terrible", "choquant",
+        "insensé", "magnifique", "douloureux", "hilarant", "effrayant",
+        "excitant", "déchirant", "puissant", "frustrant", "reconnaissant",
+        "fâché", "content", "triste", "fier", "effrayé", "excité", "wow",
+        "incroyable", "génial",
+    }),
+    payoff=frozenset({
+        "parce que", "donc", "par conséquent", "résultat", "réalisé", "appris",
+        "leçon", "point", "signifie", "réponse", "enfin", "découvert",
+        "secret", "clé", "fondamental", "finalement", "conclusion",
+    }),
+    dangling=frozenset({
+        "et", "mais", "donc", "ou", "parce que", "qui", "que", "cela", "ils",
+        "elles", "il", "elle", "ce", "ces", "cette", "alors", "aussi", "cependant",
+    }),
+    second_person=frozenset({"tu", "toi", "te", "ton", "ta", "tes", "vous", "votre"}),
+    quote_extra=frozenset({
+        "tout", "rien", "quelque chose", "vie", "monde", "importe", "moment",
+        "changer", "maintenant", "aujourd'hui",
+    }),
+    enumeration=frozenset({
+        "premièrement", "deuxièmement", "troisièmement", "trois", "deux",
+        "étapes", "façons", "raisons", "conseils", "points",
+    }),
+)
+
+# --------------------------------------------------------------------------- #
+# Spanish lexicon
+# --------------------------------------------------------------------------- #
+_ES = Lexicon(
+    hook=frozenset({
+        "cómo", "por qué", "qué", "secreto", "nadie", "todo el mundo",
+        "nunca", "siempre", "para", "error", "verdad", "razón",
+        "en realidad", "sorprendente", "imagina", "cuidado", "honestamente",
+        "loco", "salvaje", "increíble", "nunca", "más grande", "peor", "mejor",
+    }),
+    emotion=frozenset({
+        "amor", "odio", "miedo", "increíble", "terrible", "impactante",
+        "insano", "hermoso", "doloroso", "divertido", "aterrador",
+        "emocionante", "desgarrador", "poderoso", "frustrante", "agradecido",
+        "enojado", "feliz", "triste", "orgulloso", "asustado", "emocionado",
+        "guau", "increíble",
+    }),
+    payoff=frozenset({
+        "porque", "entonces", "por lo tanto", "resultado", "se dio cuenta",
+        "aprendí", "lección", "punto", "significa", "respuesta", "finalmente",
+        "descubrí", "secreto", "clave", "fondo", "últimamente", "conclusión",
+    }),
+    dangling=frozenset({
+        "y", "pero", "entonces", "o", "porque", "que", "ello", "ellos",
+        "él", "ella", "esto", "estos", "esas", "esos", "entonces", "también",
+        "sin embargo",
+    }),
+    second_person=frozenset({"tú", "ti", "te", "tu", "tus", "vosotros", "vuestro",
+                              "usted", "su", "sus"}),
+    quote_extra=frozenset({
+        "todo", "nada", "algo", "vida", "mundo", "importa", "momento",
+        "cambiar", "ahora", "hoy",
+    }),
+    enumeration=frozenset({
+        "primero", "segundo", "tercero", "tres", "dos",
+        "pasos", "formas", "razones", "consejos", "puntos",
+    }),
+)
+
+# --------------------------------------------------------------------------- #
+# Portuguese lexicon
+# --------------------------------------------------------------------------- #
+_PT = Lexicon(
+    hook=frozenset({
+        "como", "por que", "o que", "segredo", "ninguém", "todo mundo",
+        "nunca", "sempre", "pare", "erro", "verdade", "razão",
+        "na verdade", "surpreendente", "imagine", "cuidado", "honestamente",
+        "louco", "selvagem", "incrível", "nunca", "maior", "pior", "melhor",
+    }),
+    emotion=frozenset({
+        "amor", "ódio", "medo", "incrível", "terrível", "chocante",
+        "insano", "lindo", "doloroso", "hilário", "assustador",
+        "emocionante", "devastador", "poderoso", "frustrante", "grato",
+        "bravo", "feliz", "triste", "orgulhoso", "com medo", "animado",
+        "uau", "inacreditável",
+    }),
+    payoff=frozenset({
+        "porque", "então", "portanto", "resultado", "percebeu", "aprendi",
+        "lição", "ponto", "significa", "resposta", "finalmente", "descobri",
+        "segredo", "chave", "fundamental", "ultimamente", "conclusão",
+    }),
+    dangling=frozenset({
+        "e", "mas", "então", "ou", "porque", "que", "isso", "eles",
+        "ele", "ela", "este", "estes", "essas", "esses", "aí", "também",
+        "contudo",
+    }),
+    second_person=frozenset({"tu", "ti", "te", "teu", "tua", "teus", "você",
+                              "seu", "sua", "seus", "vocês"}),
+    quote_extra=frozenset({
+        "tudo", "nada", "algo", "vida", "mundo", "importa", "momento",
+        "mudar", "agora", "hoje",
+    }),
+    enumeration=frozenset({
+        "primeiro", "segundo", "terceiro", "três", "dois",
+        "passos", "maneiras", "razões", "dicas", "pontos",
+    }),
+)
+
+# --------------------------------------------------------------------------- #
+# Italian lexicon
+# --------------------------------------------------------------------------- #
+_IT = Lexicon(
+    hook=frozenset({
+        "come", "perché", "cosa", "segreto", "nessuno", "tutti",
+        "mai", "sempre", "fermati", "errore", "verità", "ragione",
+        "in realtà", "sorprendente", "immagina", "attenzione", "onestamente",
+        "pazzo", "selvaggio", "incredibile", "mai", "più grande", "peggiore", "migliore",
+    }),
+    emotion=frozenset({
+        "amore", "odio", "paura", "incredibile", "terribile", "scioccante",
+        "folle", "bellissimo", "doloroso", "divertente", "spaventoso",
+        "emozionante", "straziante", "potente", "frustrante", "grato",
+        "arrabbiato", "felice", "triste", "orgoglioso", "spaventato", "eccitato",
+        "wow", "incredibile",
+    }),
+    payoff=frozenset({
+        "perché", "quindi", "pertanto", "risultato", "realizzato", "imparato",
+        "lezione", "punto", "significa", "risposta", "finalmente", "scoperto",
+        "segreto", "chiave", "fondamentale", "ultimamente", "conclusione",
+    }),
+    dangling=frozenset({
+        "e", "ma", "quindi", "o", "perché", "che", "questo", "loro",
+        "lui", "lei", "questo", "questi", "quelle", "quelli", "poi", "anche",
+        "tuttavia",
+    }),
+    second_person=frozenset({"tu", "te", "ti", "tuo", "tua", "tuoi", "tue",
+                              "voi", "vostro", "vostra"}),
+    quote_extra=frozenset({
+        "tutto", "niente", "qualcosa", "vita", "mondo", "importa", "momento",
+        "cambiare", "adesso", "oggi",
+    }),
+    enumeration=frozenset({
+        "primo", "secondo", "terzo", "tre", "due",
+        "passi", "modi", "ragioni", "consigli", "punti",
+    }),
+)
+
+_LEXICONS: dict[str, Lexicon] = {"en": _EN, "de": _DE, "fr": _FR, "es": _ES, "pt": _PT, "it": _IT}
 
 
 def get_lexicon(lang: str | None) -> Lexicon:
