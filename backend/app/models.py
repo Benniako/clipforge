@@ -372,6 +372,10 @@ class ImportSettings(BaseModel):
     tail_seconds: float | None = None
     # Project-local cue configuration for custom CLAP prompts and OCR ROIs.
     game_config: GameProfileConfig = Field(default_factory=GameProfileConfig)
+    # Optional background music track overlaid on the clip audio.
+    # Path to an audio file on the local filesystem, or empty string for no music.
+    # When set, ffmpeg mixes the music at low volume during render.
+    background_music: str = ""
 
     def dims(self) -> tuple[int, int]:
         return ASPECTS.get(self.aspect, ASPECTS["9:16"])

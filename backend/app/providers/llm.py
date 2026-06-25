@@ -444,3 +444,6 @@ def suggest_titles(excerpts: list[str], *, lang: str = "de",
     if len(out) < len(excerpts):
         log.info("llm titles: %d/%d within budget", len(out), len(excerpts))
     return out
+
+
+def generate_title(transcript_excerpt: str, *, lang: str = "de") -> str:

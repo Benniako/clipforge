@@ -188,13 +188,17 @@ def _composed_graph(clip: Clip, cam: Rect, info: MediaInfo,
 
 def render_clip(clip: Clip, src_path: str, info: MediaInfo, style: StyleTemplate,
                 out_path: Path, thumb_path: Path, *, out_w: int, out_h: int,
-                burn_captions: bool = True, motion: str = "none") -> None:
+                burn_captions: bool = True, motion: str = "none",
+                background_music: str = "") -> None:
     """Render ``clip`` from ``src_path`` into ``out_path`` (+ a thumbnail).
 
     With ``burn_captions=False`` the clip is reframed/encoded but left clean — for
     re-editing in a desktop NLE where you'd add your own captions. When the clip
     carries jump-cut ``segments``, they're trimmed and concatenated; ``motion``
     "push" adds a slow push-in.
+
+    ``background_music`` is a path to an audio file mixed at low volume behind
+    the clip audio. Empty string (default) omits the background track.
     """
     cw, ch, x_arg = build_crop(clip, info.width, info.height, out_w, out_h)
     static = x_arg.lstrip("-").isdigit()
@@ -336,6 +340,22 @@ def render_clip(clip: Clip, src_path: str, info: MediaInfo, style: StyleTemplate
                          "-c:a", "aac", "-b:a", "128k", "-ac", "2"]
             else:
                 audio = ["-an"]
+
+        # Background music overlay: mix a second audio track at low volume.
+        bgm = background_music.strip()
+        if bgm and os.path.exists(bgm) and info.has_audio and audio != ["-an"]:
+            bgm_abs = os.path.abspath(bgm)
+            # Insert the music file as an additional input, then use amix.
+            base.insert(-1, "-i")
+            base.insert(-1, bgm_abs)
+            # Replace audio args with filtered complex featuring amix.
+            audio = [
+                "-filter_complex",
+                "[0:a]loudnorm=I=-16:TP=-1.5:LRA=11,volume=1.0[voice];"
+                "[1:a]volume=0.15[bgm];"
+                "[voice][bgm]amix=inputs=2:duration=first:dropout_transition=2[ao]",
+                "-map", "[ao]", "-c:a", "aac", "-b:a", "128k", "-ac", "2",
+            ]
         tail = ["-r", f"{fps:.3f}", "-movflags", "+faststart", out_abs]
 
         s = get_settings()

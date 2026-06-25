@@ -170,13 +170,6 @@ export default function ClipEditor() {
       undoSnapshot.current = snap;
     }
   }, [title, start, end, styleId, cx, words, layout, cam, aspect, capSpeakers, clip]);
-  // Mutable refs so the keyboard handler always sees the latest state.
-  const stateRef = useRef({
-    start: 0, end: 0, srcDur: 0,
-    dirty: false, busy: false,
-    apply: async () => {},
-  });
-  const applyRef = useRef<() => Promise<void>>(async () => {});
 
   useEffect(() => {
     alive.current = true;
@@ -208,92 +201,6 @@ export default function ClipEditor() {
       live = false;
     };
   }, [projectId, clipId]);
-
-  // Keyboard shortcuts for the editor.
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      // Don't capture when typing in an input or textarea.
-      const tag = (e.target as HTMLElement).tagName;
-      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
-
-      const video = videoRef.current;
-      const step = e.shiftKey ? 0.1 : 0.5;
-      const dur = srcDur;
-
-      switch (e.code) {
-        case "Space":
-          e.preventDefault();
-          if (video) {
-            if (video.paused) video.play();
-            else video.pause();
-          }
-          break;
-        case "KeyJ":
-          e.preventDefault();
-          if (video) {
-            video.playbackRate = Math.max(0.25, video.playbackRate - 0.5);
-            if (video.paused) video.play();
-          }
-          break;
-        case "KeyK":
-          e.preventDefault();
-          if (video) { video.pause(); video.playbackRate = 1; }
-          break;
-        case "KeyL":
-          e.preventDefault();
-          if (video) {
-            video.playbackRate = Math.min(4, video.playbackRate + 0.5);
-            if (video.paused) video.play();
-          }
-          break;
-        case "KeyI":
-          e.preventDefault();
-          if (video) setStart(Math.max(0, Math.min(video.currentTime, end - 1)));
-          break;
-        case "KeyO":
-          e.preventDefault();
-          if (video) setEnd(Math.max(start + 1, Math.min(video.currentTime, dur)));
-          break;
-        case "ArrowLeft":
-          e.preventDefault();
-          if (video) {
-            video.currentTime = Math.max(0, video.currentTime - step);
-          }
-          break;
-        case "ArrowRight":
-          e.preventDefault();
-          if (video) {
-            video.currentTime = Math.min(dur, video.currentTime + step);
-          }
-          break;
-        case "Enter":
-          e.preventDefault();
-          if (dirty && !busy) apply();
-          break;
-        case "KeyZ":
-          if (e.metaKey || e.ctrlKey) {
-            e.preventDefault();
-            if (e.shiftKey) {
-              // Redo — handled by the undo system (next phase).
-            } else {
-              // Undo — handled by the undo system (next phase).
-            }
-          }
-          break;
-        case "Slash":
-          if (!e.shiftKey) {
-            e.preventDefault();
-            setShowShortcuts((s) => !s);
-          }
-          break;
-        case "Escape":
-          setShowShortcuts(false);
-          break;
-      }
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [dirty, busy, start, end, srcDur, apply]);
 
   const hydrate = (c: Clip) => {
     setClip(c);

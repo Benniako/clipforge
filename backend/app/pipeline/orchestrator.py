@@ -595,6 +595,11 @@ class Engine:
                     [c.transcript_excerpt for c in clips], lang=transcript.language)
                 for i, t in titles.items():
                     clips[i].title = t
+            # Fallback: auto-generate titles for clips that still have none.
+            for clip in clips:
+                if not clip.title:
+                    clip.title = llm_mod.generate_title(
+                        clip.transcript_excerpt, lang=transcript.language)
             # Hook/first-3s analysis: warn the user if their opener is weak.
             if clips:
                 first = clips[0]
@@ -886,7 +891,8 @@ class Engine:
                 except StopIteration:
                     return False
                 futs[ex.submit(self._render_one, project_id, clip, src_path, info,
-                               out_w, out_h, burn_captions, motion)] = clip
+                               out_w, out_h, burn_captions, motion,
+                               project.settings.background_music)] = clip
                 return True
 
             for _ in range(n):
@@ -905,7 +911,8 @@ class Engine:
 
     def _render_one(self, project_id: str, clip: Clip, src_path: str,
                     info: MediaInfo, out_w: int, out_h: int,
-                    burn_captions: bool = True, motion: str = "none") -> None:
+                    burn_captions: bool = True, motion: str = "none",
+                    background_music: str = "") -> None:
         # A clip may carry its own output aspect (editor override); it wins
         # over the project default passed in.
         dims = ASPECTS.get(clip.aspect or "")
@@ -924,7 +931,8 @@ class Engine:
             with self._clip_lock(project_id, clip.id):
                 self._render_one_locked(project_id, clip, src_path, info,
                                         out_w, out_h, burn_captions, motion,
-                                        out, thumb, style, settings)
+                                        out, thumb, style, settings,
+                                        background_music)
         except Exception as e:  # one bad clip shouldn't sink the batch
             log.error("clip %s render failed: %s", clip.id, e)
             with store.mutate(project_id) as p:
@@ -934,10 +942,12 @@ class Engine:
                     c.error = str(e)
 
     def _render_one_locked(self, project_id, clip, src_path, info, out_w, out_h,
-                           burn_captions, motion, out, thumb, style, settings) -> None:
+                           burn_captions, motion, out, thumb, style, settings,
+                           background_music: str = "") -> None:
         render_mod.render_clip(clip, src_path, info, style, out, thumb,
                                out_w=out_w, out_h=out_h,
-                               burn_captions=burn_captions, motion=motion)
+                               burn_captions=burn_captions, motion=motion,
+                               background_music=background_music)
         with store.mutate(project_id) as p:
             c = p.clip(clip.id)
             if c:

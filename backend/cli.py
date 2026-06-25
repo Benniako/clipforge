@@ -93,8 +93,12 @@ def _human_size(path: Path) -> str:
     return f"{size:.1f}TB"
 
 
-def _copy_clips(project: Project, output_dir: Path, *, rename: bool = True) -> list[dict]:
+def _copy_clips(project: Project, output_dir: Path, *, rename: bool = True,
+                name_pattern: str | None = None) -> list[dict]:
     """Copy rendered clips from the media directory to ``output_dir``.
+
+    ``name_pattern`` supports tokens: {rank}, {title}, {score}, {id}, {duration}.
+    Default (None) uses format "01_[72]_Title.mp4".
 
     Returns a list of {path, title, score, duration, factors} for each clip.
     """
@@ -106,20 +110,28 @@ def _copy_clips(project: Project, output_dir: Path, *, rename: bool = True) -> l
     for i, clip in enumerate(project.clips):
         if clip.status != "ready" or not clip.export_url:
             continue
-        # Resolve the export URL relative to the media directory.
-        # export_url looks like "/media/clips/abc123.mp4"
         rel = clip.export_url.lstrip("/media/")
         src = media_dir / rel
         if not src.exists():
             log.warning("Clip %s export missing: %s", clip.id, src)
             continue
 
-        score_str = f"[{clip.score:02d}]" if clip.score else ""
-        if rename and clip.title:
-            safe_title = "".join(c if c.isalnum() or c in " _-.,()" else "_" for c in clip.title)
-            dst_name = f"{i+1:02d}_{score_str}_{safe_title[:60]}{src.suffix}"
+        if rename:
+            safe_title = "".join(c if c.isalnum() or c in " _-.,()" else "_" for c in (clip.title or ""))
+            if name_pattern:
+                tokens = {
+                    "rank": str(i + 1),
+                    "title": safe_title[:60],
+                    "score": str(clip.score),
+                    "id": clip.id[:8],
+                    "duration": f"{clip.duration:.1f}",
+                }
+                dst_name = name_pattern.format(**tokens) + src.suffix
+            else:
+                score_str = f"[{clip.score:02d}]" if clip.score else ""
+                dst_name = f"{i+1:02d}_{score_str}_{safe_title[:60]}{src.suffix}"
         else:
-            dst_name = f"{i+1:02d}_{score_str}_{clip.id[:8]}{src.suffix}"
+            dst_name = f"{i+1:02d}_{clip.id[:8]}{src.suffix}"
         dst = output_dir / dst_name
 
         shutil.copy2(src, dst)
@@ -228,7 +240,8 @@ def cmd_batch(args: argparse.Namespace) -> int:
 
     # Copy clips to output directory.
     project = store.get(project.id)  # reload final state
-    results = _copy_clips(project, output_dir, rename=not args.no_rename)
+    results = _copy_clips(project, output_dir, rename=not args.no_rename,
+                          name_pattern=args.name_pattern)
 
     log.info("")
     log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
@@ -317,6 +330,10 @@ def build_parser() -> argparse.ArgumentParser:
                     help="Isolate voice from background music/game audio")
     bp.add_argument("--no-rename", action="store_true",
                     help="Keep original clip IDs as filenames")
+    bp.add_argument("--name-pattern", default=None,
+                    help="Output filename pattern with {rank}, {title}, {score}, "
+                         "{id}, {duration} tokens. "
+                         "Example: --name-pattern '{rank:02d}_{score:02d}_{title}'")
     bp.add_argument("--json", action="store_true",
                     help="Output clip metadata as JSON at the end")
 
