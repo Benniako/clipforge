@@ -6,6 +6,7 @@ import { fmtClock, fmtDuration } from "../lib/format";
 import { mediaTimeUrl } from "../lib/media";
 import { useT } from "../lib/i18n";
 import { useUndo, type UndoState } from "../lib/useUndo";
+import Toast, { type ToastMsg } from "../components/Toast";
 import ScoreBadge from "../components/ScoreBadge";
 import PublishPanel from "../components/PublishPanel";
 import Waveform from "../components/Waveform";
@@ -18,7 +19,7 @@ export default function ClipEditor() {
   const [clip, setClip] = useState<Clip | null>(null);
   const [styles, setStyles] = useState<StyleTemplate[]>([]);
   const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState<string | null>(null);
+  const [msg, setMsg] = useState<ToastMsg | null>(null);
   const [loadErr, setLoadErr] = useState<string | null>(null);
   const [ver, setVer] = useState(0); // cache-buster for the rendered <video>
   const [previewMode, setPreviewMode] = useState<"rendered" | "original">("rendered");
@@ -261,7 +262,7 @@ export default function ClipEditor() {
   const apply = async () => {
     if (!projectId || !clipId || !clip) return;
     setBusy(true);
-    setMsg(t("ce.rendering"));
+    setMsg({ text: t("ce.rendering"), type: "info" });
     try {
       const edit: any = {};
       if (title !== clip.title) edit.title = title;
@@ -286,7 +287,7 @@ export default function ClipEditor() {
       await api.editClip(projectId, clipId, edit);
       await pollUntilReady();
     } catch (e: any) {
-      setMsg(e.message ?? t("ce.editFail"));
+      setMsg({ text: e.message ?? t("ce.editFail"), type: "error" });
       setBusy(false);
     }
   };
@@ -304,18 +305,17 @@ export default function ClipEditor() {
         hydrate(c);
         setVer((v) => v + 1);
         setBusy(false);
-        setMsg(t("ce.updated"));
-        setTimeout(() => setMsg(null), 2500);
+        setMsg({ text: t("ce.updated"), type: "success", duration: 2000 });
         return;
       }
       if (c && c.status === "failed") {
         setBusy(false);
-        setMsg(t("ce.renderFailed", { error: c.error ?? t("ce.renderUnknown") }));
+        setMsg({ text: t("ce.renderFailed", { error: c.error ?? t("ce.renderUnknown") }), type: "error" });
         return;
       }
     }
     setBusy(false);
-    setMsg(t("ce.stillRendering"));
+    setMsg({ text: t("ce.stillRendering"), type: "info" });
   };
 
   if (loadErr)
@@ -739,7 +739,7 @@ export default function ClipEditor() {
         </div>
       </div>
 
-      {msg && <div className={"toast" + (msg.includes("fail") ? " err" : "")}>{msg}</div>}
+      <Toast msg={msg} onDone={() => setMsg(null)} />
 
       {/* Keyboard shortcuts overlay */}
       {showShortcuts && (

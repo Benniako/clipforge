@@ -692,14 +692,27 @@ select.input {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   overflow: hidden;
-  transition: 0.15s ease;
+  transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
   display: flex;
   flex-direction: column;
+  animation: cardIn 0.35s ease both;
+}
+.clip-card:nth-child(1) { animation-delay: 0.00s; }
+.clip-card:nth-child(2) { animation-delay: 0.04s; }
+.clip-card:nth-child(3) { animation-delay: 0.08s; }
+.clip-card:nth-child(4) { animation-delay: 0.12s; }
+.clip-card:nth-child(5) { animation-delay: 0.16s; }
+.clip-card:nth-child(6) { animation-delay: 0.20s; }
+.clip-card:nth-child(7) { animation-delay: 0.24s; }
+.clip-card:nth-child(8) { animation-delay: 0.28s; }
+@keyframes cardIn {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
 }
 .clip-card:hover {
-  transform: translateY(-3px);
-  border-color: var(--border-2);
-  box-shadow: var(--shadow);
+  transform: translateY(-4px);
+  border-color: var(--accent);
+  box-shadow: 0 12px 36px rgba(124, 92, 255, 0.15);
 }
 .thumb {
   position: relative;
@@ -961,6 +974,36 @@ select.input {
 input[type="range"] {
   width: 100%;
   accent-color: var(--accent);
+  height: 6px;
+  border-radius: 3px;
+  cursor: pointer;
+  background: var(--bg-2);
+  transition: opacity 0.15s;
+}
+input[type="range"]:hover {
+  opacity: 0.9;
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--grad);
+  border: 2px solid var(--bg);
+  box-shadow: 0 2px 8px rgba(124, 92, 255, 0.4);
+  cursor: pointer;
+  transition: transform 0.15s;
+}
+input[type="range"]::-webkit-slider-thumb:hover {
+  transform: scale(1.15);
+}
+input[type="range"]::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--grad);
+  border: 2px solid var(--bg);
+  cursor: pointer;
 }
 .caption-list {
   max-height: 280px;
@@ -1251,6 +1294,43 @@ input[type="range"] {
     transform: rotate(360deg);
   }
 }
+
+/* ---- skeleton loading shimmer ---- */
+.skeleton {
+  background: linear-gradient(90deg, var(--panel) 25%, var(--panel-2) 50%, var(--panel) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s ease-in-out infinite;
+  border-radius: var(--radius-sm);
+}
+@keyframes shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+.skeleton-card {
+  height: 280px;
+  border-radius: var(--radius);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+}
+.skeleton-thumb {
+  height: 160px;
+  border-radius: var(--radius-sm);
+  background: linear-gradient(90deg, var(--bg-2) 25%, var(--panel) 50%, var(--bg-2) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s ease-in-out infinite;
+}
+.skeleton-line {
+  height: 14px;
+  border-radius: 4px;
+  background: linear-gradient(90deg, var(--bg-2) 25%, var(--panel) 50%, var(--bg-2) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s ease-in-out infinite;
+}
+.skeleton-line.w { width: 60%; }
+.skeleton-line.xs { width: 40%; height: 10px; }
+/* ---- toast / notification ---- */
 .toast {
   position: fixed;
   bottom: 24px;
@@ -1262,10 +1342,38 @@ input[type="range"] {
   border-radius: 10px;
   box-shadow: var(--shadow);
   z-index: 50;
+  animation: toastIn 0.25s ease;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: min(480px, 90vw);
 }
 .toast.err {
   border-color: #5a2b33;
   color: #ffb4b4;
+}
+.toast.success {
+  border-color: #1a3a2a;
+  color: var(--good);
+}
+.toast .toast-bar {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  height: 3px;
+  background: var(--accent);
+  border-radius: 0 0 10px 10px;
+  animation: toastShrink 3s linear forwards;
+}
+.toast.err .toast-bar { background: var(--bad); }
+.toast.success .toast-bar { background: var(--good); }
+@keyframes toastIn {
+  from { opacity: 0; transform: translateX(-50%) translateY(16px); }
+  to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+@keyframes toastShrink {
+  from { width: 100%; }
+  to   { width: 0%; }
 }
 .proj-list {
   display: flex;
