@@ -41,7 +41,7 @@ def test_pipeline_produces_clips_from_synthetic_source(tmp_path):
     engine._process(project.id)
 
     final = store.get(project.id)
-    assert final.status == ProjectStatus.complete, f"pipeline failed: {final.status}"
+    assert final.status == ProjectStatus.ready, f"pipeline failed: {final.status}"
     assert len(final.clips) >= 1, "expected at least one clip"
-    assert any(c.export_url for c in final.clips if c.status == ClipStatus.rendered), \
+    assert any(c.export_url for c in final.clips if c.status == ClipStatus.ready), \
         "expected at least one rendered clip"
