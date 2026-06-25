@@ -557,6 +557,32 @@ export default function ClipEditor() {
 
           <div className="panel section">
             <h3>{t("ce.captionStyle")}</h3>
+            <div className="row" style={{ gap: 8, marginBottom: 10 }}>
+              <button className="btn sm ghost" style={{ fontSize: 11 }}
+                onClick={async () => {
+                  const name = prompt("Template name:", "My Template");
+                  if (!name) return;
+                  try {
+                    // Save current style as a new template
+                    const style = styles.find(s => s.id === styleId);
+                    if (!style) return;
+                    const id = "custom_" + name.toLowerCase().replace(/[^a-z0-9]+/g, "_").slice(0, 30);
+                    await fetch("/api/styles", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ ...style, id, name }),
+                    });
+                    // Refresh style list
+                    const updated = await (await fetch("/api/styles")).json();
+                    setStyles(updated);
+                    setStyleId(id);
+                  } catch (e) {
+                    console.error("Failed to save template", e);
+                  }
+                }}>
+                💾 {t("ce.saveAsTemplate")}
+              </button>
+            </div>
             <div className="style-picker">
               {styles.map((s) => (
                 <div

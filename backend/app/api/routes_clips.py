@@ -16,14 +16,15 @@ from pydantic import BaseModel
 from .. import feedback, store
 from ..config import get_settings
 from ..models import (ASPECTS, CaptionWord, Clip, ClipStatus, LayoutType,
-                      Montage, Project, Rect, Reframe, ReframeKeyframe)
+                      Montage, Project, Rect, Reframe, ReframeKeyframe,
+                      StyleTemplate)
 from ..pipeline import captionize
 from ..pipeline.captions import build_srt
 from ..pipeline import montage as montage_mod
 from ..pipeline import reframe as reframe_mod
 from ..pipeline.orchestrator import engine
 from ..providers import score as score_mod
-from ..styles import all_styles, get_style
+from .. import user_styles
 
 router = APIRouter(prefix="/api", tags=["clips"])
 
@@ -57,7 +58,51 @@ class ClipEdit(BaseModel):
 
 @router.get("/styles")
 def list_styles():
-    return [s.model_dump() for s in all_styles()]
+    return [s.model_dump() for s in user_styles.all_styles()]
+
+
+class StyleCreate(BaseModel):
+    id: str
+    name: str
+    font: str = "DejaVu Sans"
+    font_size: int = 92
+    primary: str = "FFFFFF"
+    highlight: str = "F5C518"
+    outline: str = "000000"
+    outline_w: int = 6
+    y_frac: float = 0.78
+    uppercase: bool = True
+    emphasis: bool = True
+    emoji: bool = False
+
+
+@router.post("/styles", status_code=201)
+def create_style(style: StyleCreate) -> StyleTemplate:
+    """Create a new custom style template (brand template)."""
+    st = StyleTemplate(**style.model_dump())
+    user_styles.create_style(st)
+    return st
+
+
+@router.put("/styles/{style_id}")
+def update_style(style_id: str, style: StyleCreate) -> StyleTemplate:
+    """Update an existing custom style template."""
+    if style_id != style.id:
+        raise HTTPException(400, "style id in path must match body")
+    updates = style.model_dump(exclude={"id"})
+    updated = user_styles.update_style(style_id, updates)
+    if updated is None:
+        raise HTTPException(404, f"style '{style_id}' not found")
+    return updated
+
+
+@router.delete("/styles/{style_id}")
+def delete_style(style_id: str) -> dict:
+    """Delete a custom style template."""
+    ok = user_styles.delete_style(style_id)
+    if not ok:
+        raise HTTPException(404, f"style '{style_id}' not found")
+    return {"ok": True}
 
 
 @router.patch("/projects/{project_id}/clips/{clip_id}", response_model=Clip)
