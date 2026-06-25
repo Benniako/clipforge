@@ -93,6 +93,11 @@ def _detect_ocr() -> str:
     return ""
 
 
+def _ollama_tags_url(url: str, host: str, port: int) -> str:
+    """Build the /api/tags URL from the OLLAMA_URL env var or host/port fallback."""
+    return url or f"http://{host}:{port}/api/tags"
+
+
 def _detect_ollama() -> tuple[bool, str]:
     """Return (available, model_names_string).
 
@@ -128,6 +133,18 @@ def _detect_ollama() -> tuple[bool, str]:
             host = os.environ.get("CLIPFORGE_OLLAMA_HOST", "127.0.0.1")
             port = int(os.environ.get("CLIPFORGE_OLLAMA_PORT", "11434"))
         with socket.create_connection((host, port), timeout=0.5):
+            if not models:
+                # Socket responded and CLI didn't; try HTTP API for model names.
+                try:
+                    import json, urllib.request
+                    with urllib.request.urlopen(
+                            _ollama_tags_url(url, host, port), timeout=1.5) as r:
+                        tags = json.loads(r.read()).get("models", [])
+                        names = [m.get("name", "") for m in tags if m.get("name")]
+                        if names:
+                            models = ", ".join(names)
+                except Exception:
+                    pass
             return True, models or "server running"
     except OSError:
         return False, ""
