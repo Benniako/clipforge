@@ -43,10 +43,10 @@
     },
     "phase-8": {
       "label": "Features (waveform, auto-thumbnails)",
-      "status": "in_progress",
-      "commits": []
+      "status": "done",
+      "commits": ["97a705e"]
     }
   },
-  "current_phase": "phase-8",
+  "current_phase": "complete",
   "last_updated": "2026-06-25T15:00:00Z"
 }
