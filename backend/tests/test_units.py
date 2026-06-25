@@ -3060,3 +3060,258 @@ if __name__ == "__main__":
         print(f"  ✓ {fn.__name__}")
         passed += 1
     print(f"\n{passed}/{len(fns)} unit tests passed")
+
+
+# --------------------------------------------------------------------------- #
+# Plugin base class
+# --------------------------------------------------------------------------- #
+def test_plugin_base_instantiation_requires_name():
+    from app.plugin_base import ClipForgePlugin
+    # Instantiating the abstract base directly should fail.
+    try:
+        ClipForgePlugin()  # type: ignore
+        assert False, "should have raised TypeError"
+    except TypeError:
+        pass
+
+    # A minimal concrete subclass must work.
+    class TestPlugin(ClipForgePlugin):
+        def name(self) -> str:
+            return "test-plugin"
+
+    p = TestPlugin()
+    assert p.name() == "test-plugin"
+    assert p.version() == "0.1.0"
+
+
+def test_plugin_base_hooks_are_noop():
+    from app.plugin_base import ClipForgePlugin
+
+    calls: list[str] = []
+
+    class HookPlugin(ClipForgePlugin):
+        def name(self) -> str:
+            return "hook-test"
+
+        def before_stage(self, stage: str, project) -> None:
+            calls.append(f"before:{stage}")
+
+        def after_stage(self, stage: str, project) -> None:
+            calls.append(f"after:{stage}")
+
+        def on_error(self, stage: str, project, error: Exception) -> None:
+            calls.append(f"error:{stage}:{error}")
+
+        def on_event(self, event_type: str, data: dict) -> None:
+            calls.append(f"event:{event_type}")
+
+    p = HookPlugin()
+    p.before_stage("transcribe", None)
+    p.after_stage("detect", None)
+    p.on_error("render", None, RuntimeError("fail"))
+    p.on_event("clip.rated", {"score": 90})
+    assert calls == ["before:transcribe", "after:detect", "error:render:fail", "event:clip.rated"]
+
+
+def test_plugin_base_config_and_log():
+    from app.plugin_base import ClipForgePlugin
+
+    class ConfigPlugin(ClipForgePlugin):
+        def name(self) -> str:
+            return "config-test"
+
+    p = ConfigPlugin({"key": "val", "num": 42})
+    assert p.config == {"key": "val", "num": 42}
+    # Make sure config is a copy (immutable).
+    p._config["extra"] = "should not appear"
+    assert "extra" not in p.config
+
+    p.log("hello world")  # just check it doesn't crash
+
+
+# --------------------------------------------------------------------------- #
+# User styles
+# --------------------------------------------------------------------------- #
+def test_user_styles_create_and_get():
+    from app import user_styles
+    from app.models import StyleTemplate
+
+    style = StyleTemplate(
+        id="test_custom_1",
+        name="Test One",
+        font="Arial",
+        primary="FFFFFF",
+        highlight="FF0000",
+        outline="000000",
+        shadow="000000",
+        uppercase=False,
+        bold=False,
+        italic=False,
+        font_size=12,
+        opacity=1.0,
+    )
+    created = user_styles.create_style(style)
+    assert created.id == "test_custom_1"
+
+    got = user_styles.get_style("test_custom_1")
+    assert got is not None
+    assert got.name == "Test One"
+    assert got.font == "Arial"
+
+
+def test_user_styles_update():
+    from app import user_styles
+    from app.models import StyleTemplate
+
+    style = StyleTemplate(
+        id="test_custom_update",
+        name="Before",
+        font="Arial",
+        primary="FFFFFF",
+        highlight="FF0000",
+        outline="000000",
+        shadow="000000",
+        uppercase=False,
+        bold=False,
+        italic=False,
+    )
+    user_styles.create_style(style)
+
+    updated = user_styles.update_style("test_custom_update", {"name": "After", "font": "Helvetica"})
+    assert updated is not None
+    assert updated.name == "After"
+    assert updated.font == "Helvetica"
+
+    # Verify persistence via get_style.
+    got = user_styles.get_style("test_custom_update")
+    assert got.name == "After"
+
+    # Updating a non-existent style returns None.
+    none_style = user_styles.update_style("does_not_exist", {"name": "Nope"})
+    assert none_style is None
+
+
+def test_user_styles_delete():
+    from app import user_styles
+    from app.models import StyleTemplate
+
+    style = StyleTemplate(
+        id="test_custom_delete",
+        name="Delete Me",
+        font="Arial",
+        primary="FFFFFF",
+        highlight="FF0000",
+        outline="000000",
+        shadow="000000",
+        uppercase=False,
+        bold=False,
+        italic=False,
+    )
+    user_styles.create_style(style)
+
+    deleted = user_styles.delete_style("test_custom_delete")
+    assert deleted is True
+
+    # Verify it no longer exists.
+    from app.styles import get_style as get_builtin
+    if "test_custom_delete" in {s.id for s in user_styles.all_styles()}:
+        assert False, "style should be gone"
+
+    # Deleting a non-existent style returns False.
+    assert user_styles.delete_style("does_not_exist") is False
+
+
+def test_user_styles_override_builtin():
+    from app import user_styles
+    from app.models import StyleTemplate
+
+    # Create a user style with the same id as a built-in style.
+    builtin_id = "bold-pop"
+    style = StyleTemplate(
+        id=builtin_id,
+        name="Custom Override",
+        font="Comic Sans",
+        primary="000000",
+        highlight="00FF00",
+        outline="FFFFFF",
+        shadow="FFFFFF",
+        uppercase=False,
+        bold=False,
+        italic=False,
+    )
+    user_styles.create_style(style)
+
+    got = user_styles.get_style(builtin_id)
+    assert got.name == "Custom Override"
+    assert got.font == "Comic Sans"
+
+    # Clean up.
+    user_styles.delete_style(builtin_id)
+
+
+# --------------------------------------------------------------------------- #
+# Watcher
+# --------------------------------------------------------------------------- #
+def test_watcher_dir_not_found():
+    from app.pipeline.watcher import WatchDirectoryPoller
+
+    poller = WatchDirectoryPoller("/nonexistent_path_12345")
+    poller.start()  # should not crash
+    assert not poller.running
+
+
+def test_watcher_start_stop():
+    import tempfile
+    from pathlib import Path
+    from app.pipeline.watcher import WatchDirectoryPoller
+
+    with tempfile.TemporaryDirectory() as td:
+        poller = WatchDirectoryPoller(td, interval=0.5)
+        poller.start()
+        assert poller.running
+        poller.stop()
+        # Give it a moment to actually stop.
+        import time
+        time.sleep(0.1)
+        assert not poller.running
+
+
+def test_watcher_discovers_video_files():
+    import tempfile
+    from pathlib import Path
+    from app.pipeline.watcher import WatchDirectoryPoller
+
+    with tempfile.TemporaryDirectory() as td:
+        # Create some test files.
+        (Path(td) / "video1.mp4").write_text("fake mp4")
+        (Path(td) / "video2.mov").write_text("fake mov")
+        (Path(td) / "readme.txt").write_text("not a video")
+
+        poller = WatchDirectoryPoller(td, interval=0.5)
+        poller._poll_once()  # first pass records sizes
+        poller._poll_once()  # second pass should discover stable files
+
+        assert "video1.mp4" in poller._seen
+        assert "video2.mov" in poller._seen
+        assert "readme.txt" not in poller._seen  # not a video extension
+
+
+def test_watcher_skips_growing_files():
+    import tempfile
+    from pathlib import Path
+    from app.pipeline.watcher import WatchDirectoryPoller
+
+    with tempfile.TemporaryDirectory() as td:
+        f = Path(td) / "growing.mp4"
+        f.write_text("small")
+
+        poller = WatchDirectoryPoller(td, interval=0.5)
+        poller._poll_once()  # records size = 5
+        f.write_text("still growing")  # size changed
+        poller._poll_once()  # should skip because size differs
+        assert "growing.mp4" not in poller._seen
+
+        # Now it stabilises.
+        f.write_text("still growing")  # same size
+        poller._poll_once()  # should be discovered
+        assert "growing.mp4" in poller._seen

@@ -33,12 +33,12 @@
     },
     "phase-6": {
       "label": "Languages (TR, JP, NL, PL, SV)",
-      "status": "in_progress",
-      "commits": []
+      "status": "done",
+      "commits": ["2f2b142"]
     },
     "phase-7": {
       "label": "Test coverage (new files: watcher, plugins, user_styles)",
-      "status": "pending",
+      "status": "in_progress",
       "commits": []
     },
     "phase-8": {
@@ -47,6 +47,6 @@
       "commits": []
     }
   },
-  "current_phase": "phase-6",
-  "last_updated": "2026-06-25T14:50:00Z"
+  "current_phase": "phase-7",
+  "last_updated": "2026-06-25T14:55:00Z"
 }
