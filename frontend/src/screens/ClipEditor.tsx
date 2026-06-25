@@ -8,6 +8,7 @@ import { useT } from "../lib/i18n";
 import { useUndo, type UndoState } from "../lib/useUndo";
 import ScoreBadge from "../components/ScoreBadge";
 import PublishPanel from "../components/PublishPanel";
+import Waveform from "../components/Waveform";
 
 export default function ClipEditor() {
   const { t } = useT();
@@ -489,6 +490,7 @@ export default function ClipEditor() {
               {t("ce.tabOriginal")}
             </button>
           </div>
+          <Waveform src={videoSrc || ""} start={start} end={end} onSeek={(t) => { if (videoRef.current) videoRef.current.currentTime = t; }} />
           <div className="video-wrap" ref={videoWrapperRef}>
             {videoSrc ? (
               <video

@@ -38,15 +38,15 @@
     },
     "phase-7": {
       "label": "Test coverage (new files: watcher, plugins, user_styles)",
-      "status": "in_progress",
-      "commits": []
+      "status": "done",
+      "commits": ["a9dfef5"]
     },
     "phase-8": {
-      "label": "Features (waveform, background music, auto-thumbnails)",
-      "status": "pending",
+      "label": "Features (waveform, auto-thumbnails)",
+      "status": "in_progress",
       "commits": []
     }
   },
-  "current_phase": "phase-7",
-  "last_updated": "2026-06-25T14:55:00Z"
+  "current_phase": "phase-8",
+  "last_updated": "2026-06-25T15:00:00Z"
 }
