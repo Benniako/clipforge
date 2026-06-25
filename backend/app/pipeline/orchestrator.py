@@ -881,6 +881,9 @@ class Engine:
         total = len(clips)
         n = max(1, min(settings.render_workers_for(power_mode), total))
         clip_iter = iter(clips)
+        # Load the project once for per-project settings (e.g. background_music).
+        proj = store.get(project_id)
+        bgm = proj.settings.background_music if proj else ""
         with ThreadPoolExecutor(max_workers=n) as ex:
             futs = {}
 
@@ -891,8 +894,7 @@ class Engine:
                 except StopIteration:
                     return False
                 futs[ex.submit(self._render_one, project_id, clip, src_path, info,
-                               out_w, out_h, burn_captions, motion,
-                               project.settings.background_music)] = clip
+                               out_w, out_h, burn_captions, motion, bgm)] = clip
                 return True
 
             for _ in range(n):

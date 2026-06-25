@@ -3213,7 +3213,6 @@ def test_user_styles_delete():
     assert deleted is True
 
     # Verify it no longer exists.
-    from app.styles import get_style as get_builtin
     if "test_custom_delete" in {s.id for s in user_styles.all_styles()}:
         assert False, "style should be gone"
 
@@ -3262,7 +3261,6 @@ def test_watcher_dir_not_found():
 
 def test_watcher_start_stop():
     import tempfile
-    from pathlib import Path
     from app.pipeline.watcher import WatchDirectoryPoller
 
     with tempfile.TemporaryDirectory() as td:
