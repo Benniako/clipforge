@@ -3,6 +3,8 @@ import { Link, useParams } from "react-router-dom";
 import { api } from "../lib/api";
 import type { Project, StatusPayload } from "../lib/types";
 import { useT } from "../lib/i18n";
+import Toast, { type ToastMsg } from "../components/Toast";
+import EmptyState from "../components/EmptyState";
 import ProcessingView from "../components/ProcessingView";
 import ClipGridView from "../components/ClipGridView";
 import SwipeReviewScreen from "./SwipeReviewScreen";
@@ -13,6 +15,7 @@ export default function ProjectView() {
   const [status, setStatus] = useState<StatusPayload | null>(null);
   const [project, setProject] = useState<Project | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [toast, setToast] = useState<ToastMsg | null>(null);
   const [viewMode, setViewMode] = useState<"grid" | "swipe">("grid");
   const timer = useRef<number | null>(null);
 
@@ -87,13 +90,9 @@ export default function ProjectView() {
   if (error)
     return (
       <div className="container">
-        <div className="empty">
-          <h3>{t("pv.loadError")}</h3>
-          <p>{error}</p>
-          <Link className="btn" to="/">
-            {t("pv.back")}
-          </Link>
-        </div>
+        <EmptyState icon="❌" title={t("pv.loadError")}
+          text={error}
+          action={<Link className="btn" to="/">{t("pv.back")}</Link>} />
       </div>
     );
 
@@ -102,13 +101,9 @@ export default function ProjectView() {
   if (status.status === "failed")
     return (
       <div className="container">
-        <div className="empty">
-          <h3>{t("pv.failedTitle")}</h3>
-          <p className="muted">{status.error ?? t("pv.failedGeneric")}</p>
-          <Link className="btn" to="/">
-            {t("pv.tryAnother")}
-          </Link>
-        </div>
+        <EmptyState icon="💥" title={t("pv.failedTitle")}
+          text={status.error ?? t("pv.failedGeneric")}
+          action={<Link className="btn" to="/">{t("pv.tryAnother")}</Link>} />
       </div>
     );
 
@@ -132,9 +127,15 @@ export default function ProjectView() {
           </span>
         </div>
         <ClipGridView project={project} onChange={setProject} />
+        <Toast msg={toast} onDone={() => setToast(null)} />
       </>
     );
   }
 
-  return <ProcessingView status={status} projectId={projectId!} onStatus={setStatus} />;
+  return (
+    <>
+      <ProcessingView status={status} projectId={projectId!} onStatus={setStatus} />
+      <Toast msg={toast} onDone={() => setToast(null)} />
+    </>
+  );
 }
