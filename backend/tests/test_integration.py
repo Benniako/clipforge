@@ -15,7 +15,6 @@ Run with:
 """
 from __future__ import annotations
 
-import json
 import os
 import tempfile
 from pathlib import Path
@@ -29,7 +28,7 @@ from app import store
 from app.config import get_settings
 from app.models import (
     ContentType, ImportSettings, Platform, PowerMode, Project,
-    ProjectStatus, SourceMedia, now,
+    ProjectStatus, SourceMedia,
 )
 from app.pipeline.orchestrator import STAGES, engine
 

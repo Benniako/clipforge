@@ -13,11 +13,9 @@ from __future__ import annotations
 import logging
 import os
 import threading
-import time
 from pathlib import Path
 
 from .. import store
-from ..config import get_settings
 from ..models import ContentType, ImportSettings, Platform, PowerMode, Project, ProjectStatus
 from ..pipeline import ingest
 from ..pipeline.orchestrator import engine

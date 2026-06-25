@@ -173,7 +173,6 @@ def cmd_batch(args: argparse.Namespace) -> int:
     # Create a project from the source file.
     src_filename = Path(src_path).name
     src_size = Path(src_path).stat().st_size
-    src_rel = f"cli/{src_filename}"
 
     # Copy the source into the media directory so the pipeline can find it.
     media_dir = get_settings().media_dir
