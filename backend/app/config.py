@@ -13,6 +13,7 @@ from __future__ import annotations
 import logging
 import os
 import shutil
+import time
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
@@ -314,6 +315,45 @@ def _auto_workers(cpu: int) -> int:
     return max(2, min(cpu // 4, 4))
 
 
+def _check_image_gen() -> bool:
+    try:
+        from .providers.image_gen import detected
+        return detected()
+    except Exception:
+        return False
+
+
+_CACHE: dict[str, tuple[float, bool]] = {}
+_CACHE_TTL = 60.0
+
+
+def _cached_check(name: str, fn) -> bool:
+    now = time.time()
+    cached = _CACHE.get(name)
+    if cached and now - cached[0] < _CACHE_TTL:
+        return cached[1]
+    try:
+        val = fn()
+    except Exception:
+        val = False
+    _CACHE[name] = (now, val)
+    return val
+
+
+def _check_agent_virality() -> bool:
+    return _cached_check("agent_virality", lambda: _import_detected("agent_virality"))
+
+
+def _check_tts() -> bool:
+    return _cached_check("tts", lambda: _import_detected("tts"))
+
+
+def _import_detected(module: str) -> bool:
+    import importlib
+    mod = importlib.import_module(f".providers.{module}", package=__package__)
+    return mod.detected()
+
+
 @dataclass(frozen=True)
 class Settings:
     # --- locations -------------------------------------------------------
@@ -519,10 +559,19 @@ class Settings:
                      "PySceneDetect", "Snaps clip boundaries to real scene cuts."),
             ]},
             {"name": "extras", "items": [
-                item("image_gen", False,
+                item("image_gen", _check_image_gen(),
                      "AI Cover Image Generation",
                      "Generate stylised thumbnails from clip titles using a local "
                      "diffusion model (Krea-2-Raw or ideogram). Install deps to enable."),
+                item("agent_virality", _check_agent_virality(),
+                     "Tool-calling Virality Agent",
+                     "Multi-step agent virality scoring using Qwen-AgentWorld. "
+                     "Reads OCR + audio + facecam signals before judging. "
+                     "Install vLLM or Ollama with an agent model to enable."),
+                item("tts", _check_tts(),
+                     "Text-to-Speech",
+                     "Optional voice narration for generated clips "
+                     "(voicebox / piper / XTTS). Install a TTS engine to enable."),
             ]},
         ]}
 
