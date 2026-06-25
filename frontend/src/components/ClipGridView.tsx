@@ -607,6 +607,16 @@ export default function ClipGridView({
         <button className="btn ghost sm" onClick={refresh} title="Aktualisieren">
           Neu
         </button>
+        <button className="btn ghost sm" onClick={() => setSelected(clips.map(c => c.id))}
+          title="Alle anzeigen">
+          Alle
+        </button>
+        {selected.length > 0 && (
+          <button className="btn ghost sm" onClick={() => setSelected([])}
+            title="Auswahl aufheben">
+            Abwählen
+          </button>
+        )}
       </div>
 
       {clips.length === 0 ? (
@@ -661,6 +671,41 @@ export default function ClipGridView({
                 Leeren
               </button>
             </div>
+          </div>
+          <div className="row" style={{ gap: 8, marginTop: 8, flexWrap: "wrap" }}>
+            {/* Batch style change */}
+            <select className="input" style={{ width: "auto", padding: "6px 10px", fontSize: 12 }}
+              value=""
+              onChange={async (e) => {
+                const styleId = e.target.value;
+                if (!styleId) return;
+                e.target.value = "";
+                // Apply the selected style to all selected clips
+                for (const c of selectedClips) {
+                  try {
+                    await api.editClip(project.id, c.id, { style_id: styleId });
+                  } catch (err) {
+                    console.warn("Failed to update style for clip", c.id, err);
+                  }
+                }
+                // Refresh project
+                const p = await api.getProject(project.id);
+                onChange(p);
+              }}
+            >
+              <option value="">Stil auf alle anwenden…</option>
+              {[...new Set(project.clips.map(c => c.captions.style_id))].map(sid => (
+                <option key={sid} value={sid}>{sid}</option>
+              ))}
+            </select>
+            {/* Batch download as ZIP */}
+            {selectedClips.some(c => c.status === "ready" && c.export_url) && (
+              <a className="btn sm ghost" style={{ fontSize: 12 }}
+                href={api.exportBatchUrl(project.id)}
+                download>
+                Auswahl ZIP ({selectedClips.filter(c => c.export_url).length})
+              </a>
+            )}
           </div>
           <div className="selected-preview-layout">
             <div className="selected-video">
