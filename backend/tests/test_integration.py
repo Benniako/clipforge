@@ -264,54 +264,55 @@ class TestCLI:
 
     def test_cli_help_succeeds(self):
         """python -m backend.cli --help exits 0."""
-        import subprocess
-        import sys
+        import os, subprocess, sys
+        repo_root = Path(__file__).resolve().parents[2]
+        env = {**os.environ, "PYTHONPATH": str(repo_root)}
         result = subprocess.run(
             [sys.executable or "python", "-m", "backend.cli", "--help"],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True, text=True, timeout=10, env=env,
         )
         assert result.returncode == 0
         assert "ClipForge" in result.stdout
 
     def test_cli_info_succeeds(self):
         """python -m backend.cli info exits 0."""
-        import subprocess
-        import sys
+        import os, subprocess, sys
+        repo_root = Path(__file__).resolve().parents[2]
+        env = {**os.environ, "PYTHONPATH": str(repo_root)}
         result = subprocess.run(
             [sys.executable or "python", "-m", "backend.cli", "info"],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True, text=True, timeout=10, env=env,
         )
         assert result.returncode == 0
         assert "ClipForge" in result.stdout
 
     def test_cli_version(self):
         """--version flag works."""
-        import subprocess
-        import sys
+        import os, subprocess, sys
+        repo_root = Path(__file__).resolve().parents[2]
+        env = {**os.environ, "PYTHONPATH": str(repo_root)}
         result = subprocess.run(
             [sys.executable or "python", "-m", "backend.cli", "--version"],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True, text=True, timeout=10, env=env,
         )
         assert result.returncode == 0
 
 
 class TestDockerfile:
     """Dockerfile and docker-compose parse correctly."""
+    repo_root = Path(__file__).resolve().parents[2]
 
     def test_dockerfile_exists(self):
         """Dockerfile is present at the repo root."""
-        repo_root = Path(__file__).resolve().parents[1]
-        assert (repo_root / "Dockerfile").exists()
+        assert (self.repo_root / "Dockerfile").exists()
 
     def test_docker_compose_exists(self):
         """docker-compose.yml is present at the repo root."""
-        repo_root = Path(__file__).resolve().parents[1]
-        assert (repo_root / "docker-compose.yml").exists()
+        assert (self.repo_root / "docker-compose.yml").exists()
 
     def test_dockerfile_has_expected_stages(self):
         """Dockerfile contains expected multi-stage build targets."""
-        repo_root = Path(__file__).resolve().parents[1]
-        content = (repo_root / "Dockerfile").read_text()
+        content = (self.repo_root / "Dockerfile").read_text()
         assert "FROM node:22-alpine AS frontend-builder" in content
         assert "FROM python:3.12-slim" in content
         assert "EXPOSE 8000" in content
