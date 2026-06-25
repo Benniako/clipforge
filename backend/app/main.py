@@ -133,13 +133,24 @@ def create_app() -> FastAPI:
     # Optionally serve a built SPA so `uvicorn app.main:app` runs the whole thing.
     dist = Path(__file__).resolve().parents[2] / "frontend" / "dist"
     if dist.is_dir():
-        # Check whether the built SPA may be stale relative to the source.
+        # Check whether the built SPA may be stale relative to the source,
+        # and auto-build if so — the developer doesn't have to remember.
         src = dist.parent / "src"
         if src.is_dir():
             dist_mtime = max((p.stat().st_mtime for p in dist.rglob("*") if p.is_file()), default=0)
             src_mtime = max((p.stat().st_mtime for p in src.rglob("*") if p.is_file()), default=0)
             if src_mtime > dist_mtime:
-                print("[WARN] Frontend source is newer than dist/ — run `npx vite build` in frontend/")
+                import subprocess
+                print("[INFO] Frontend source is newer than dist/. Auto-building…")
+                ret = subprocess.run(
+                    ["npx", "vite", "build"],
+                    cwd=str(dist.parent), capture_output=True, text=True, timeout=120,
+                )
+                if ret.returncode == 0:
+                    print("[OK] Frontend rebuilt.")
+                else:
+                    print(f"[WARN] Auto-build failed (exit {ret.returncode}). "
+                          "Stale frontend may be served. Run `npx vite build` manually.")
         app.mount("/", SPAStaticFiles(directory=str(dist), html=True), name="spa")
 
     return app

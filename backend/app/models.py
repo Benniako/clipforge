@@ -226,6 +226,7 @@ class Clip(BaseModel):
     start: float                # source timeline (s)
     end: float
     title: str = ""
+    description: str = ""       # AI-generated or user-written post description
     kind: str = "speech"       # "speech" | "gameplay" — how it was detected
     score: int = 0             # 0-100
     factors: list[ScoreFactor] = Field(default_factory=list)

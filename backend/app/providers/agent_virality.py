@@ -12,18 +12,45 @@ single-shot LLM scorer without any behavioural change.
 from __future__ import annotations
 
 import logging
+import os
+import urllib.request
 
 log = logging.getLogger("clipforge.agent_virality")
 
+# vLLM default endpoint. Override via CLIPFORGE_VLLM_URL.
+_VLLM_URL = os.environ.get("CLIPFORGE_VLLM_URL", "http://127.0.0.1:8001")
+
 
 def detected() -> bool:
-    """True when a tool-calling agent model is wired.
+    """True when a tool-calling agent model is reachable.
 
-    Currently a stub. Integration would:
-    1. Check for a vLLM/Qwen-AgentWorld endpoint
-    2. Define tool schemas for the existing provider functions
-    3. Run a ReAct loop: call tool → get results → reason → call again → final score
+    Probes for:
+    1. A vLLM server at the configured URL (default port 8001).
+    2. The Qwen-AgentWorld model in Ollama (via /api/tags).
     """
+    try:
+        req = urllib.request.Request(
+            _VLLM_URL + "/v1/models",
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=1.5) as r:
+            if r.status == 200:
+                return True
+    except Exception:
+        pass
+    # Fallback: check if Ollama has a capable agent model.
+    try:
+        ollama_url = os.environ.get("CLIPFORGE_OLLAMA_URL",
+                                     "http://127.0.0.1:11434")
+        with urllib.request.urlopen(ollama_url + "/api/tags", timeout=1.5) as r:
+            import json
+            data = json.loads(r.read())
+            for m in data.get("models", []):
+                name = (m.get("name") or "").lower()
+                if any(kw in name for kw in ("agentworld", "qwen3", "deepseek-r1")):
+                    return True
+    except Exception:
+        pass
     return False
 
 

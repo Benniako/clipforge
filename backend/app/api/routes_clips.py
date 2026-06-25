@@ -41,6 +41,7 @@ def _scopes(project, clip) -> tuple[str, str]:
 
 class ClipEdit(BaseModel):
     title: str | None = None
+    description: str | None = None
     start: float | None = None
     end: float | None = None
     style_id: str | None = None
@@ -119,6 +120,9 @@ def edit_clip(project_id: str, clip_id: str, edit: ClipEdit) -> Clip:
 
     if edit.title is not None:
         clip.title = edit.title.strip()[:120]
+
+    if edit.description is not None:
+        clip.description = edit.description.strip()[:600]
 
     if edit.start is not None or edit.end is not None:
         new_start = clip.start if edit.start is None else max(0.0, edit.start)
