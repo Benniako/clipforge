@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import math
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -67,6 +68,34 @@ def _clamp_pad(v: float | None) -> float | None:
     if not math.isfinite(value):
         return None
     return round(max(0.0, min(value, 60.0)), 3)
+
+
+def _friendly_import_error(exc: Exception, url: str | None = None) -> str:
+    """Map an import exception to a user-friendly, actionable message."""
+    msg = str(exc).lower()
+    if url:
+        if "404" in msg or "not found" in msg:
+            return f"URL not found or not accessible: '{url}'. Check the link is correct and the video is public."
+        if "403" in msg or "forbidden" in msg:
+            return f"Access denied for URL: '{url}'. The video may be private or geo-blocked."
+        if "no such host" in msg or "resolve" in msg:
+            return f"Could not reach '{url}'. Check your internet connection and that the URL is correct."
+        if "ssl" in msg or "certificate" in msg:
+            return f"SSL error while fetching '{url}'. Try downloading the file manually and uploading it instead."
+    if "no space" in msg or "disk" in msg:
+        return "Your disk is full. Free up space or set CLIPFORGE_DATA_DIR to a drive with more room."
+    if "permission" in msg:
+        return "Permission denied writing to the data directory. Check folder permissions."
+    if "codec" in msg or "container" in msg or "moov" in msg:
+        return ("The video file couldn't be read. It may be corrupted or in an unsupported format. "
+                "Try re-encoding to H.264 MP4 with HandBrake first.")
+    if "memory" in msg:
+        return "ClipForge ran out of memory during import. Try a shorter video or close other applications."
+    # Fallback: keep it short and remove file paths
+    clean = str(exc).replace("\\", "/")
+    clean = re.sub(r"[A-Za-z]:/[^\s,)]+", "[path]", clean)
+    clean = re.sub(r"/tmp/[^\s,)]+", "[path]", clean)
+    return f"Could not import the source: {clean[:200]}"
 
 
 def _split_values(text: str | None) -> list[str]:
@@ -313,7 +342,8 @@ async def create_project(
         raise
     except Exception as e:
         _discard()
-        raise HTTPException(400, f"could not import source: {e}")
+        error_msg = _friendly_import_error(e, url)
+        raise HTTPException(400, error_msg)
 
     try:
         with store.mutate(project.id) as p:

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import queue
+import re
 import threading
 import traceback
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
@@ -36,6 +37,77 @@ from . import reframe as reframe_mod
 from . import render as render_mod
 
 log = logging.getLogger("clipforge.engine")
+
+# Known error patterns mapped to user-friendly messages.
+_FRIENDLY_ERRORS: dict[str, str] = {
+    "ffmpeg": (
+        "The media engine (ffmpeg) encountered a problem. This can happen when the "
+        "source video uses an uncommon codec or is corrupted. Try re-encoding to "
+        "H.264 MP4 with HandBrake or ffmpeg first."
+    ),
+    "whisper": (
+        "Speech-to-text (Whisper) failed. This can happen with very long or noisy "
+        "audio. Try a shorter video, or set CLIPFORGE_WHISPER_MODEL=small for a "
+        "lighter model."
+    ),
+    "memory": (
+        "ClipForge ran out of memory. Try closing other applications, "
+        "setting CLIPFORGE_WHISPER_MODEL=base or tiny, or processing a shorter video."
+    ),
+    "out of memory": (
+        "ClipForge ran out of memory. Try closing other applications, "
+        "setting CLIPFORGE_WHISPER_MODEL=base or tiny, or processing a shorter video."
+    ),
+    "CUDA": (
+        "GPU acceleration failed. This can happen with outdated drivers or "
+        "insufficient VRAM. Set CLIPFORGE_DEVICE=cpu to fall back to CPU processing "
+        "(slower but more stable)."
+    ),
+    "disk": (
+        "ClipForge ran out of disk space. Free up space on the drive where "
+        "backend/data/ is located, or set CLIPFORGE_DATA_DIR to a different drive."
+    ),
+    "No space": (
+        "ClipForge ran out of disk space. Free up space on the drive where "
+        "backend/data/ is located, or set CLIPFORGE_DATA_DIR to a different drive."
+    ),
+    "url": (
+        "Failed to import the video URL. Check the URL is correct and accessible. "
+        "For private videos, download the file first and upload it directly."
+    ),
+    "timeout": (
+        "An operation timed out. For very long videos this is expected; try a "
+        "shorter video or increase the timeout by setting CLIPFORGE_TIMEOUT."
+    ),
+}
+
+
+def _friendly_error(exc: BaseException) -> str:
+    """Map an exception to a human-readable, actionable error message.
+
+    Checks the exception message, its cause chain, and known patterns to produce
+    output a non-expert user can act on.
+    """
+    msg = str(exc)
+    for pattern, hint in _FRIENDLY_ERRORS.items():
+        if pattern.lower() in msg.lower():
+            return hint
+    # Check the cause chain for wrapped ffmpeg errors.
+    cause = exc
+    while hasattr(cause, "__cause__") and cause.__cause__:
+        cause = cause.__cause__
+        for pattern, hint in _FRIENDLY_ERRORS.items():
+            if pattern.lower() in str(cause).lower():
+                return hint
+    # If the exception has a 'category' attribute (FFmpegError), use it.
+    if hasattr(exc, "category"):
+        return str(exc.category)
+    # Generic fallback — strip file paths and truncate for readability.
+    clean = re.sub(r"[A-Za-z]:\\[^\s,)]+", "[path]", msg)
+    clean = re.sub(r"/[^\s,)]+", "[path]", clean)
+    if len(clean) > 300:
+        clean = clean[:300] + "..."
+    return clean
 
 
 def _media_url(path) -> str:
@@ -194,13 +266,14 @@ class Engine:
             try:
                 self._process(project_id)
             except BaseException as e:  # never let the worker die
-                log.error("pipeline failed for %s: %s\n%s", project_id, e,
+                error_msg = _friendly_error(e)
+                log.error("pipeline failed for %s: %s\n%s", project_id, error_msg,
                           traceback.format_exc())
                 try:
                     with store.mutate(project_id) as p:
                         p.status = ProjectStatus.failed
-                        p.error = str(e)
-                        p.progress.message = f"Failed: {e}"
+                        p.error = error_msg
+                        p.progress.message = f"Failed: {error_msg[:200]}"
                 except Exception:
                     pass
             finally:
