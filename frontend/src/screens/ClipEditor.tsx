@@ -66,7 +66,7 @@ export default function ClipEditor() {
   // variables are initialized, so the handler never goes stale.
   const keyboardRefs = useRef({
     start: 0, end: 0, srcDur: 0, dirty: false, busy: false,
-    apply: async () => {},
+    apply: async () => {}, canUndo: false, canRedo: false,
   });
   
   useEffect(() => {
@@ -130,9 +130,9 @@ export default function ClipEditor() {
           if (e.metaKey || e.ctrlKey) {
             e.preventDefault();
             if (e.shiftKey) {
-              if (undo.canRedo) applyUndo(undo.redo());
+              if (st.canRedo) applyUndo(undo.redo());
             } else {
-              if (undo.canUndo) applyUndo(undo.undo());
+              if (st.canUndo) applyUndo(undo.undo());
             }
           }
           break;
@@ -153,7 +153,7 @@ export default function ClipEditor() {
 
   // Keep keyboard ref in sync with live variables (avoids TS hoisting errors).
   useEffect(() => {
-    keyboardRefs.current = { start, end, srcDur, dirty, busy, apply };
+    keyboardRefs.current = { start, end, srcDur, dirty, busy, apply, canUndo: undo.canUndo, canRedo: undo.canRedo };
   });
 
   // Record undo snapshots when editor state changes.
@@ -218,6 +218,19 @@ export default function ClipEditor() {
     setCam(c.reframe.facecam ?? null);
     setAspect(c.aspect ?? "");
     setCapSpeakers(c.caption_speakers ?? null);
+    // Reset undo history so the first undo doesn't restore empty defaults.
+    undo.reset({
+      title: c.title,
+      start: c.start,
+      end: c.end,
+      styleId: c.captions.style_id,
+      cx: c.reframe.cx_overridden ? c.reframe.keyframes[0]?.cx ?? 0.5 : null,
+      words: c.captions.words.map((w) => ({ t: w.t, d: w.d, text: w.text })),
+      layout: c.reframe.layout,
+      cam: c.reframe.facecam ?? null,
+      aspect: c.aspect ?? "",
+      capSpeakers: c.caption_speakers ?? null,
+    });
   };
 
   // The set of speakers currently kept in captions (null on the clip = all).

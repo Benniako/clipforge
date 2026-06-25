@@ -629,6 +629,8 @@ def get_settings() -> Settings:
     workers_env = os.environ.get("CLIPFORGE_RENDER_WORKERS")
     render_workers = int(workers_env) if workers_env else _auto_workers(cpu)
 
+    ollama_detected = _detect_ollama()
+
     return Settings(
         data_dir=data_dir,
         db_path=data_dir / "clipforge.db",
@@ -653,10 +655,10 @@ def get_settings() -> Settings:
         has_nvidia=has_nvidia,
         has_av1_nvenc=has_av1_nvenc,
         vram_mb=vram_mb,
-        auto_model=model_env is None,
+	        auto_model=model_env is None,
         has_deno=bool(shutil.which("deno")),
-        has_ollama=_detect_ollama()[0],
-        ollama_models=_detect_ollama()[1],
+        has_ollama=ollama_detected[0],
+        ollama_models=ollama_detected[1],
         has_torchaudio=_has_module("torchaudio"),
         has_paddleocr=_has_module("paddleocr"),
         has_easyocr=_has_module("easyocr"),

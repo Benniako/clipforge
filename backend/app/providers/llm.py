@@ -427,7 +427,7 @@ def suggest_titles(excerpts: list[str], *, lang: str = "de",
         return {}
     out: dict[int, str] = {}
     ex = cf.ThreadPoolExecutor(max_workers=3)
-    futs = {ex.submit(suggest_title, text, lang=lang, platform=platform): i
+    futs = {ex.submit(suggest_title, text, lang=lang): i
             for i, text in enumerate(excerpts) if text.strip()}
     done, not_done = cf.wait(futs, timeout=budget)
     for f in done:
@@ -447,3 +447,22 @@ def suggest_titles(excerpts: list[str], *, lang: str = "de",
 
 
 def generate_title(transcript_excerpt: str, *, lang: str = "de") -> str:
+    """Generate a short clip title, with heuristic fallback to first sentence.
+
+    Tries the local Ollama LLM first via ``suggest_title()``. If unavailable or
+    it returns None, falls back to extracting the first sentence from the
+    transcript excerpt — so every clip always gets a title, never a blank.
+    """
+    title = suggest_title(transcript_excerpt, lang=lang)
+    if title:
+        return title
+    # Heuristic fallback: first sentence of the transcript, capped at 60 chars.
+    text = (transcript_excerpt or "").strip()
+    if not text:
+        return "Untitled"
+    for sep in (".", "!", "?", "\n"):
+        if sep in text:
+            first = text.split(sep)[0].strip()
+            if first:
+                return first[:60]
+    return text[:60]

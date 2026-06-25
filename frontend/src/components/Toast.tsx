@@ -10,7 +10,7 @@ Usage:
   setToast({ text: "Saved!", type: "success" });  // shows for 3s
   setToast({ text: "Failed", type: "error" });     // shows for 4s
 */
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 
 export interface ToastMsg {
   text: string;
@@ -24,11 +24,16 @@ interface Props {
 }
 
 export default function Toast({ msg, onDone }: Props) {
+  // Use a ref for onDone so the effect doesn't depend on a potentially
+  // unstable inline arrow function from the parent.
+  const onDoneRef = useRef(onDone);
+  onDoneRef.current = onDone;
+
   useEffect(() => {
     if (!msg) return;
-    const t = setTimeout(onDone, msg.duration ?? 3000);
+    const t = setTimeout(() => onDoneRef.current(), msg.duration ?? 3000);
     return () => clearTimeout(t);
-  }, [msg, onDone]);
+  }, [msg]);
 
   if (!msg) return null;
 

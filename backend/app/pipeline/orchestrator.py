@@ -596,10 +596,11 @@ class Engine:
                 for i, t in titles.items():
                     clips[i].title = t
             # Fallback: auto-generate titles for clips that still have none.
-            for clip in clips:
-                if not clip.title:
-                    clip.title = llm_mod.generate_title(
-                        clip.transcript_excerpt, lang=transcript.language)
+            if llm_mod.available():
+                for clip in clips:
+                    if not clip.title:
+                        clip.title = llm_mod.generate_title(
+                            clip.transcript_excerpt, lang=transcript.language)
             # Hook/first-3s analysis: warn the user if their opener is weak.
             if clips:
                 first = clips[0]
