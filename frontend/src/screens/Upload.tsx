@@ -741,7 +741,12 @@ export default function Upload({ health }: { health: Health | null }) {
                       duration: fmtDuration(p.duration),
                       ready: p.ready_clips,
                       total: p.clip_count,
-                      ago: timeAgo(p.created_at),
+                      ago: timeAgo(p.created_at, {
+                        justNow: t("time.justNow"),
+                        min: t("time.min"),
+                        hour: t("time.hour"),
+                        day: t("time.day"),
+                      }),
                     })}
                   </span>
                 </div>

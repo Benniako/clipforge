@@ -31,11 +31,14 @@ export function scoreColor(score: number): string {
   return "var(--bad)";
 }
 
-export function timeAgo(epochSeconds: number): string {
+export function timeAgo(epochSeconds: number, labels?: {
+  justNow: string; min: string; hour: string; day: string;
+}): string {
+  const l = labels || { justNow: "just now", min: "m", hour: "h", day: "d" };
   const diff = Date.now() / 1000 - epochSeconds;
-  if (diff < 60) return "gerade eben";
-  if (diff < 3600) return `vor ${Math.floor(diff / 60)} Min`;
-  if (diff < 86400) return `vor ${Math.floor(diff / 3600)} Std`;
-  return `vor ${Math.floor(diff / 86400)} Tg`;
+  if (diff < 60) return l.justNow;
+  if (diff < 3600) return `${Math.floor(diff / 60)}${l.min}`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)}${l.hour}`;
+  return `${Math.floor(diff / 86400)}${l.day}`;
 }
 

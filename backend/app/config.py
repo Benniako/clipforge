@@ -110,9 +110,18 @@ def _detect_ollama() -> tuple[bool, str]:
             return True, models
     import socket
     try:
-        host = os.environ.get("CLIPFORGE_OLLAMA_HOST", "127.0.0.1")
-        port = int(os.environ.get("CLIPFORGE_OLLAMA_PORT", "11434"))
-        with socket.create_connection((host, port), timeout=0.05):
+        # CLIPFORGE_OLLAMA_URL is the canonical env var (used by llm.py and vlm.py).
+        # Parse host/port from it if set; fall back to individual vars for compat.
+        url = os.environ.get("CLIPFORGE_OLLAMA_URL", "")
+        if url:
+            from urllib.parse import urlparse
+            parsed = urlparse(url)
+            host = parsed.hostname or "127.0.0.1"
+            port = parsed.port or 11434
+        else:
+            host = os.environ.get("CLIPFORGE_OLLAMA_HOST", "127.0.0.1")
+            port = int(os.environ.get("CLIPFORGE_OLLAMA_PORT", "11434"))
+        with socket.create_connection((host, port), timeout=0.5):
             return True, models or "server running"
     except OSError:
         return False, ""

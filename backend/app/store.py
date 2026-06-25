@@ -8,6 +8,8 @@ the store safe to use from the API threadpool and the background worker alike.
 """
 from __future__ import annotations
 
+import json
+import logging
 import sqlite3
 import threading
 from contextlib import contextmanager
@@ -29,6 +31,7 @@ CREATE INDEX IF NOT EXISTS idx_projects_created ON projects(created_at);
 # Serialise read-modify-write cycles on a single project. v1 is single-user, so
 # one process-wide lock is simpler than per-id locks and plenty fast.
 _write_lock = threading.RLock()
+log = logging.getLogger("clipforge.store")
 
 
 def init_db() -> None:
@@ -69,7 +72,13 @@ def get(project_id: str) -> Project | None:
         row = con.execute(
             "SELECT data FROM projects WHERE id=?", (project_id,)
         ).fetchone()
-    return Project.model_validate_json(row[0]) if row else None
+    if not row:
+        return None
+    try:
+        return Project.model_validate_json(row[0])
+    except Exception as exc:
+        log.warning("corrupted project data for %s: %s", project_id, exc)
+        return None
 
 
 def list_summaries(limit: int = 100) -> list[ProjectSummary]:

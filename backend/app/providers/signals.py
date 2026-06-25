@@ -260,10 +260,22 @@ _WORD_RE = re.compile(r"[a-zà-ÿ']+", re.IGNORECASE)
 
 
 def _tokens(words: list[Word]) -> list[str]:
-    out: list[str] = []
+    """Extract tokens plus bigrams from words, so multi-word lexicon entries
+    (e.g. French 'en fait', Spanish 'por qué') actually match.
+
+    Returns both single words and adjacent pairs: ["en", "fait", "en fait"].
+    This inflates the token count slightly but the matching functions use
+    ``t in frozenset`` lookups, so false positives from partial matches are
+    prevented by the set membership check — a bigram "en fait" won't match
+    a unigram-only lexicon entry.
+    """
+    singles: list[str] = []
     for w in words:
-        out.extend(m.lower() for m in _WORD_RE.findall(w.text))
-    return out
+        singles.extend(m.lower() for m in _WORD_RE.findall(w.text))
+    if len(singles) < 2:
+        return singles
+    bigrams = [f"{singles[i]} {singles[i+1]}" for i in range(len(singles) - 1)]
+    return singles + bigrams
 
 
 def _has_number(words: list[Word]) -> bool:
