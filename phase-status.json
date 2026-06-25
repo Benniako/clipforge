@@ -1,52 +1,26 @@
 {
   "branch": "Product-Alpha",
   "phases": {
-    "phase-0": {
-      "label": "Foundation (Docker, CLI, errors, CI, releases)",
-      "status": "done",
-      "commits": ["cbaebfb", "2dad36e", "8c7a4ef", "5a102a2", "ef23801"]
+    "phase-0": {"label": "Foundation", "status": "done", "commits": ["cbaebfb"]},
+    "phase-1": {"label": "Editor UX", "status": "done", "commits": ["84631ce"]},
+    "phase-2": {"label": "Languages (FR, ES, PT, IT)", "status": "done", "commits": ["f51ca9d"]},
+    "phase-3": {"label": "Feature parity", "status": "done", "commits": ["e732903"]},
+    "phase-4": {"label": "Moats", "status": "done", "commits": ["7a453f5"]},
+    "phase-5": {"label": "Release v0.2.0", "status": "done", "commits": ["v0.2.0"]},
+    "phase-6": {"label": "Languages (TR, JP, NL, PL, SV)", "status": "done", "commits": ["2f2b142"]},
+    "phase-7": {"label": "Test coverage", "status": "done", "commits": ["a9dfef5"]},
+    "phase-8": {"label": "Features (waveform, auto-thumbnails)", "status": "done", "commits": ["97a705e"]},
+    "phase-9": {
+      "label": "Stabilization (CI green, lint, docs)",
+      "status": "pending",
+      "commits": []
     },
-    "phase-1": {
-      "label": "Editor UX (shortcuts, undo/redo, captions, bulk ops)",
-      "status": "done",
-      "commits": ["84631ce", "06d3d35", "2e861d9", "96eb170"]
-    },
-    "phase-2": {
-      "label": "Languages (FR, ES, PT, IT)",
-      "status": "done",
-      "commits": ["f51ca9d"]
-    },
-    "phase-3": {
-      "label": "Feature parity (brand templates, URL progress)",
-      "status": "done",
-      "commits": ["e732903", "64ed708"]
-    },
-    "phase-4": {
-      "label": "Moats (watch folder, privacy mode, plugin system)",
-      "status": "done",
-      "commits": ["7a453f5"]
-    },
-    "phase-5": {
-      "label": "Release (tag v0.2.0 + push)",
-      "status": "done",
-      "commits": ["v0.2.0"]
-    },
-    "phase-6": {
-      "label": "Languages (TR, JP, NL, PL, SV)",
-      "status": "done",
-      "commits": ["2f2b142"]
-    },
-    "phase-7": {
-      "label": "Test coverage (new files: watcher, plugins, user_styles)",
-      "status": "done",
-      "commits": ["a9dfef5"]
-    },
-    "phase-8": {
-      "label": "Features (waveform, auto-thumbnails)",
-      "status": "done",
-      "commits": ["97a705e"]
+    "phase-10": {
+      "label": "Quality of Life (bg music, auto-titles, batch naming)",
+      "status": "pending",
+      "commits": []
     }
   },
-  "current_phase": "complete",
-  "last_updated": "2026-06-25T15:00:00Z"
+  "current_phase": "phase-9",
+  "last_updated": "2026-06-25T15:05:00Z"
 }
