@@ -28,12 +28,12 @@
     },
     "phase-5": {
       "label": "Release (tag v0.2.0 + push)",
-      "status": "pending",
-      "commits": []
+      "status": "done",
+      "commits": ["v0.2.0"]
     },
     "phase-6": {
       "label": "Languages (TR, JP, NL, PL, SV)",
-      "status": "pending",
+      "status": "in_progress",
       "commits": []
     },
     "phase-7": {
@@ -47,6 +47,6 @@
       "commits": []
     }
   },
-  "current_phase": "phase-5",
-  "last_updated": "2026-06-25T14:45:00Z"
+  "current_phase": "phase-6",
+  "last_updated": "2026-06-25T14:50:00Z"
 }

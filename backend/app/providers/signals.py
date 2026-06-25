@@ -250,7 +250,6 @@ _IT = Lexicon(
     }),
 )
 
-_LEXICONS: dict[str, Lexicon] = {"en": _EN, "de": _DE, "fr": _FR, "es": _ES, "pt": _PT, "it": _IT}
 
 
 def get_lexicon(lang: str | None) -> Lexicon:
@@ -443,3 +442,201 @@ def list_payoff(words: list[Word], lex: Lexicon = _EN) -> tuple[float, str]:
     enumeration = any(t in lex.enumeration for t in toks)
     raw = _clamp(0.6 * has_num + 0.6 * enumeration)
     return raw, "Concrete, list-style payoff"
+
+# --------------------------------------------------------------------------- #
+# Turkish lexicon
+# --------------------------------------------------------------------------- #
+_TR = Lexicon(
+    hook=frozenset({
+        "nasil", "neden", "ne", "sir", "kimse", "herkes",
+        "asla", "her zaman", "dur", "hata", "gercek", "sebep",
+        "aslinda", "sasirtici", "hayal et", "uyari", "dürüst",
+        "cilgin", "vahsi", "hic", "en büyük", "en kötü", "en iyi",
+    }),
+    emotion=frozenset({
+        "ask", "nefret", "korku", "harika", "inanilmaz", "korkunç",
+        "sok edici", "deli", "güzel", "aci verici", "komik",
+        "korkutucu", "heyecan verici", "yürek parçalayici", "güçlü",
+        "sinir bozucu", "minnettar", "kizgin", "mutlu", "üzgün",
+        "gururlu", "korkmus", "heyecanli", "vay", "inanilmaz",
+    }),
+    payoff=frozenset({
+        "çünkü", "bu yüzden", "bu nedenle", "sonuç", "fark ettim",
+        "ögrendim", "ders", "nokta", "anlamina gelir", "cevap",
+        "sonunda", "kesfettim", "sir", "anahtar", "dip",
+        "nihayetinde", "sonuç",
+    }),
+    dangling=frozenset({
+        "ve", "ama", "bu yüzden", "veya", "çünkü", "hangi", "bu",
+        "onlar", "o", "su", "bunlar", "sonra", "ayrica", "ancak",
+    }),
+    second_person=frozenset({"sen", "sana", "seni", "senin", "sizin", "kendin"}),
+    quote_extra=frozenset({
+        "her sey", "hicbir sey", "bir sey", "hayat", "dünya",
+        "önemli", "an", "degisim", "simdi",
+    }),
+    enumeration=frozenset({
+        "birinci", "ikinci", "üçüncü", "üç", "iki",
+        "adimlar", "yollar", "nedenler", "ipuçlari",
+    }),
+)
+
+# --------------------------------------------------------------------------- #
+# Japanese lexicon (romaji)
+# --------------------------------------------------------------------------- #
+_JP = Lexicon(
+    hook=frozenset({
+        "naze", "doushite", "nani", "himitsu", "daremo", "minna",
+        "kesshite", "itsumo", "yamete", "ayamari", "shinjitsu", "riyuu",
+        "jitsuwa", "odoroki", "souzou", "keikoku", "shoujiki",
+        "kurutte", "yabai", "ichiban", "saitei", "saikou",
+    }),
+    emotion=frozenset({
+        "ai", "nikushimi", "kyoufu", "subarashii", "fushigi", "hidoi",
+        "shougeki", "okashii", "utsukushii", "kurushii", "omoshiroi",
+        "kowai", "wakuwaku", "setsunai", "tsuyoi", "iraira",
+        "kansha", "okotte", "shiawase", "kanashii", "hokori",
+        "obiete", "waku", "sugoi", "shinjirarenai",
+    }),
+    payoff=frozenset({
+        "dakara", "nazenara", "kekka", "kidzuita", "mananda",
+        "lesson", "pointo", "imi", "kotae", "tsui ni",
+        "hakken", "himitsu", "kagi", "kekkyoku", "ketsuron",
+    }),
+    dangling=frozenset({
+        "soshite", "demo", "dakara", "mata", "keredo", "sore", "kore",
+        "karera", "kare", "kanojo", "kono", "sono", "ano",
+        "soshite", "mata", "datte",
+    }),
+    second_person=frozenset({"anata", "kimi", "anta", "anata no", "kimi no", "jibun"}),
+    quote_extra=frozenset({
+        "subete", "nani mo", "nanika", "jinsei", "sekai",
+        "mondai", "shunkan", "henka", "ima", "kyou",
+    }),
+    enumeration=frozenset({
+        "ichiban", "niban", "sanban", "mittsu", "futatsu",
+        "suteppu", "houhou", "riyuu", "hinto",
+    }),
+)
+
+# --------------------------------------------------------------------------- #
+# Dutch lexicon
+# --------------------------------------------------------------------------- #
+_NL = Lexicon(
+    hook=frozenset({
+        "hoe", "waarom", "wat", "geheim", "niemand", "iedereen",
+        "nooit", "altijd", "stop", "fout", "waarheid", "reden",
+        "eigenlijk", "verrassend", "stel je voor", "waarschuwing",
+        "eerlijk", "gek", "wild", "ooit", "grootste", "slechtste", "beste",
+    }),
+    emotion=frozenset({
+        "liefde", "haat", "angst", "geweldig", "ongelooflijk",
+        "verschrikkelijk", "schokkend", "krankzinnig", "mooi",
+        "pijnlijk", "hilarisch", "eng", "opwindend",
+        "hartverscheurend", "krachtig", "frustrerend", "dankbaar",
+        "boos", "blij", "verdrietig", "trots", "bang", "opgewonden",
+        "wauw", "ongelooflijk",
+    }),
+    payoff=frozenset({
+        "omdat", "dus", "daarom", "resultaat", "besefte", "geleerd",
+        "les", "punt", "betekent", "antwoord", "eindelijk", "ontdekt",
+        "geheim", "sleutel", "bodem", "uiteindelijk", "conclusie",
+    }),
+    dangling=frozenset({
+        "en", "maar", "dus", "of", "omdat", "welke", "dat", "het",
+        "zij", "hij", "deze", "die", "dan", "ook", "echter",
+    }),
+    second_person=frozenset({"jij", "jou", "jouw", "je", "u", "uzelf", "jezelf"}),
+    quote_extra=frozenset({
+        "alles", "niets", "iets", "leven", "wereld", "zaak",
+        "moment", "veranderen", "nu", "vandaag",
+    }),
+    enumeration=frozenset({
+        "eerste", "tweede", "derde", "drie", "twee",
+        "stappen", "manieren", "redenen", "tips", "punten",
+    }),
+)
+
+# --------------------------------------------------------------------------- #
+# Polish lexicon
+# --------------------------------------------------------------------------- #
+_PL = Lexicon(
+    hook=frozenset({
+        "jak", "dlaczego", "co", "sekret", "nikt", "wszyscy",
+        "nigdy", "zawsze", "przestan", "blad", "prawda", "powod",
+        "wlasciwie", "zaskakujacy", "wyobraz sobie", "ostrzezenie",
+        "szczerze", "szalony", "dziki", "kiedykolwiek",
+        "najwiekszy", "najgorszy", "najlepszy",
+    }),
+    emotion=frozenset({
+        "milosc", "nienawisc", "strach", "niesamowity",
+        "niewiarygodny", "straszny", "szokujacy", "oblokany",
+        "piekny", "bolesny", "zabawny", "przerazajacy", "ekscytujacy",
+        "rozrywajacy serce", "potrzny", "frustrujacy", "wdzieczny",
+        "zly", "szczesliwy", "smutny", "dumny", "przestraszony",
+        "podekscytowany", "wal", "niewiarygodne",
+    }),
+    payoff=frozenset({
+        "poniewaz", "wiec", "dlatego", "wynik", "zdalem sobie sprawe",
+        "nauczylem sie", "lekcja", "punkt", "znaczy", "odpowiedz",
+        "w koncu", "odkrylem", "sekret", "klucz", "dno",
+        "ostatecznie", "wniosek",
+    }),
+    dangling=frozenset({
+        "i", "ale", "wiec", "lub", "poniewaz", "ktory", "ze", "to",
+        "oni", "on", "ona", "ten", "ci", "te", "wtedy", "rowniez",
+        "jednak",
+    }),
+    second_person=frozenset({"ty", "ciebie", "cie", "twoj", "twoja", "twoje",
+                              "panski", "wasz"}),
+    quote_extra=frozenset({
+        "wszystko", "nic", "cos", "zycie", "swiat", "sprawa",
+        "moment", "zmienic", "teraz", "dzis",
+    }),
+    enumeration=frozenset({
+        "pierwszy", "drugi", "trzeci", "trzy", "dwa",
+        "kroki", "sposoby", "powody", "wskazowki", "punkty",
+    }),
+)
+
+# --------------------------------------------------------------------------- #
+# Swedish lexicon
+# --------------------------------------------------------------------------- #
+_SV = Lexicon(
+    hook=frozenset({
+        "hur", "varfor", "vad", "hemlighet", "ingen", "alla",
+        "aldrig", "alltid", "sluta", "misstag", "sanning", "anledning",
+        "egentligen", "overraskande", "forestall dig", "varning",
+        "arligt", "galen", "vild", "nagonsin", "storsta", "samsta", "basta",
+    }),
+    emotion=frozenset({
+        "kärlek", "hat", "radsla", "fantastisk", "otrolig",
+        "fruktansvard", "chockerande", "vansinnig", "vacker",
+        "smartsam", "rolig", "skrammande", "spännande",
+        "hjartskarande", "kraftfull", "frustrerande", "tacksam",
+        "arg", "glad", "ledsen", "stolt", "radd", "upprymd",
+        "wow", "otroligt",
+    }),
+    payoff=frozenset({
+        "for att", "sa", "darfor", "resultat", "insag", "larde",
+        "laxa", "poang", "betyder", "svar", "antligen", "upptackte",
+        "hemlighet", "nyckel", "botten", "slutligen", "slutsats",
+    }),
+    dangling=frozenset({
+        "och", "men", "sa", "eller", "for att", "vilken", "som", "det",
+        "de", "han", "hon", "denna", "dessa", "de dar", "sedan", "ocksa",
+        "dock",
+    }),
+    second_person=frozenset({"du", "dig", "din", "ditt", "dina", "er", "ert", "era"}),
+    quote_extra=frozenset({
+        "allt", "inget", "nagot", "liv", "varld", "sak",
+        "ogonblick", "forandra", "nu", "idag",
+    }),
+    enumeration=frozenset({
+        "forsta", "andra", "tredje", "tre", "tva",
+        "steg", "satt", "anledningar", "tips", "punkter",
+    }),
+)
+
+_LEXICONS: dict[str, Lexicon] = {"en": _EN, "de": _DE, "fr": _FR, "es": _ES, "pt": _PT, "it": _IT,
+                                  "tr": _TR, "jp": _JP, "nl": _NL, "pl": _PL, "sv": _SV}

@@ -368,6 +368,37 @@ _FILLER = {
         "iniziare in piccolo rimanere costante e lasciare che i risultati "
         "crescano nel tempo perché è lì che la vera magia accade"
     ).split(),
+    "tr": (
+        "soyle baslayalim kimse sana bundan bahsetmez ve bu tamamen"
+        "degistirdi nasil dusundugumu tum sorun hakkinda kucuk"
+        "baslamalisin tutarli olmali ve sonuclarin zamanla birikmesine"
+        "izin vermelisin cunku sihrin gercekten gerceklestigi yer burasi"
+    ).split(),
+    "jp": (
+        "dakara kore ga daremo anata ni hontou ni iwanai koto de sore ga"
+        "subete wo kaeta mondai ni tsuite no kangaekata wo chii saku"
+        "hajimete jizoku shite kekka ga jikan to tomo ni tsumi"
+        "agaru you ni suru koto ga hontou no mahou ga okoru tokoro da"
+    ).split(),
+    "nl": (
+        "dus hier is het ding dat niemand je echt vertelt over dit en het"
+        "heeft volledig veranderd hoe ik denk over het hele probleem je"
+        "moet klein beginnen consistent blijven en de resultaten laten"
+        "groeien na verloop van tijd want dat is waar de echte magie"
+        "gebeurt voor iedereen"
+    ).split(),
+    "pl": (
+        "wiec oto chodzi o to czego naprawde nikt ci nie mowi a to"
+        "calkowicie zmienilo to jak mysle o calym problemie musisz"
+        "zacząc od malego byc konsekwentnym i pozwolic aby wyniki"
+        "narastaly z czasem bo wlasnie w tym tkwi prawdziwa magia"
+    ).split(),
+    "sv": (
+        "sa har ar saken som ingen egentligen berattar for dig om det"
+        "har och det helt forandrade hur jag tanker om hela problemet du"
+        "maste borja smatt vara konsekvent och lata resultaten vaxa"
+        "over tiden for det ar dar den riktiga magin hant"
+    ).split(),
 }
 
 
