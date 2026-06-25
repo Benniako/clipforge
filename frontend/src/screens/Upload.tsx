@@ -123,6 +123,10 @@ export default function Upload({ health }: { health: Health | null }) {
       setErr(t("up.errNoSource"));
       return;
     }
+    if (url.trim() && !url.trim().match(/^https?:\/\/.+/)) {
+      setErr("Invalid URL — must start with http:// or https://");
+      return;
+    }
     setErr(null);
     setBusy(true);
     setPct(0);

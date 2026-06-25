@@ -68,7 +68,9 @@ export default function ProjectView() {
           return;
         }
         if (s.status === "ready" || s.status === "failed") done = true;
-        void handle(s);
+        handle(s).catch((err) => {
+          if (alive) setError(err?.message ?? "Failed to load project");
+        });
       };
       ws.onerror = () => {
         if (!done) startPolling();

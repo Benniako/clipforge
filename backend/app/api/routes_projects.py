@@ -37,6 +37,14 @@ from ..pipeline.orchestrator import engine
 from ..providers.detect_gameplay import KNOWN_PROFILES
 
 log = logging.getLogger("clipforge.api")
+
+# Optional psutil — imported once at module level, not per-request.
+try:
+    import psutil as _psutil  # type: ignore
+    _HAS_PSUTIL = True
+except Exception:
+    _HAS_PSUTIL = False
+    _psutil = None
 router = APIRouter(prefix="/api/projects", tags=["projects"])
 _SYSTEM_SAMPLE: tuple[float, dict] | None = None
 
@@ -184,9 +192,8 @@ def _system_usage() -> dict:
         "gpu_mem_total_mb": None,
     }
     try:
-        import psutil  # type: ignore
-
-        sample["cpu_pct"] = float(psutil.cpu_percent(interval=None))
+        if _HAS_PSUTIL and _psutil is not None:
+            sample["cpu_pct"] = float(_psutil.cpu_percent(interval=None))
     except Exception:
         pass
     try:
@@ -512,11 +519,6 @@ def purge_project(project_id: str) -> dict:
                 item.unlink(missing_ok=True)
             except Exception:
                 pass
-        for item in tmp_root.glob(f"*{p.id}*"):
-            try:
-                item.unlink(missing_ok=True)
-            except Exception:
-                pass
         store.delete(project_id)
     return {"ok": True}
 
@@ -680,7 +682,7 @@ def export_batch(project_id: str):
     tmp_zip = Path(zip_name)
     with zipfile.ZipFile(tmp_zip, "w", zipfile.ZIP_STORED) as z:
         for i, c in enumerate(sorted(ready, key=lambda c: c.score, reverse=True), 1):
-            path = settings.media_dir / c.export_url.removeprefix("/media/")
+            path = settings.media_dir / (c.export_url[7:] if c.export_url.startswith("/media/") else c.export_url)
             if path.exists():
                 stem = f"{i:02d}_{c.score:02d}_{_safe_name(c.title)}"
                 z.write(path, f"{stem}.mp4")

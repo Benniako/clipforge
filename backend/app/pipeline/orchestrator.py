@@ -110,6 +110,12 @@ def _friendly_error(exc: BaseException) -> str:
     return clean
 
 
+# Used instead of str.removeprefix() for Python <3.9 compatibility.
+def _strip_media_prefix(url: str) -> str:
+    prefix = "/media/"
+    return url[len(prefix):] if url.startswith(prefix) else url
+
+
 def _media_url(path) -> str:
     return f"/media/{path.relative_to(get_settings().media_dir).as_posix()}"
 
@@ -1119,7 +1125,7 @@ class Engine:
             for cid in mtg.clip_ids:
                 c = project.clip(cid)
                 if c and c.export_url:
-                    paths.append(settings.media_dir / c.export_url.removeprefix("/media/"))
+                    paths.append(settings.media_dir / _strip_media_prefix(c.export_url))
             out = mdir / f"{montage_id}.mp4"
             thumb = mdir / f"{montage_id}.jpg"
             dur = montage_mod.build_montage_video(paths, out, thumb)

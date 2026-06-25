@@ -668,7 +668,7 @@ export default function ClipEditor() {
             <div className="caption-list" style={{ maxHeight: 300, overflowY: "auto" }}>
               {words.length === 0 && (
                 <div className="muted tiny" style={{ padding: 12, textAlign: "center" }}>
-                  No captions for this clip.
+                  {t("ce.noCaptions")}
                 </div>
               )}
               {words.map((w, i) => {
@@ -693,7 +693,7 @@ export default function ClipEditor() {
                       onClick={() => {
                         if (videoRef.current) videoRef.current.currentTime = w.t;
                       }}
-                      title="Click to seek"
+                      title={t("ce.seekToWord")}
                     >
                       {w.t.toFixed(1)}s
                     </span>
@@ -740,7 +740,7 @@ export default function ClipEditor() {
                   const lastT = words.length > 0 ? words[words.length - 1].t + words[words.length - 1].d : 0;
                   setWords([...words, { t: lastT + 0.3, d: 0.3, text: "" }]);
                 }}>
-                + Add
+                + {t("ce.addWord")}
               </button>
             </div>
           </div>

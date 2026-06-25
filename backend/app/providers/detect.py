@@ -82,9 +82,9 @@ def _salience(words: list[Word], duration: float, st: ImportSettings,
         "quote": signals.quotability(words, lex)[0],
         "length": signals.length_fit(duration, st.min_len, st.max_len)[0],
         "pace": signals.pace_energy(words, duration)[0],
-        "list": signals.list_payoff(words, lex)[0],
     }
     if weights:  # personalised ranking — same weights as scoring
+        vals["list"] = signals.list_payoff(words, lex)[0]
         return sum(v * weights.get(k, 0.0) for k, v in vals.items())
     return (0.20 * vals["instant_hook"] + 0.14 * vals["swipe"]
             + 0.18 * vals["hook"] + 0.14 * vals["emotion"]

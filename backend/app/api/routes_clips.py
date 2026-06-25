@@ -369,7 +369,7 @@ def download_montage(project_id: str, montage_id: str):
     mtg = project.montage(montage_id)
     if not mtg or not mtg.export_url:
         raise HTTPException(409, "montage is not rendered yet")
-    path = get_settings().media_dir / mtg.export_url.removeprefix("/media/")
+    path = get_settings().media_dir / mtg.export_url[len("/media/"):] if mtg.export_url and mtg.export_url.startswith("/media/") else mtg.export_url
     if not path.exists():
         raise HTTPException(404, "montage file missing")
     safe = "".join(c if c.isalnum() or c in " -_" else "_" for c in mtg.title).strip()
@@ -385,7 +385,7 @@ def download_clip(project_id: str, clip_id: str):
     clip = project.clip(clip_id)
     if not clip or not clip.export_url:
         raise HTTPException(409, "clip is not rendered yet")
-    path = get_settings().media_dir / clip.export_url.removeprefix("/media/")
+    path = get_settings().media_dir / (clip.export_url[7:] if clip.export_url.startswith("/media/") else clip.export_url)
     if not path.exists():
         raise HTTPException(404, "clip file missing")
     # Downloading a clip is an implicit "keep" — a weak positive signal.
