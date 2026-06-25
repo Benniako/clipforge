@@ -493,6 +493,33 @@ def delete_project(project_id: str) -> dict:
     store.delete(project_id)
     return {"deleted": project_id}
 
+@router.delete("/{project_id}/purge")
+def purge_project(project_id: str) -> dict:
+    """Irreversibly erase every trace of a project: database row, media files,
+    temp artifacts, and any cached data. Unlike DELETE this is a full forensic
+    wipe — use it for Privacy Mode compliance (e.g. when a user asks to have
+    their content removed from the system).
+
+    Returns {"ok": true} regardless of whether the project existed, so
+    callers can safely purge without a preliminary existence check.
+    """
+    p = store.get(project_id)
+    if p:
+        shutil.rmtree(get_settings().media_dir / project_id, ignore_errors=True)
+        tmp_root = Path(tempfile.gettempdir())
+        for item in tmp_root.glob(f"*{project_id}*"):
+            try:
+                item.unlink(missing_ok=True)
+            except Exception:
+                pass
+        for item in tmp_root.glob(f"*{p.id}*"):
+            try:
+                item.unlink(missing_ok=True)
+            except Exception:
+                pass
+        store.delete(project_id)
+    return {"ok": True}
+
 
 class Reprocess(BaseModel):
     """Optional setting overrides applied before re-running the pipeline."""
