@@ -161,6 +161,7 @@ runs from a **single process on http://localhost:8000** — no second terminal.
 | `CLIPFORGE_WHISPER_BATCH` | `8` | Batched-inference batch size for faster-whisper on GPU (keeps the card saturated). |
 | `CLIPFORGE_YOLO_MODEL` | `yolo11n.pt` | YOLO subject-tracking model. Set `yolo26n.pt` to opt into YOLO26 when `ultralytics>=8.4` is installed. |
 | `CLIPFORGE_ASD_DIR` | – | Path to an [LR-ASD](https://github.com/Junhua-Liao/LR-ASD) checkout to enable active-speaker attribution. |
+| `CLIPFORGE_WATCH_DIR` | – | Watch folder path. New videos dropped here are auto-imported and processed. |
 | `CLIPFORGE_DATA_DIR` | `backend/data` | Where the DB + media live. |
 | `CLIPFORGE_MAX_UPLOAD_MB` | `0` (unlimited) | Upload / URL-import size cap in MB; set only to guard a small disk. |
 | `FFMPEG_BIN` / `FFPROBE_BIN` | auto | Override binary resolution. |
@@ -221,13 +222,58 @@ The nav bar shows which are live in your environment.
 
 ## Language support
 
-Transcription auto-detects the spoken language. Moment detection and scoring are
-**language-aware**: the signal lexicons (hooks, emotion, payoff, weak openers,
-enumerations) exist for **English and German**, and the active set is chosen from
-the transcript's detected language — so a German talk gets German-tuned moment
-picks and scores. Pick *Auto-detect / English / German* at import, or set the
-default with the per-project language hint. Unknown languages fall back to English
-lexicons (transcription still works for any Whisper-supported language).
+Transcription auto-detects the spoken language (works for any Whisper-supported
+language). Moment detection and scoring are **language-aware**: signal lexicons
+(hooks, emotion, payoff, weak openers, enumerations) exist for **11 languages**,
+and the active set is chosen from the transcript's detected language.
+
+| Code | Language |
+| --- | --- |
+| DE | German |
+| EN | English |
+| FR | French |
+| ES | Spanish |
+| PT | Portuguese |
+| IT | Italian |
+| TR | Turkish |
+| JP | Japanese (romaji) |
+| NL | Dutch |
+| PL | Polish |
+| SV | Swedish |
+
+Pick *Auto-detect / English / German / ...* at import, or set a per-project
+language hint. Unknown languages fall back to English lexicons (transcription
+still works for any language Whisper supports).
+
+## CLI batch mode
+
+Process videos headless without the web UI. All pipeline features available
+from the command line:
+
+```bash
+# Basic usage
+python -m backend.cli batch --input video.mp4 --output ./clips
+
+# Platform presets
+python -m backend.cli batch --input video.mp4 --format tiktok
+
+# URL import (YouTube, Twitch, etc.)
+python -m backend.cli batch --input https://youtube.com/watch?v=... --json
+
+# Custom naming
+python -m backend.cli batch --input video.mp4 --name-pattern '{rank:02d}_{score:02d}_{title}'
+```
+
+Supports `--name-pattern` tokens: `{rank}`, `{title}`, `{score}`, `{id}`, `{duration}`.
+
+## Docker
+
+```bash
+docker compose up -d                    # CPU mode
+docker compose --profile gpu up -d      # NVIDIA GPU acceleration
+```
+
+Opens http://localhost:8000. Data persists in a named Docker volume.
 
 ## API overview
 
@@ -242,6 +288,8 @@ lexicons (transcription still works for any Whisper-supported language).
 | `GET` | `/api/projects/{id}/clips/{cid}/download` | Download one clip |
 | `POST` | `/api/projects/{id}/reprocess` | Re-run on the stored source (applies ratings/cues/overrides) |
 | `GET` | `/api/projects/{id}/clips/{cid}/captions.srt` | Caption sidecar for NLE editing |
+| `GET/POST/PUT/DELETE` | `/api/styles` | List / create / update / delete brand templates |
+| `DELETE` | `/api/projects/{id}/purge` | Forensic wipe — deletes project + all media from disk |
 | `POST` | `/api/projects/{id}/montage` | Stitch chosen clips into one scored montage |
 | `GET` | `/api/projects/{id}/montages/{mid}/download` | Download a montage |
 | `POST` | `/api/projects/{id}/clips/{cid}/feedback` | 👍/👎 a clip — teaches the local scorer |

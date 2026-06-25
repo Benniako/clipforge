@@ -359,6 +359,11 @@ def render_clip(clip: Clip, src_path: str, info: MediaInfo, style: StyleTemplate
         tail = ["-r", f"{fps:.3f}", "-movflags", "+faststart", out_abs]
 
         s = get_settings()
+        if s.use_nvenc:
+            # GPU-accelerated decoding: offloads video decoding to the GPU,
+            # reducing CPU load during the crop/scale/encode pipeline. Works
+            # with both h264_nvenc and av1_nvenc encoders.
+            base = ["-hwaccel", "cuda", "-hwaccel_output_format", "cuda"] + base
         encoders = [s.video_encoder_args()]
         if s.use_nvenc:                    # GPU path can fail at runtime -> CPU fallback
             encoders.append(_X264)

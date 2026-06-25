@@ -329,7 +329,11 @@ class Settings:
     # Concurrent *projects* in the pipeline. Default 1: transcription and the GPU
     # encoder are the bottlenecks, so a second project mostly contends; raise it
     # if you batch many small videos (transcription is internally serialized).
-    pipeline_workers: int = int(os.environ.get("CLIPFORGE_PIPELINE_WORKERS", "1"))
+    # Default 2: safe when GPU encoding is active (NVENC offloads encode to
+    # hardware, freeing the CPU for a second project). Bump higher for batches
+    # of short videos where I/O dominates. Set CLIPFORGE_PIPELINE_WORKERS=1 to
+    # revert to the sequential behaviour.
+    pipeline_workers: int = int(os.environ.get("CLIPFORGE_PIPELINE_WORKERS", "2"))
     # Upload / URL-import size cap in MB; 0 (default) = unlimited. A local
     # single-user tool processing your own VODs shouldn't reject them — set
     # this only to guard a small disk.
