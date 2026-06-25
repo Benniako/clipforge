@@ -5,6 +5,7 @@ import type { Clip, Project, Rect, StyleTemplate } from "../lib/types";
 import { fmtClock, fmtDuration } from "../lib/format";
 import { mediaTimeUrl } from "../lib/media";
 import { useT } from "../lib/i18n";
+import { useUndo, type UndoState } from "../lib/useUndo";
 import ScoreBadge from "../components/ScoreBadge";
 import PublishPanel from "../components/PublishPanel";
 
@@ -35,6 +36,25 @@ export default function ClipEditor() {
   const [aspect, setAspect] = useState<string>(""); // "" = project default
   const [capSpeakers, setCapSpeakers] = useState<number[] | null>(null); // null = all
   const [showShortcuts, setShowShortcuts] = useState(false);
+
+  // Undo/redo history.
+  const undo = useUndo({
+    title, start, end, styleId, cx, words, layout, cam, aspect, capSpeakers,
+  });
+  // Patch the undo system into the editor state — it records changes and
+  // lets us restore snapshots.
+  const applyUndo = useCallback((snapshot: UndoState) => {
+    setTitle(snapshot.title);
+    setStart(snapshot.start);
+    setEnd(snapshot.end);
+    setStyleId(snapshot.styleId);
+    setCx(snapshot.cx);
+    setWords(snapshot.words);
+    setLayout(snapshot.layout);
+    setCam(snapshot.cam);
+    setAspect(snapshot.aspect);
+    setCapSpeakers(snapshot.capSpeakers);
+  }, []);
 
   // Refs for keyboard-driven controls
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -103,6 +123,16 @@ export default function ClipEditor() {
           e.preventDefault();
           if (st.dirty && !st.busy) st.apply();
           break;
+        case "KeyZ":
+          if (e.metaKey || e.ctrlKey) {
+            e.preventDefault();
+            if (e.shiftKey) {
+              if (undo.canRedo) applyUndo(undo.redo());
+            } else {
+              if (undo.canUndo) applyUndo(undo.undo());
+            }
+          }
+          break;
         case "Slash":
           if (!e.shiftKey) {
             e.preventDefault();
@@ -117,6 +147,22 @@ export default function ClipEditor() {
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, []);
+
+  // Record undo snapshots when editor state changes.
+  const undoSnapshot = useRef<UndoState | null>(null);
+  useEffect(() => {
+    const snap = { title, start, end, styleId, cx, words, layout, cam, aspect, capSpeakers };
+    // Skip the initial hydration — only record user edits.
+    if (clip && !undoSnapshot.current) {
+      undoSnapshot.current = snap;
+      return;
+    }
+    // Only push when something actually changed.
+    if (clip && JSON.stringify(snap) !== JSON.stringify(undoSnapshot.current)) {
+      undo.set(snap);
+      undoSnapshot.current = snap;
+    }
+  }, [title, start, end, styleId, cx, words, layout, cam, aspect, capSpeakers, clip]);
   // Mutable refs so the keyboard handler always sees the latest state.
   const stateRef = useRef({
     start: 0, end: 0, srcDur: 0,
@@ -411,6 +457,16 @@ export default function ClipEditor() {
               {t("ce.srt")}
             </a>
           )}
+          <button className="btn sm ghost" disabled={!undo.canUndo}
+            onClick={() => applyUndo(undo.undo())}
+            title={t("ce.shortcutUndo")} style={{ fontWeight: undo.canUndo ? 600 : 400 }}>
+            ↩
+          </button>
+          <button className="btn sm ghost" disabled={!undo.canRedo}
+            onClick={() => applyUndo(undo.redo())}
+            title={t("ce.shortcutRedo")} style={{ fontWeight: undo.canRedo ? 600 : 400 }}>
+            ↪
+          </button>
           <button className="btn primary sm" onClick={apply} disabled={!dirty || busy}>
             {busy ? <><span className="spinner" /> {t("ce.applyRendering")}</> : t("ce.apply")}
           </button>
@@ -697,6 +753,8 @@ export default function ClipEditor() {
                 ["O", "ce.shortcutOut"],
                 ["← →", "ce.shortcutStepBack"],
                 ["⇧ ← →", "ce.shortcutFineBack"],
+                ["⌘Z", "ce.shortcutUndo"],
+                ["⌘⇧Z", "ce.shortcutRedo"],
                 ["Enter", "ce.shortcutApply"],
                 ["?", "ce.shortcuts"],
               ].map(([key, labelKey]) => (
