@@ -710,21 +710,84 @@ export default function ClipEditor() {
 
           <div className="panel section">
             <h3>{t("ce.captions")} <span className="muted tiny">{t("ce.captionsHint")}</span></h3>
-            <div className="caption-list">
-              {words.map((w, i) => (
-                <div className="caption-row" key={i}>
-                  <span className="t">{w.t.toFixed(1)}s</span>
-                  <input
-                    className="input"
-                    value={w.text}
-                    onChange={(e) => {
-                      const next = [...words];
-                      next[i] = { ...next[i], text: e.target.value };
-                      setWords(next);
-                    }}
-                  />
+            {/* Active word tracker — highlights the word currently spoken */}
+            <div className="caption-list" style={{ maxHeight: 300, overflowY: "auto" }}>
+              {words.length === 0 && (
+                <div className="muted tiny" style={{ padding: 12, textAlign: "center" }}>
+                  No captions for this clip.
                 </div>
-              ))}
+              )}
+              {words.map((w, i) => {
+                const isActive = videoRef.current
+                  ? Math.abs(videoRef.current.currentTime - w.t) < w.d
+                  : false;
+                return (
+                  <div
+                    className={"caption-row" + (isActive ? " active" : "")}
+                    key={i}
+                    style={{
+                      display: "flex", gap: 6, alignItems: "center",
+                      padding: "4px 0",
+                      background: isActive ? "var(--bg-hover)" : undefined,
+                      borderRadius: 4,
+                    }}
+                  >
+                    <span className="t muted" style={{
+                      minWidth: 48, fontSize: 11, fontFamily: "monospace",
+                      cursor: "pointer", userSelect: "none",
+                    }}
+                      onClick={() => {
+                        if (videoRef.current) videoRef.current.currentTime = w.t;
+                      }}
+                      title="Click to seek"
+                    >
+                      {w.t.toFixed(1)}s
+                    </span>
+                    <input
+                      className="input"
+                      value={w.text}
+                      style={{ flex: 1, fontSize: 13, padding: "4px 8px" }}
+                      onChange={(e) => {
+                        const next = [...words];
+                        next[i] = { ...next[i], text: e.target.value };
+                        setWords(next);
+                      }}
+                      onKeyDown={(e) => {
+                        // Tab to next word, Shift+Tab to previous
+                        if (e.key === "Tab") {
+                          e.preventDefault();
+                          const inputs = document.querySelectorAll(".caption-list input");
+                          const idx = Array.from(inputs).indexOf(e.currentTarget);
+                          const next = e.shiftKey
+                            ? inputs[Math.max(0, idx - 1)]
+                            : inputs[Math.min(inputs.length - 1, idx + 1)];
+                          (next as HTMLInputElement)?.focus();
+                        }
+                      }}
+                    />
+                    <button
+                      className="btn sm ghost"
+                      style={{ padding: "2px 6px", fontSize: 12, opacity: 0.6 }}
+                      onClick={() => {
+                        const next = words.filter((_, idx) => idx !== i);
+                        setWords(next);
+                      }}
+                      title={t("ce.deleteWord")}
+                    >
+                      ✕
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+            <div className="row" style={{ gap: 8, marginTop: 8 }}>
+              <button className="btn sm ghost" style={{ fontSize: 12 }}
+                onClick={() => {
+                  const lastT = words.length > 0 ? words[words.length - 1].t + words[words.length - 1].d : 0;
+                  setWords([...words, { t: lastT + 0.3, d: 0.3, text: "" }]);
+                }}>
+                + Add
+              </button>
             </div>
           </div>
 
