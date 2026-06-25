@@ -207,6 +207,7 @@ def compute_reframe(src: str, start: float, end: float, src_aspect: float,
             centers = _track_faces(src, start, end, speech)
             with _FACE_CACHE_LOCK:
                 if len(_FACE_CACHE) >= _FACE_CACHE_MAX:
+                    log.debug("face cache evicted (%d entries)", len(_FACE_CACHE))
                     _FACE_CACHE.clear()  # bounded: evict all when hit cap
                 _FACE_CACHE[cache_key] = centers
     if not centers:

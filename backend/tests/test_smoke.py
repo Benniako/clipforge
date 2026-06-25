@@ -8,7 +8,6 @@ from app.config import get_settings
 from app.models import ClipStatus, ImportSettings, Platform, Project, ProjectStatus
 from app.pipeline import ingest
 from app.pipeline.orchestrator import engine
-from app.media import ffmpeg
 
 pytestmark = [pytest.mark.slow, pytest.mark.skipif(
     not shutil.which(get_settings().ffmpeg or "ffmpeg"),

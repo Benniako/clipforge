@@ -17,14 +17,11 @@ no OCR dependency so they're unit-tested without a backend.
 """
 from __future__ import annotations
 
-import hashlib
-import json
 import logging
 import os
 import re
 import tempfile
 import threading
-import time
 import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
@@ -584,7 +581,6 @@ def _ocr_image_conf(path: str, engine: str, lang: str = "en") -> tuple[str, floa
             # ("VICTORY", "MATCH WON") and short banners, not dense paragraphs.
             # The default PSM 3 assumes a book page and hallucinates punctuation/
             # garbage trying to find sentence structure where there is none.
-            from PIL import Image
             with Image.open(path) as _pil:
                 return (pytesseract.image_to_string(
                     _pil, config=f"--psm 11 --lang {tesseract_lang}"),

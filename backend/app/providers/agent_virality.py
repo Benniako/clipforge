@@ -12,7 +12,6 @@ single-shot LLM scorer without any behavioural change.
 from __future__ import annotations
 
 import logging
-from typing import Any
 
 log = logging.getLogger("clipforge.agent_virality")
 
