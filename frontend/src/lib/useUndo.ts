@@ -52,16 +52,19 @@ export function useUndo(initial: UndoState) {
 
   const undo = useCallback(() => {
     const prev = past.current.pop();
-    if (!prev) return;
+    if (!prev) return state;
     future.current = [...future.current, state];
     setState(prev);
+    return prev;
   }, [state]);
 
   const redo = useCallback(() => {
     const next = future.current.pop();
-    if (!next) return;
+    if (!next) return state;
     past.current = [...past.current, state];
     setState(next);
+    return next;
+  }, [state]);
   }, [state]);
 
   const reset = useCallback((newState: UndoState) => {

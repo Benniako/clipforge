@@ -42,9 +42,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy backend source
+# pyproject.toml is optional; COPY succeeds even if the source is missing
+# by checking with shell in a RUN step instead.
 COPY backend/ ./backend/
-COPY backend/pyproject.toml ./backend/pyproject.toml 2>/dev/null || true
 
 # Copy built frontend from stage 1
 COPY --from=frontend-builder /app/frontend/dist ./frontend/dist

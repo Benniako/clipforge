@@ -61,11 +61,12 @@ export default function ClipEditor() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const videoWrapperRef = useRef<HTMLDivElement | null>(null);
 
-  // Keyboard shortcuts for the editor. Uses refs so the handler never goes stale.
+  // Keyboard shortcut ref — values are written by a useEffect below once all
+  // variables are initialized, so the handler never goes stale.
   const keyboardRefs = useRef({
-    start, end, srcDur, dirty, busy, apply: async () => {},
+    start: 0, end: 0, srcDur: 0, dirty: false, busy: false,
+    apply: async () => {},
   });
-  keyboardRefs.current = { start, end, srcDur, dirty, busy, apply };
   
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -148,6 +149,11 @@ export default function ClipEditor() {
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, []);
+
+  // Keep keyboard ref in sync with live variables (avoids TS hoisting errors).
+  useEffect(() => {
+    keyboardRefs.current = { start, end, srcDur, dirty, busy, apply };
+  });
 
   // Record undo snapshots when editor state changes.
   const undoSnapshot = useRef<UndoState | null>(null);
