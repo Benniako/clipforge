@@ -23,10 +23,10 @@
     },
     "phase-4": {
       "label": "Moats (watch folder, privacy mode, plugin system)",
-      "status": "pending",
-      "commits": []
+      "status": "done",
+      "commits": ["7a453f5"]
     }
   },
   "current_phase": "phase-4",
-  "last_updated": "2026-06-25T14:00:00Z"
+  "last_updated": "2026-06-25T14:30:00Z"
 }
