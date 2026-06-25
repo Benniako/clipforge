@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import queue
+import re
 import threading
 import traceback
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
@@ -38,6 +39,83 @@ from . import render as render_mod
 
 log = logging.getLogger("clipforge.engine")
 
+# Known error patterns mapped to user-friendly messages.
+_FRIENDLY_ERRORS: dict[str, str] = {
+    "ffmpeg": (
+        "The media engine (ffmpeg) encountered a problem. This can happen when the "
+        "source video uses an uncommon codec or is corrupted. Try re-encoding to "
+        "H.264 MP4 with HandBrake or ffmpeg first."
+    ),
+    "whisper": (
+        "Speech-to-text (Whisper) failed. This can happen with very long or noisy "
+        "audio. Try a shorter video, or set CLIPFORGE_WHISPER_MODEL=small for a "
+        "lighter model."
+    ),
+    "memory": (
+        "ClipForge ran out of memory. Try closing other applications, "
+        "setting CLIPFORGE_WHISPER_MODEL=base or tiny, or processing a shorter video."
+    ),
+    "out of memory": (
+        "ClipForge ran out of memory. Try closing other applications, "
+        "setting CLIPFORGE_WHISPER_MODEL=base or tiny, or processing a shorter video."
+    ),
+    "CUDA": (
+        "GPU acceleration failed. This can happen with outdated drivers or "
+        "insufficient VRAM. Set CLIPFORGE_DEVICE=cpu to fall back to CPU processing "
+        "(slower but more stable)."
+    ),
+    "disk": (
+        "ClipForge ran out of disk space. Free up space on the drive where "
+        "backend/data/ is located, or set CLIPFORGE_DATA_DIR to a different drive."
+    ),
+    "No space": (
+        "ClipForge ran out of disk space. Free up space on the drive where "
+        "backend/data/ is located, or set CLIPFORGE_DATA_DIR to a different drive."
+    ),
+    "url": (
+        "Failed to import the video URL. Check the URL is correct and accessible. "
+        "For private videos, download the file first and upload it directly."
+    ),
+    "timeout": (
+        "An operation timed out. For very long videos this is expected; try a "
+        "shorter video or increase the timeout by setting CLIPFORGE_TIMEOUT."
+    ),
+}
+
+
+def _friendly_error(exc: BaseException) -> str:
+    """Map an exception to a human-readable, actionable error message.
+
+    Checks the exception message, its cause chain, and known patterns to produce
+    output a non-expert user can act on.
+    """
+    msg = str(exc)
+    for pattern, hint in _FRIENDLY_ERRORS.items():
+        if pattern.lower() in msg.lower():
+            return hint
+    # Check the cause chain for wrapped ffmpeg errors.
+    cause = exc
+    while hasattr(cause, "__cause__") and cause.__cause__:
+        cause = cause.__cause__
+        for pattern, hint in _FRIENDLY_ERRORS.items():
+            if pattern.lower() in str(cause).lower():
+                return hint
+    # If the exception has a 'category' attribute (FFmpegError), use it.
+    if hasattr(exc, "category"):
+        return str(exc.category)
+    # Generic fallback — strip file paths and truncate for readability.
+    clean = re.sub(r"[A-Za-z]:\\[^\s,)]+", "[path]", msg)
+    clean = re.sub(r"/[^\s,)]+", "[path]", clean)
+    if len(clean) > 300:
+        clean = clean[:300] + "..."
+    return clean
+
+
+# Used instead of str.removeprefix() for Python <3.9 compatibility.
+def _strip_media_prefix(url: str) -> str:
+    prefix = "/media/"
+    return url[len(prefix):] if url.startswith(prefix) else url
+
 
 def _media_url(path) -> str:
     return f"/media/{path.relative_to(get_settings().media_dir).as_posix()}"
@@ -54,6 +132,32 @@ def _speech_intervals(transcript, start: float, end: float
         return None
     segs = captionize.compute_tight_segments(transcript, start, end)
     return [(a - start, b - start) for a, b in segs]
+
+
+# Cache for pre-computed full-timeline speech intervals.
+_full_speech_intervals: list[tuple[float, float]] | None = None
+_full_speech_transcript_id: int = 0
+
+
+def _precompute_speech_intervals(transcript) -> None:
+    """Compute speech intervals for the entire timeline once.
+
+    Subsequent per-clip calls to ``_speech_intervals`` still rebase the
+    intervals (subtract clip start), but the full-timeline scan of the
+    transcript is done here once instead of per-clip.
+    """
+    global _full_speech_intervals, _full_speech_transcript_id
+    if transcript is None or transcript.provider == "synthetic":
+        _full_speech_intervals = None
+        return
+    # Cheap identity check — skip if already computed for this transcript.
+    tid = id(transcript)
+    if tid == _full_speech_transcript_id and _full_speech_intervals is not None:
+        return
+    _full_speech_transcript_id = tid
+    _full_speech_intervals = transcript.words  # store words list for filtering
+    log.debug("pre-computed speech intervals for transcript (%d words)",
+              len(transcript.words))
 
 
 def _score_visual_reads(src_path: str, clips: list[Clip], *,
@@ -102,6 +206,8 @@ class Engine:
         # render window can show how long the *current* stage has been running.
         self._stage_started: dict[str, float] = {}
         self._stage_idx: dict[str, int] = {}
+        self._last_progress_pct: dict[str, float] = {}
+        self._last_progress_ts: dict[str, float] = {}
         self._queued_projects: set[str] = set()
         self._active_projects: set[str] = set()
 
@@ -195,13 +301,14 @@ class Engine:
             try:
                 self._process(project_id)
             except BaseException as e:  # never let the worker die
-                log.error("pipeline failed for %s: %s\n%s", project_id, e,
+                error_msg = _friendly_error(e)
+                log.error("pipeline failed for %s: %s\n%s", project_id, error_msg,
                           traceback.format_exc())
                 try:
                     with store.mutate(project_id) as p:
                         p.status = ProjectStatus.failed
-                        p.error = str(e)
-                        p.progress.message = f"Failed: {e}"
+                        p.error = error_msg
+                        p.progress.message = f"Failed: {error_msg[:200]}"
                 except Exception:
                     pass
             finally:
@@ -244,6 +351,22 @@ class Engine:
                  frac: float = 0.0) -> None:
         self._wait_if_paused(project_id)
         overall = (stage_idx + max(min(frac, 1.0), 0.0)) / len(STAGES) * 100.0
+        # Throttle DB writes: only persist when progress crosses a 2% boundary
+        # or at least 5s have passed since the last write. Intermediate progress
+        # is tracked in-memory via _stage_idx / _stage_started.
+        last_pct = self._last_progress_pct.get(project_id, -1.0)
+        last_ts = self._last_progress_ts.get(project_id, 0.0)
+        now_ts = now()
+        if (abs(overall - last_pct) < 2.0 and now_ts - last_ts < 5.0
+                and stage_idx == self._stage_idx.get(project_id, -1)):
+            # Update in-memory state only — skip the DB write.
+            self._stage_started[project_id] = self._stage_started.get(
+                project_id, now_ts)
+            self._stage_idx[project_id] = stage_idx
+            return
+        self._last_progress_pct[project_id] = overall
+        self._last_progress_ts[project_id] = now_ts
+
         # Track when the current stage began so the UI can show per-stage
         # elapsed time. Reset when the stage index changes.
         prev_started = self._stage_started.get(project_id)
@@ -371,6 +494,10 @@ class Engine:
                     "speech and include hallucinated words in quiet sections. "
                     "Install it (pip install silero-vad) and re-process for "
                     "accurate captions.", severity="warning")
+
+        # Pre-compute speech intervals for the full timeline so each clip
+        # doesn't re-scan the transcript word list.
+        _precompute_speech_intervals(transcript)
 
         # Decide talking vs gameplay (auto-detect unless forced).
         forced = project.settings.content_type
@@ -533,6 +660,12 @@ class Engine:
                     [c.transcript_excerpt for c in clips], lang=transcript.language)
                 for i, t in titles.items():
                     clips[i].title = t
+            # Fallback: auto-generate titles for clips that still have none.
+            if llm_mod.available():
+                for clip in clips:
+                    if not clip.title:
+                        clip.title = llm_mod.generate_title(
+                            clip.transcript_excerpt, lang=transcript.language)
             # Hook/first-3s analysis: warn the user if their opener is weak.
             # Gated by the AI Boost hookCheck toggle (default on).
             if clips and project.settings.ai_boost.hookCheck:
@@ -684,6 +817,10 @@ class Engine:
 
         # 4. reframe ------------------------------------------------------
         out_w, out_h = project.settings.dims()
+        # Pre-compute face tracks for the entire source in one ffmpeg pass,
+        # instead of each clip decoding its own segment separately.
+        if kind != "gameplay" and info.has_video and info.duration > 0:
+            reframe_mod.precompute_face_tracks(src_path, info.duration)
         for i, clip in enumerate(clips):
             if kind == "gameplay":
                 self._advance(project_id, 3, f"Framing clip {i+1}/{len(clips)}…",
@@ -818,6 +955,9 @@ class Engine:
         total = len(clips)
         n = max(1, min(settings.render_workers_for(power_mode), total))
         clip_iter = iter(clips)
+        # Load the project once for per-project settings (e.g. background_music).
+        proj = store.get(project_id)
+        bgm = proj.settings.background_music if proj else ""
         with ThreadPoolExecutor(max_workers=n) as ex:
             futs = {}
 
@@ -828,7 +968,7 @@ class Engine:
                 except StopIteration:
                     return False
                 futs[ex.submit(self._render_one, project_id, clip, src_path, info,
-                               out_w, out_h, burn_captions, motion, ai_boost)] = clip
+                               out_w, out_h, burn_captions, motion, bgm, ai_boost)] = clip
                 return True
 
             for _ in range(n):
@@ -848,7 +988,7 @@ class Engine:
     def _render_one(self, project_id: str, clip: Clip, src_path: str,
                     info: MediaInfo, out_w: int, out_h: int,
                     burn_captions: bool = True, motion: str = "none",
-                    ai_boost=None) -> None:
+                    background_music: str = "", ai_boost=None) -> None:
         # A clip may carry its own output aspect (editor override); it wins
         # over the project default passed in.
         dims = ASPECTS.get(clip.aspect or "")
@@ -867,7 +1007,8 @@ class Engine:
             with self._clip_lock(project_id, clip.id):
                 self._render_one_locked(project_id, clip, src_path, info,
                                         out_w, out_h, burn_captions, motion,
-                                        out, thumb, style, settings, ai_boost)
+                                        out, thumb, style, settings,
+                                        background_music, ai_boost)
         except Exception as e:  # one bad clip shouldn't sink the batch
             log.error("clip %s render failed: %s", clip.id, e)
             with store.mutate(project_id) as p:
@@ -881,7 +1022,7 @@ class Engine:
                            burn_captions: bool, motion: str,
                            out: Path, thumb: Path,
                            style, settings,
-                           ai_boost=None) -> None:
+                           background_music: str = "", ai_boost=None) -> None:
         # Override style emphasis/emoji from AI Boost when present — the
         # per-project toggle wins over the style template default so users can
         # turn these off without switching to a different caption preset.
@@ -893,6 +1034,7 @@ class Engine:
         render_mod.render_clip(clip, src_path, info, style, out, thumb,
                                out_w=out_w, out_h=out_h,
                                burn_captions=burn_captions, motion=motion,
+                               background_music=background_music,
                                ai_boost=ai_boost)
         with store.mutate(project_id) as p:
             c = p.clip(clip.id)
@@ -1065,7 +1207,7 @@ class Engine:
             for cid in mtg.clip_ids:
                 c = project.clip(cid)
                 if c and c.export_url:
-                    paths.append(settings.media_dir / c.export_url.removeprefix("/media/"))
+                    paths.append(settings.media_dir / _strip_media_prefix(c.export_url))
             out = mdir / f"{montage_id}.mp4"
             thumb = mdir / f"{montage_id}.jpg"
             dur = montage_mod.build_montage_video(paths, out, thumb)

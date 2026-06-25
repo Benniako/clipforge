@@ -1,0 +1,21 @@
+{
+  "branch": "Product-Alpha",
+  "phases": {
+    "phase-0":{"label":"Foundation","status":"done"},
+    "phase-1":{"label":"Editor UX","status":"done"},
+    "phase-2":{"label":"Languages (FR,ES,PT,IT)","status":"done"},
+    "phase-3":{"label":"Feature parity","status":"done"},
+    "phase-4":{"label":"Moats","status":"done"},
+    "phase-5":{"label":"Release v0.2.0","status":"done"},
+    "phase-6":{"label":"Languages (TR,JP,NL,PL,SV)","status":"done"},
+    "phase-7":{"label":"Test coverage","status":"done"},
+    "phase-8":{"label":"Features (waveform,thumbnails)","status":"done"},
+    "phase-9":{"label":"Stabilization","status":"done"},
+    "phase-10":{"label":"QoL (bg music,titles,name-pattern)","status":"done"},
+    "phase-11":{"label":"README overhaul + feature docs","status":"done"},
+    "phase-12":{"label":"Example plugins","status":"done"},
+    "phase-13":{"label":"Performance (GPU decode, parallel workers)","status":"done"}
+  },
+  "current_phase": "complete",
+  "last_updated": "2026-06-25T16:00:00Z"
+}

@@ -5,6 +5,7 @@ import type { CuesStatus } from "../lib/api";
 import type { Health, ProjectSummary, StyleTemplate } from "../lib/types";
 import { fmtDuration, timeAgo } from "../lib/format";
 import { useT } from "../lib/i18n";
+import Toast from "../components/Toast";
 import CueLab from "../components/CueLab";
 import CueManager from "../components/CueManager";
 import Toggle from "../components/Toggle";
@@ -120,6 +121,10 @@ export default function Upload({ health }: { health: Health | null }) {
   const submit = async () => {
     if (!file && !url.trim()) {
       setErr(t("up.errNoSource"));
+      return;
+    }
+    if (url.trim() && !url.trim().match(/^https?:\/\/.+/)) {
+      setErr("Invalid URL — must start with http:// or https://");
       return;
     }
     setErr(null);
@@ -706,6 +711,10 @@ export default function Upload({ health }: { health: Health | null }) {
           {busy ? (
             pct < 100 && file ? (
               <>{t("up.uploading", { pct })}</>
+            ) : url ? (
+              <>
+                <span className="spinner" /> {t("up.downloading")}
+              </>
             ) : (
               <>
                 <span className="spinner" /> {t("up.starting")}
@@ -716,11 +725,7 @@ export default function Upload({ health }: { health: Health | null }) {
           )}
         </button>
       </div>
-      {err && (
-        <div className="toast err" onClick={() => setErr(null)}>
-          {err}
-        </div>
-      )}
+      {err && <Toast msg={{ text: err, type: "error", duration: 5000 }} onDone={() => setErr(null)} />}
 
       {projects.length > 0 && (
         <div style={{ marginTop: 44 }}>

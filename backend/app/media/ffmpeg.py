@@ -6,6 +6,7 @@ single place for binary resolution, error surfacing, and logging.
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from dataclasses import dataclass
 from functools import lru_cache
@@ -14,15 +15,79 @@ from pathlib import Path
 from ..config import get_settings
 
 
+_COMMON_ERRORS: dict[str, tuple[str, str]] = {
+    "Invalid data found when processing": (
+        "corrupt or non-video file",
+        "The input file isn't a valid video. Check it plays in a regular player.",
+    ),
+    "No such file or directory": (
+        "file not found",
+        "The input path doesn't exist. Check the file path and try again.",
+    ),
+    "Unknown encoder": (
+        "encoder not available",
+        "Your ffmpeg build doesn't include this encoder. Try 'libx264' instead of hardware encoding, "
+        "or install a ffmpeg build with the required encoder.",
+    ),
+    "encoder not found": (
+        "encoder not available",
+        "Your ffmpeg build doesn't include this encoder. Try 'libx264' instead of hardware encoding, "
+        "or install a ffmpeg build with the required encoder.",
+    ),
+    "Connection refused": (
+        "network error",
+        "Could not connect to the remote server. Check your internet connection and the URL.",
+    ),
+    "Protocol not found": (
+        "unsupported protocol",
+        "The input URL scheme isn't supported. Use a direct video URL or download the file first.",
+    ),
+    "Error while decoding": (
+        "decoding error",
+        "ffmpeg couldn't decode a part of this video. The file may be corrupted. Try re-encoding it first.",
+    ),
+    "Invalid argument": (
+        "invalid argument",
+        "An ffmpeg flag or value was invalid. This is likely a bug — check the command.",
+    ),
+    "Permission denied": (
+        "permission denied",
+        "Can't read the input file or write to the output. Check file permissions.",
+    ),
+    "codec not supported": (
+        "unsupported codec",
+        "This video uses a codec ffmpeg can't handle. Try re-encoding to H.264 first.",
+    ),
+}
+
+
+def _categorize_ffmpeg_error(stderr: str) -> str:
+    """Try to match common ffmpeg errors to human-readable messages."""
+    for pattern, (category, hint) in _COMMON_ERRORS.items():
+        if pattern.lower() in stderr.lower():
+            return f"{category}: {hint}"
+    # Generic fallback — try to extract the most relevant line.
+    lines = [l.strip() for l in stderr.splitlines() if l.strip()]
+    # Skip informational lines, find the actual error.
+    for line in lines:
+        if any(kw in line.lower() for kw in ("error", "unable", "failed", "cannot")):
+            return line[:200]
+    # Last resort: show the last non-empty line.
+    return (lines[-1][:200] if lines else "unknown ffmpeg error")
+
+
 class FFmpegError(RuntimeError):
-    """Raised when ffmpeg/ffprobe exits non-zero. Carries the tail of stderr."""
+    """Raised when ffmpeg/ffprobe exits non-zero. Carries a human-readable error."""
 
     def __init__(self, cmd: list[str], returncode: int, stderr: str):
         self.cmd = cmd
         self.returncode = returncode
         self.stderr = stderr
-        tail = "\n".join(stderr.strip().splitlines()[-12:])
-        super().__init__(f"ffmpeg exited {returncode}\n{tail}")
+        self.category = _categorize_ffmpeg_error(stderr)
+        # Build a concise message: category + last 3 lines of stderr for context.
+        tail_lines = [l.strip() for l in stderr.strip().splitlines() if l.strip()][-3:]
+        tail = "\n".join(tail_lines) if tail_lines else "(no details)"
+        super().__init__(f"ffmpeg: {self.category}\n{tail}")
 
 
 @dataclass
@@ -119,8 +184,6 @@ def _parse_ffprobe(data: dict) -> MediaInfo:
 
 
 def _probe_with_ffmpeg(path: str) -> MediaInfo:
-    import re
-
     cmd = [_ffmpeg_bin(), "-hide_banner", "-i", path]
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60)

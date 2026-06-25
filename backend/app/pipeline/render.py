@@ -184,78 +184,14 @@ def _composed_graph(clip: Clip, cam: Rect, info: MediaInfo,
     return lines
 
 
-def _make_thumbnail(out_path: Path, thumb_path: Path, *, at: float,
-                    width: int, title: str | None = None) -> None:
-    """Extract a thumbnail frame and optionally overlay the clip title.
 
-    When a local diffusion model is wired (``providers.image_gen.detected()``)
-    and a title is available, generate a stylised cover image from the title
-    instead of grabbing a video frame.
-    """
-    if title:
-        from ..providers import image_gen
-        if image_gen.detected():
-            try:
-                gen = image_gen.generate(title, dst=thumb_path)
-                if gen and gen.exists():
-                    return
-            except Exception as e:
-                log.debug("image-gen thumbnail failed (%s); falling back to frame", e)
-    ffmpeg.make_thumbnail(out_path, thumb_path, at=at, width=width)
-    if not title:
-        return
-    try:
-        from PIL import Image, ImageDraw, ImageFont
-        import numpy as np
-        with Image.open(thumb_path) as _pil_img:
-            img = _pil_img.convert("RGB")
-            w, h = img.size
-            draw = ImageDraw.Draw(img)
-            # Semi-transparent gradient at bottom for text legibility.
-            grad_h = max(h // 3, 30)
-            grad = np.zeros((grad_h, w, 4), dtype=np.uint8)
-            for y in range(grad_h):
-                alpha = int(180 * (1.0 - min(y / grad_h, 1.0)))
-                grad[y, :, 3] = alpha
-            gradient = Image.fromarray(grad, mode="RGBA")
-            img = Image.alpha_composite(img.convert("RGBA"), gradient).convert("RGB")
-            draw = ImageDraw.Draw(img)
-            font_size = max(int(w * 0.065), 20)
-            try:
-                font = ImageFont.truetype("DejaVuSans-Bold.ttf", font_size)
-            except OSError:
-                font = ImageFont.load_default()
-            # Word-wrap title to thumbnail width (minus 24px padding).
-            words = (title or "").split()
-            lines, line = [], ""
-            max_w = w - 32
-            for wd in words:
-                test = f"{line} {wd}" if line else wd
-                bw = draw.textbbox((0, 0), test, font=font)[2]
-                if bw > max_w and line:
-                    lines.append(line)
-                    line = wd
-                else:
-                    line = test
-            if line:
-                lines.append(line)
-            line_h = int(font_size * 1.35)
-            total_h = len(lines) * line_h
-            start_y = h - 20 - total_h
-            for i, l in enumerate(lines):
-                bw = draw.textbbox((0, 0), l, font=font)[2]
-                tx = (w - bw) / 2
-                draw.text((tx, start_y + i * line_h), l, fill="white",
-                          font=font, stroke_width=3, stroke_color="black")
-            img.save(thumb_path, quality=90)
-    except Exception as e:
-        log.debug("title overlay on thumbnail failed: %s", e)
+
 
 
 def render_clip(clip: Clip, src_path: str, info: MediaInfo, style: StyleTemplate,
                 out_path: Path, thumb_path: Path, *, out_w: int, out_h: int,
                 burn_captions: bool = True, motion: str = "none",
-                ai_boost=None) -> None:
+                background_music: str = "", ai_boost=None) -> None:
     """Render ``clip`` from ``src_path`` into ``out_path`` (+ a thumbnail).
 
     With ``burn_captions=False`` the clip is reframed/encoded but left clean — for
@@ -267,6 +203,9 @@ def render_clip(clip: Clip, src_path: str, info: MediaInfo, style: StyleTemplate
     ImportSettings). When provided, its flags gate the auto-zoom punch-ins, B-roll
     cutaways, and speaker-colour passes so the per-project AI Boost toggles actually
     control rendering behaviour.
+
+    ``background_music`` is a path to an audio file mixed at low volume behind
+    the clip audio. Empty string (default) omits the background track.
     """
     cw, ch, x_arg = build_crop(clip, info.width, info.height, out_w, out_h)
     static = x_arg.lstrip("-").isdigit()
@@ -419,9 +358,30 @@ def render_clip(clip: Clip, src_path: str, info: MediaInfo, style: StyleTemplate
                          "-c:a", "aac", "-b:a", "128k", "-ac", "2"]
             else:
                 audio = ["-an"]
+
+        # Background music overlay: mix a second audio track at low volume.
+        bgm = background_music.strip()
+        if bgm and os.path.exists(bgm) and info.has_audio and audio != ["-an"]:
+            bgm_abs = os.path.abspath(bgm)
+            # Insert the music file as an additional input, then use amix.
+            base.insert(-1, "-i")
+            base.insert(-1, bgm_abs)
+            # Replace audio args with filtered complex featuring amix.
+            audio = [
+                "-filter_complex",
+                "[0:a]loudnorm=I=-16:TP=-1.5:LRA=11,volume=1.0[voice];"
+                "[1:a]volume=0.15[bgm];"
+                "[voice][bgm]amix=inputs=2:duration=first:dropout_transition=2[ao]",
+                "-map", "[ao]", "-c:a", "aac", "-b:a", "128k", "-ac", "2",
+            ]
         tail = ["-r", f"{fps:.3f}", "-movflags", "+faststart", out_abs]
 
         s = get_settings()
+        if s.use_nvenc:
+            # GPU-accelerated decoding: offloads video decoding to the GPU,
+            # reducing CPU load during the crop/scale/encode pipeline. Works
+            # with both h264_nvenc and av1_nvenc encoders.
+            base = ["-hwaccel", "cuda", "-hwaccel_output_format", "cuda"] + base
         encoders = [s.video_encoder_args()]
         if s.use_nvenc:                    # GPU path can fail at runtime -> CPU fallback
             encoders.append(_X264)
@@ -441,5 +401,111 @@ def render_clip(clip: Clip, src_path: str, info: MediaInfo, style: StyleTemplate
     # adds a bottom gradient, then overlays the clip's AI-generated title in bold
     # white text. Gives a "YouTube thumbnail" look without any external API.
     at = min(max(eff_dur * 0.35, 0.5), max(eff_dur - 0.1, 0.0))
-    _make_thumbnail(out_path, thumb_path, at=at, width=540,
+    _make_thumbnail(out_path, thumb_path, at=at, width=540, duration=eff_dur,
                     title=getattr(clip, "title", None))
+
+def _make_thumbnail(out_path: Path, thumb_path: Path, *, at: float,
+                    width: int, title: str | None = None,
+                    duration: float | None = None) -> None:
+    """Extract a thumbnail frame and optionally overlay the clip title.
+
+    When ``duration`` is known, samples frames across the clip and uses face
+    detection to pick the frame with the strongest face presence. Falls back
+    to the centre frame when no face is found, or to the ``at`` parameter
+    when ``duration`` is not provided.
+    """
+    best_at = _pick_thumbnail_at(out_path, duration or 0.0, at, width)
+    ffmpeg.make_thumbnail(out_path, thumb_path, at=best_at, width=width)
+    if not title:
+        return
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+        import numpy as np
+        img = Image.open(thumb_path).convert("RGB")
+        w, h = img.size
+        draw = ImageDraw.Draw(img)
+        # Semi-transparent gradient at bottom for text legibility.
+        grad_h = max(h // 3, 30)
+        grad = np.zeros((grad_h, w, 4), dtype=np.uint8)
+        for y in range(grad_h):
+            alpha = int(180 * (1.0 - min(y / grad_h, 1.0)))
+            grad[y, :, 3] = alpha
+        gradient = Image.fromarray(grad, mode="RGBA")
+        img = Image.alpha_composite(img.convert("RGBA"), gradient).convert("RGB")
+        draw = ImageDraw.Draw(img)
+        font_size = max(int(w * 0.065), 20)
+        try:
+            font = ImageFont.truetype("DejaVuSans-Bold.ttf", font_size)
+        except OSError:
+            font = ImageFont.load_default()
+        # Word-wrap title to thumbnail width (minus 24px padding).
+        words = (title or "").split()
+        lines, line = [], ""
+        max_w = w - 32
+        for wd in words:
+            test = f"{line} {wd}" if line else wd
+            bw = draw.textbbox((0, 0), test, font=font)[2]
+            if bw > max_w and line:
+                lines.append(line)
+                line = wd
+            else:
+                line = test
+        if line:
+            lines.append(line)
+        line_h = int(font_size * 1.35)
+        total_h = len(lines) * line_h
+        start_y = h - 20 - total_h
+        for i, l in enumerate(lines):
+            bw = draw.textbbox((0, 0), l, font=font)[2]
+            tx = (w - bw) / 2
+            draw.text((tx, start_y + i * line_h), l, fill="white",
+                      font=font, stroke_width=3, stroke_color="black")
+        img.save(thumb_path, quality=90)
+    except Exception as e:
+        log.debug("title overlay on thumbnail failed: %s", e)
+
+
+def _pick_thumbnail_at(out_path: Path, duration: float, default_at: float,
+                       width: int) -> float:
+    """Sample frames across the clip and pick the one with the most face presence.
+
+    Uses OpenCV + face detection (YOLOv8-face / YuNet / Haar cascade). Returns
+    the center frame when face detection is unavailable or no faces are found.
+    """
+    if duration <= 0.5:
+        return default_at
+
+    try:
+        import cv2
+        import tempfile
+        from ..media.faces import detect_faces
+    except Exception:
+        return default_at
+
+    n_samples = 7
+    timestamps = [duration * (i + 1) / (n_samples + 1) for i in range(n_samples)]
+    best_score = -1.0
+    best_t = duration * 0.5  # fallback: center frame
+
+    for t in timestamps:
+        try:
+            with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+                tmp_path = Path(tmp.name)
+            ffmpeg.make_thumbnail(out_path, tmp_path, at=t, width=width)
+            img = cv2.imread(str(tmp_path))
+            tmp_path.unlink(missing_ok=True)
+            if img is None:
+                continue
+            faces = detect_faces(img, min_size_frac=0.03)
+            if faces:
+                # Score = number of faces * average face area fraction
+                h, w = img.shape[:2]
+                total_area = sum(fw * fh for _, _, fw, fh in faces)
+                score = len(faces) * (total_area / (w * h))
+                if score > best_score:
+                    best_score = score
+                    best_t = t
+        except Exception:
+            continue
+
+    return best_t

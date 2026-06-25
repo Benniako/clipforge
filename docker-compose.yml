@@ -1,0 +1,69 @@
+# ClipForge — Docker Compose
+#
+# Quick start:
+#   docker compose up -d
+#   Open http://localhost:8000
+#
+# With NVIDIA GPU acceleration:
+#   docker compose --profile gpu up -d
+#
+# Environment variables (override via .env or shell):
+#   CLIPFORGE_WHISPER_MODEL  — Whisper model size (default: auto-selected)
+#   CLIPFORGE_DEVICE         — "cuda" or "cpu" (default: auto-detected)
+#   CLIPFORGE_RENDER_WORKERS — parallel render threads (default: auto)
+#   CLIPFORGE_OLLAMA_URL     — Ollama server URL for AI titles (default: none)
+#   HF_TOKEN                 — Hugging Face token for whisperX diarization
+#   CLIPFORGE_PORT           — host port to map (default: 8000)
+
+x-clipforge-base: &clipforge-base
+  build: .
+  image: clipforge:latest
+  restart: unless-stopped
+  volumes:
+    - clipforge-data:/app/backend/data
+  healthcheck:
+    test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/ready')"]
+    interval: 30s
+    timeout: 5s
+    start_period: 15s
+    retries: 3
+
+services:
+  clipforge:
+    <<: *clipforge-base
+    container_name: clipforge
+    ports:
+      - "${CLIPFORGE_PORT:-8000}:8000"
+    environment:
+      - CLIPFORGE_WHISPER_MODEL=${CLIPFORGE_WHISPER_MODEL:-}
+      - CLIPFORGE_DEVICE=${CLIPFORGE_DEVICE:-cpu}
+      - CLIPFORGE_RENDER_WORKERS=${CLIPFORGE_RENDER_WORKERS:-}
+      - CLIPFORGE_OLLAMA_URL=${CLIPFORGE_OLLAMA_URL:-}
+      - HF_TOKEN=${HF_TOKEN:-}
+      - CLIPFORGE_MAX_UPLOAD_MB=${CLIPFORGE_MAX_UPLOAD_MB:-0}
+
+  # GPU-accelerated — requires nvidia-container-toolkit
+  clipforge-gpu:
+    <<: *clipforge-base
+    profiles: ["gpu"]
+    container_name: clipforge-gpu
+    ports:
+      - "${CLIPFORGE_PORT:-8000}:8000"
+    environment:
+      - CLIPFORGE_DEVICE=cuda
+      - CLIPFORGE_WHISPER_MODEL=${CLIPFORGE_WHISPER_MODEL:-large-v3-turbo}
+      - CLIPFORGE_RENDER_WORKERS=${CLIPFORGE_RENDER_WORKERS:-4}
+      - CLIPFORGE_OLLAMA_URL=${CLIPFORGE_OLLAMA_URL:-}
+      - HF_TOKEN=${HF_TOKEN:-}
+      - CLIPFORGE_MAX_UPLOAD_MB=${CLIPFORGE_MAX_UPLOAD_MB:-0}
+      - NVIDIA_VISIBLE_DEVICES=all
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu, compute, video]
+
+volumes:
+  clipforge-data:

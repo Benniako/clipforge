@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, Product-Alpha]
   pull_request:
   schedule:
     - cron: "0 6 * * 1"  # every Monday 06:00 UTC
@@ -33,6 +33,18 @@ jobs:
         run: |
           pip install pytest-cov
           python -m pytest --cov=app --cov-report=term-missing --cov-report=xml tests/test_units.py || true
+      - name: Integration tests (API + models + CLI)
+        working-directory: backend
+        run: python -m pytest tests/test_integration.py -v --tb=short
+
+  docker-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Check Dockerfile syntax
+        run: docker build -t clipforge-check . --no-cache 2>&1 | tail -5
+      - name: Check compose syntax
+        run: docker compose config 2>&1 | tail -5
 
   frontend-build:
     runs-on: ubuntu-latest

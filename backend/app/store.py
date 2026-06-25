@@ -12,6 +12,8 @@ between operations.
 """
 from __future__ import annotations
 
+import json
+import logging
 import sqlite3
 import threading
 from contextlib import contextmanager
@@ -37,6 +39,7 @@ _write_lock = threading.RLock()
 # access, reused for the thread's lifetime. Avoids opening/closing a connection
 # on every store operation (~100+ times per project).
 _local = threading.local()
+log = logging.getLogger("clipforge.store")
 
 
 def init_db() -> None:
@@ -103,7 +106,13 @@ def get(project_id: str) -> Project | None:
         row = con.execute(
             "SELECT data FROM projects WHERE id=?", (project_id,)
         ).fetchone()
-    return Project.model_validate_json(row[0]) if row else None
+    if not row:
+        return None
+    try:
+        return Project.model_validate_json(row[0])
+    except Exception as exc:
+        log.warning("corrupted project data for %s: %s", project_id, exc)
+        return None
 
 
 def list_summaries(limit: int = 100) -> list[ProjectSummary]:

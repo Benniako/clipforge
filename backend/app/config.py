@@ -116,9 +116,18 @@ def _detect_ollama() -> tuple[bool, str]:
             return True, models
     import socket
     try:
-        host = os.environ.get("CLIPFORGE_OLLAMA_HOST", "127.0.0.1")
-        port = int(os.environ.get("CLIPFORGE_OLLAMA_PORT", "11434"))
-        with socket.create_connection((host, port), timeout=0.05):
+        # CLIPFORGE_OLLAMA_URL is the canonical env var (used by llm.py and vlm.py).
+        # Parse host/port from it if set; fall back to individual vars for compat.
+        url = os.environ.get("CLIPFORGE_OLLAMA_URL", "")
+        if url:
+            from urllib.parse import urlparse
+            parsed = urlparse(url)
+            host = parsed.hostname or "127.0.0.1"
+            port = parsed.port or 11434
+        else:
+            host = os.environ.get("CLIPFORGE_OLLAMA_HOST", "127.0.0.1")
+            port = int(os.environ.get("CLIPFORGE_OLLAMA_PORT", "11434"))
+        with socket.create_connection((host, port), timeout=0.5):
             return True, models or "server running"
     except OSError:
         return False, ""
@@ -338,7 +347,11 @@ class Settings:
     # Concurrent *projects* in the pipeline. Default 1: transcription and the GPU
     # encoder are the bottlenecks, so a second project mostly contends; raise it
     # if you batch many small videos (transcription is internally serialized).
-    pipeline_workers: int = int(os.environ.get("CLIPFORGE_PIPELINE_WORKERS", "1"))
+    # Default 2: safe when GPU encoding is active (NVENC offloads encode to
+    # hardware, freeing the CPU for a second project). Bump higher for batches
+    # of short videos where I/O dominates. Set CLIPFORGE_PIPELINE_WORKERS=1 to
+    # revert to the sequential behaviour.
+    pipeline_workers: int = int(os.environ.get("CLIPFORGE_PIPELINE_WORKERS", "2"))
     # Upload / URL-import size cap in MB; 0 (default) = unlimited. A local
     # single-user tool processing your own VODs shouldn't reject them — set
     # this only to guard a small disk.
@@ -665,10 +678,10 @@ def get_settings() -> Settings:
         has_nvidia=has_nvidia,
         has_av1_nvenc=has_av1_nvenc,
         vram_mb=vram_mb,
-        auto_model=model_env is None,
+	        auto_model=model_env is None,
         has_deno=bool(shutil.which("deno")),
-        has_ollama=_ollama_result[0],
-        ollama_models=_ollama_result[1],
+	        has_ollama=_ollama_result[0],
+	        ollama_models=_ollama_result[1],
         has_torchaudio=_has_module("torchaudio"),
         has_paddleocr=_has_module("paddleocr"),
         has_easyocr=_has_module("easyocr"),

@@ -58,6 +58,11 @@ async def lifespan(app: FastAPI):
     import threading
     threading.Thread(target=engine.resume_incomplete,
                      name="clipforge-resume", daemon=True).start()
+    # Start the watch-folder poller if CLIPFORGE_WATCH_DIR is configured.
+    from .pipeline.watcher import create_watcher
+    watcher = create_watcher()
+    if watcher:
+        watcher.start()
     s = get_settings()
     logging.getLogger("clipforge").info("capabilities: %s", s.capability_report())
     yield

@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import math
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -36,6 +37,14 @@ from ..pipeline.orchestrator import engine
 from ..providers.detect_gameplay import KNOWN_PROFILES
 
 log = logging.getLogger("clipforge.api")
+
+# Optional psutil — imported once at module level, not per-request.
+try:
+    import psutil as _psutil  # type: ignore
+    _HAS_PSUTIL = True
+except Exception:
+    _HAS_PSUTIL = False
+    _psutil = None
 router = APIRouter(prefix="/api/projects", tags=["projects"])
 _SYSTEM_SAMPLE: tuple[float, dict] | None = None
 
@@ -67,6 +76,34 @@ def _clamp_pad(v: float | None) -> float | None:
     if not math.isfinite(value):
         return None
     return round(max(0.0, min(value, 60.0)), 3)
+
+
+def _friendly_import_error(exc: Exception, url: str | None = None) -> str:
+    """Map an import exception to a user-friendly, actionable message."""
+    msg = str(exc).lower()
+    if url:
+        if "404" in msg or "not found" in msg:
+            return f"URL not found or not accessible: '{url}'. Check the link is correct and the video is public."
+        if "403" in msg or "forbidden" in msg:
+            return f"Access denied for URL: '{url}'. The video may be private or geo-blocked."
+        if "no such host" in msg or "resolve" in msg:
+            return f"Could not reach '{url}'. Check your internet connection and that the URL is correct."
+        if "ssl" in msg or "certificate" in msg:
+            return f"SSL error while fetching '{url}'. Try downloading the file manually and uploading it instead."
+    if "no space" in msg or "disk" in msg:
+        return "Your disk is full. Free up space or set CLIPFORGE_DATA_DIR to a drive with more room."
+    if "permission" in msg:
+        return "Permission denied writing to the data directory. Check folder permissions."
+    if "codec" in msg or "container" in msg or "moov" in msg:
+        return ("The video file couldn't be read. It may be corrupted or in an unsupported format. "
+                "Try re-encoding to H.264 MP4 with HandBrake first.")
+    if "memory" in msg:
+        return "ClipForge ran out of memory during import. Try a shorter video or close other applications."
+    # Fallback: keep it short and remove file paths
+    clean = str(exc).replace("\\", "/")
+    clean = re.sub(r"[A-Za-z]:/[^\s,)]+", "[path]", clean)
+    clean = re.sub(r"/tmp/[^\s,)]+", "[path]", clean)
+    return f"Could not import the source: {clean[:200]}"
 
 
 def _split_values(text: str | None) -> list[str]:
@@ -155,9 +192,8 @@ def _system_usage() -> dict:
         "gpu_mem_total_mb": None,
     }
     try:
-        import psutil  # type: ignore
-
-        sample["cpu_pct"] = float(psutil.cpu_percent(interval=None))
+        if _HAS_PSUTIL and _psutil is not None:
+            sample["cpu_pct"] = float(_psutil.cpu_percent(interval=None))
     except Exception:
         pass
     try:
@@ -328,7 +364,8 @@ async def create_project(
         raise
     except Exception as e:
         _discard()
-        raise HTTPException(400, f"could not import source: {e}")
+        error_msg = _friendly_import_error(e, url)
+        raise HTTPException(400, error_msg)
 
     try:
         with store.mutate(project.id) as p:
@@ -480,6 +517,28 @@ def delete_project(project_id: str) -> dict:
     shutil.rmtree(get_settings().media_dir / project_id, ignore_errors=True)
     store.delete(project_id)
     return {"deleted": project_id}
+
+@router.delete("/{project_id}/purge")
+def purge_project(project_id: str) -> dict:
+    """Irreversibly erase every trace of a project: database row, media files,
+    temp artifacts, and any cached data. Unlike DELETE this is a full forensic
+    wipe — use it for Privacy Mode compliance (e.g. when a user asks to have
+    their content removed from the system).
+
+    Returns {"ok": true} regardless of whether the project existed, so
+    callers can safely purge without a preliminary existence check.
+    """
+    p = store.get(project_id)
+    if p:
+        shutil.rmtree(get_settings().media_dir / project_id, ignore_errors=True)
+        tmp_root = Path(tempfile.gettempdir())
+        for item in tmp_root.glob(f"*{project_id}*"):
+            try:
+                item.unlink(missing_ok=True)
+            except Exception:
+                pass
+        store.delete(project_id)
+    return {"ok": True}
 
 
 class Reprocess(BaseModel):
@@ -662,7 +721,7 @@ def export_batch(project_id: str):
     tmp_zip = Path(zip_name)
     with zipfile.ZipFile(tmp_zip, "w", zipfile.ZIP_STORED) as z:
         for i, c in enumerate(sorted(ready, key=lambda c: c.score, reverse=True), 1):
-            path = settings.media_dir / c.export_url.removeprefix("/media/")
+            path = settings.media_dir / (c.export_url[7:] if c.export_url.startswith("/media/") else c.export_url)
             if path.exists():
                 stem = f"{i:02d}_{c.score:02d}_{_safe_name(c.title)}"
                 z.write(path, f"{stem}.mp4")

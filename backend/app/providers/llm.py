@@ -381,3 +381,25 @@ def suggest_titles(excerpts: list[str], *, lang: str = "de",
 def _lang_name(lang: str) -> str:
     """Map an ISO code to a language name for prompts (single source of truth)."""
     return {"de": "German", "en": "English"}.get((lang or "de")[:2].lower(), "the same language")
+
+
+def generate_title(transcript_excerpt: str, *, lang: str = "de") -> str:
+    """Generate a short clip title, with heuristic fallback to first sentence.
+
+    Tries the local Ollama LLM first via ``suggest_title()``. If unavailable or
+    it returns None, falls back to extracting the first sentence from the
+    transcript excerpt — so every clip always gets a title, never a blank.
+    """
+    title = suggest_title(transcript_excerpt, lang=lang)
+    if title:
+        return title
+    # Heuristic fallback: first sentence of the transcript, capped at 60 chars.
+    text = (transcript_excerpt or "").strip()
+    if not text:
+        return "Untitled"
+    for sep in (".", "!", "?", "\n"):
+        if sep in text:
+            first = text.split(sep)[0].strip()
+            if first:
+                return first[:60]
+    return text[:60]

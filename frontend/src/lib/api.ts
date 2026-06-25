@@ -234,6 +234,9 @@ export const api = {
   deleteProject: (id: string) =>
     fetchWithTimeout(`/api/projects/${id}`, { method: "DELETE" }).then((r) => json(r)),
 
+  purgeProject: (id: string) =>
+    fetch(`/api/projects/${id}/purge`, { method: "DELETE" }).then((r) => json(r)),
+
   reprocess: (id: string, overrides: Partial<ImportSettings> = {}) =>
     fetchWithTimeout(`/api/projects/${id}/reprocess`, {
       method: "POST",

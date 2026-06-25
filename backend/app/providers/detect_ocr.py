@@ -851,8 +851,7 @@ def find_text_events(src_path: str, info: MediaInfo,
                     if dead >= MAX_ROI_DEAD:
                         continue
                     h = _crop_hash(str(img))
-                    cache_key = f"{roi}@{src_path}"
-                    cached = prev_crops.get(cache_key, prev_crops.get(roi))
+                    cached = prev_crops.get(roi)
                     if cached and _hashes_match(h, cached[0]):
                         text, rconf = cached[1], cached[2]
                     else:
