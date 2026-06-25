@@ -11,16 +11,16 @@
     "phase-7": {"label": "Test coverage", "status": "done", "commits": ["a9dfef5"]},
     "phase-8": {"label": "Features (waveform, auto-thumbnails)", "status": "done", "commits": ["97a705e"]},
     "phase-9": {
-      "label": "Stabilization (CI green, lint, docs)",
-      "status": "pending",
-      "commits": []
+      "label": "Stabilization (TS fixes, CI readiness)",
+      "status": "done",
+      "commits": ["535e5a7"]
     },
     "phase-10": {
-      "label": "Quality of Life (bg music, auto-titles, batch naming)",
-      "status": "pending",
-      "commits": []
+      "label": "Quality of Life (bg music, auto-titles, name-pattern)",
+      "status": "done",
+      "commits": ["535e5a7"]
     }
   },
-  "current_phase": "phase-9",
-  "last_updated": "2026-06-25T15:05:00Z"
+  "current_phase": "complete",
+  "last_updated": "2026-06-25T15:30:00Z"
 }
