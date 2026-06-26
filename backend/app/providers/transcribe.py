@@ -294,6 +294,21 @@ def _whisperx_transcribe(audio_path, language, progress, batch_size: int) -> Tra
             dur = float(end) - float(start)
             if dur < 0.02:  # alignment glitch — sub-20ms word is not real
                 continue
+            # whisperX alignment produces a log-probability confidence score.
+            # Words that the aligner couldn't confidently place (hallucinations
+            # from the ASR step, breathing noises, mouth sounds) get very
+            # negative scores. Threshold at -10 which keeps clearly-spoken
+            # words while dropping the ASR's phantom tokens. Not all versions
+            # of whisperX expose this field — default to keeping the word when
+            # it's absent so an upgrade never silently drops speech.
+            score = w.get("score")
+            if score is not None and score < -10.0:
+                continue
+            # When alignment falls back to raw ASR timings, use the per-word
+            # probability instead (same 0.3 threshold as the whisper path).
+            prob = w.get("probability")
+            if prob is not None and prob < 0.3:
+                continue
             spk_label = w.get("speaker")
             # Reserve id 0 for unattributed words (no diarization label). Real
             # speakers start at 1, so the first diarized speaker never collides
