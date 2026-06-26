@@ -8,6 +8,7 @@ it is served at ``/`` so the whole product runs from one process.
 from __future__ import annotations
 
 import logging
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -51,6 +52,21 @@ __version__ = "0.1.0"
 async def lifespan(app: FastAPI):
     store.init_db()
     feedback.init_db()
+    # Clean up stale temp files from crashed pipelines (files older than 1 hour).
+    from pathlib import Path
+    _data = get_settings().data_dir
+    for _p in _data.rglob("*.tmp"):
+        try:
+            if _p.stat().st_mtime < time.time() - 3600:
+                _p.unlink(missing_ok=True)
+        except Exception:
+            pass
+    for _p in _data.rglob("*_tmp.mp4"):
+        try:
+            if _p.stat().st_mtime < time.time() - 3600:
+                _p.unlink(missing_ok=True)
+        except Exception:
+            pass
     engine.start()
     # Don't block the lifespan startup on resuming N stranded projects —
     # /api/ready would otherwise not answer until every store.mutate runs.

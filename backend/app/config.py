@@ -133,20 +133,31 @@ def _detect_ollama() -> tuple[bool, str]:
         else:
             host = os.environ.get("CLIPFORGE_OLLAMA_HOST", "127.0.0.1")
             port = int(os.environ.get("CLIPFORGE_OLLAMA_PORT", "11434"))
-        with socket.create_connection((host, port), timeout=0.5):
-            if not models:
-                # Socket responded and CLI didn't; try HTTP API for model names.
-                try:
-                    import json, urllib.request
-                    with urllib.request.urlopen(
-                            _ollama_tags_url(url, host, port), timeout=1.5) as r:
-                        tags = json.loads(r.read()).get("models", [])
-                        names = [m.get("name", "") for m in tags if m.get("name")]
-                        if names:
-                            models = ", ".join(names)
-                except Exception:
-                    pass
-            return True, models or "server running"
+        # Retry with backoff: Ollama may still be initializing the GPU at server
+        # startup. The first socket probe can fail; retry 3x with 0.5s gaps.
+        _sock = None
+        for _retry in range(3):
+            try:
+                _sock = socket.create_connection((host, port), timeout=0.5)
+                break
+            except OSError:
+                time.sleep(0.5)
+        if _sock is None:
+            return False, models or ""
+        _sock.close()
+        if not models:
+            # Socket responded and CLI didn't; try HTTP API for model names.
+            try:
+                import json, urllib.request
+                with urllib.request.urlopen(
+                        _ollama_tags_url(url, host, port), timeout=1.5) as r:
+                    tags = json.loads(r.read()).get("models", [])
+                    names = [m.get("name", "") for m in tags if m.get("name")]
+                    if names:
+                        models = ", ".join(names)
+            except Exception:
+                pass
+        return True, models or "server running"
     except OSError:
         return False, ""
 
