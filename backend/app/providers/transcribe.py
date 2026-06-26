@@ -140,6 +140,31 @@ def _transcribe_with_prompt(engine, audio, *, initial_prompt: str | None = None,
         return engine.transcribe(audio, **kwargs)
 
 
+def _try_transcribe(engine, audio, **kwargs):
+    """Call ``engine.transcribe(audio, **kwargs)``, retrying without any kwargs
+    that the engine doesn't accept.
+
+    Some versions of faster-whisper / whisperX drop parameters across releases
+    (e.g. ``condition_on_previous_text``). This retry loop logs a warning and
+    falls back gracefully instead of crashing the pipeline.
+    """
+    fallback = dict(kwargs)
+    for _ in range(3):
+        try:
+            return engine.transcribe(audio, **fallback)
+        except TypeError as e:
+            msg = str(e)
+            # Find which kwarg caused the issue by testing each one
+            for key in list(fallback.keys()):
+                if key in msg or "unexpected keyword" in msg.lower():
+                    log.warning("transcribe kwarg %r not supported by this engine; dropping", key)
+                    del fallback[key]
+                    break
+            else:
+                raise  # not a kwarg issue, re-raise
+    return engine.transcribe(audio)  # bare-minimum fallback
+
+
 def transcribe(audio_path: str, *, language: str | None = None,
                progress=None, power_mode: str | None = None) -> Transcript:
     """Transcribe ``audio_path`` to a word-timed :class:`Transcript`."""
@@ -217,9 +242,9 @@ def _whisperx_transcribe(audio_path, language, progress, batch_size: int) -> Tra
     audio = whisperx.load_audio(audio_path)
 
     model = _load_whisperx_model()
-    result = _transcribe_with_prompt(
+    result = _try_transcribe(
         model, audio, batch_size=max(batch_size, 1), language=language,
-        condition_on_previous_text=False,   # stop hallucinations propagating across segments
+        condition_on_previous_text=False,
         initial_prompt=_initial_prompt(language))
     lang = result.get("language", language or "en") or "en"
     if progress:
