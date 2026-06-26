@@ -444,10 +444,6 @@ def _get_reader(engine: str, lang: str = "en"):
                 attempts.append(("easyocr", lambda: _make_easyocr(gpu, ocr_langs)))
         elif engine == "easyocr":
             attempts.append(("easyocr", lambda: _make_easyocr(gpu, ocr_langs)))
-        elif engine == "tesseract":
-            attempts.append(("tesseract", lambda: None))
-        elif engine == "surya":
-            attempts.append(("surya", lambda: _make_surya()))
         for kind, make in attempts:
             try:
                 # GPU model loads can hang indefinitely (CUDA deadlock). Wrap the

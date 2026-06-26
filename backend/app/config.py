@@ -136,8 +136,6 @@ def _detect_ocr() -> str:
         return "paddleocr"
     if _has_module("easyocr"):
         return "easyocr"
-    if _has_module("pytesseract") and shutil.which("tesseract"):
-        return "tesseract"
     return ""
 
 
@@ -432,7 +430,7 @@ class Settings:
     has_nvenc: bool         # ffmpeg has the h264_nvenc encoder compiled in
     has_nvidia: bool        # an NVIDIA GPU + driver is actually present
     has_av1_nvenc: bool = False  # ffmpeg has av1_nvenc (RTX 40/50 series)
-    ocr_engine: str = ""    # on-screen text OCR: "paddleocr"|"easyocr"|"tesseract"|""
+    ocr_engine: str = ""    # on-screen text OCR: "easyocr"|"paddleocr"|""
     # --- optional power-ups (graceful: no-op when absent) ---------------
     has_vad: bool = False        # Silero VAD — snap captions to exact speech
     has_scenedetect: bool = False  # PySceneDetect — better scene-cut snapping
@@ -451,7 +449,6 @@ class Settings:
     has_torchaudio: bool = False # wav2vec2 forced alignment for tighter captions
     has_paddleocr: bool = False  # OCR engine (best accuracy overall)
     has_easyocr: bool = False    # OCR engine (best on noisy frames)
-    has_tesseract: bool = False  # OCR engine (fallback)
     has_scrfd: bool = False      # SCRFD face detection (upgrade from YuNet)
 
     # --- pipeline tunables ----------------------------------------------
@@ -578,8 +575,6 @@ class Settings:
                      "PaddleOCR", "Best overall OCR accuracy for in-game HUD text."),
                 item("easyocr", self.has_easyocr,
                      "EasyOCR", "Better than PaddleOCR on noisy/bitrate-starved frames."),
-                item("tesseract", self.has_tesseract,
-                     "Tesseract", "Fallback OCR engine."),
                 item("ocr_selected", bool(self.ocr_engine),
                      f"Active OCR: {self.ocr_engine or 'none'}",
                      "Selected automatically from the engines above. None = OCR detection skipped."),
@@ -728,7 +723,6 @@ class Settings:
             "torchaudio": self.has_torchaudio,
             "paddleocr": self.has_paddleocr,
             "easyocr": self.has_easyocr,
-            "tesseract": self.has_tesseract,
             "scrfd": self.has_scrfd,
         }
 
@@ -794,7 +788,6 @@ def get_settings() -> Settings:
         has_torchaudio=_has_module("torchaudio"),
         has_paddleocr=_has_module("paddleocr"),
         has_easyocr=_has_module("easyocr"),
-        has_tesseract=bool(_has_module("pytesseract") and shutil.which("tesseract")),
         has_scrfd=_has_module("scrfd"),
         device=device,
         whisper_model=whisper_model,

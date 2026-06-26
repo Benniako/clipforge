@@ -2650,7 +2650,7 @@ def test_capability_report_includes_new_detector_fields():
     """The flat report carries the new deno/ollama/torchaudio/ocr-engine flags."""
     from app.config import get_settings
     flat = get_settings().capability_report()
-    for key in ("deno", "ollama", "torchaudio", "paddleocr", "easyocr", "tesseract"):
+    for key in ("deno", "ollama", "torchaudio", "paddleocr", "easyocr"):
         assert key in flat, f"flat report missing new field '{key}'"
         assert isinstance(flat[key], bool), f"{key} should be bool"
 
