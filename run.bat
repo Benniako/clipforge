@@ -10,11 +10,14 @@ if not exist ".venv\Scripts\python.exe" (
 REM ---- Tuned for this machine: Ryzen 5 7600 (6c/12t) + RTX 5060 Ti 16GB ----
 REM Whisper model + device stay on auto: with CUDA working the app already
 REM picks large-v3 on this card, and falls back safely to CPU if not.
-REM 4 parallel renders: encoding runs on NVENC, so ffmpeg barely loads the CPU.
-set CLIPFORGE_RENDER_WORKERS=4
+REM 6 parallel renders: NVENC barely loads the CPU, so 6 workers saturate
+REM the NVENC encoder without contention. (4 was leaving throughput on the table.)
+set CLIPFORGE_RENDER_WORKERS=6
 REM ~6x faster transcription at near-large-v3 quality on this GPU.
+REM Batch 48: with 16 GB VRAM the model (~3.5 GB) + batch buffers (~6 GB)
+REM fit comfortably, maximizing GPU utilization on longer videos.
 set CLIPFORGE_WHISPER_MODEL=large-v3-turbo
-set CLIPFORGE_WHISPER_BATCH=24
+set CLIPFORGE_WHISPER_BATCH=48
 REM New projects default to the strongest local path on this workstation.
 set CLIPFORGE_DEFAULT_POWER_MODE=max_gpu
 REM Add optional tools to PATH for capability detection.
