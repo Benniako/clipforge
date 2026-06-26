@@ -124,12 +124,14 @@ def _has_module(name: str) -> bool:
 def _detect_ocr() -> str:
     """Best available OCR backend for on-screen game text, or "" if none.
 
-    Preference follows accuracy on noisy game UI text (2026 benchmarks):
-    PaddleOCR (PP-OCRv6 -> PP-OCRv5, most accurate) → EasyOCR (great on screenshots /
-    overlays) → Tesseract (lightweight fallback, needs the system binary too).
-    Every backend is optional — with none installed, OCR detection is skipped
-    and the audio-energy / cue path still finds highlights.
+    On GPU systems EasyOCR is preferred — it uses torch CUDA directly and
+    doesn't need the separate paddlepaddle-gpu package. PaddleOCR is more
+    accurate on static HUD text but falls to CPU inference on most installs
+    (no paddlepaddle-gpu), making it slower per-frame than EasyOCR GPU.
     """
+    gpu = _torch_cuda_available() or _detect_nvidia_gpu()
+    if gpu and _has_module("easyocr"):
+        return "easyocr"
     if _has_module("paddleocr"):
         return "paddleocr"
     if _has_module("easyocr"):

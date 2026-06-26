@@ -62,6 +62,10 @@ _GENERIC: dict[str, tuple[str, ...]] = {
     "clutch": ("clutch", "1v5", "1v4", "1v3"),
     "record": ("new record", "personal best", "high score", "level up",
                "neuer rekord", "persoenlicher rekord", "level aufstieg"),
+    "goal": ("goal", "go!", "tor", "tore", "touchdown", "score"),
+    "penalty": ("penalty", "red card", "yellow card", "gelbe karte",
+                "rote karte", "elfmeter", "freistoss", "abpfiff",
+                "full time", "half time", "halbzeit", "schlusspfiff"),
     "menu": ("settings", "inventory", "main menu", "menu", "lobby",
              "store", "shop", "collection", "loadout", "agent select",
              "matchmaking", "einstellungen", "inventar", "hauptmenu",
@@ -428,13 +432,18 @@ def _get_reader(engine: str, lang: str = "en"):
         attempts = []
         if engine == "paddleocr":
             attempts.append(("paddleocr", lambda: _make_paddle(gpu, lang)))
-            # GPU→CPU fallback per engine (#9): when GPU PaddleOCR fails (OOM,
-            # runtime), retry with CPU PaddleOCR before falling to EasyOCR. A CUDA
-            # OOM shouldn't skip PaddleOCR entirely — CPU inference is slower but
-            # still more accurate than EasyOCR on clean HUD text.
+            # EasyOCR runs on the GPU via torch/CUDA without needing a separate
+            # paddlepaddle-gpu install, so on CUDA systems it should be preferred
+            # over a CPU-only PaddleOCR fallback. Place EasyOCR(GPU) *before* the
+            # CPU PaddleOCR path so a CUDA-capable box uses GPU inference.
             if gpu:
+                attempts.append(("easyocr", lambda: _make_easyocr(gpu, ocr_langs)))
+                # GPU→CPU fallback per engine (#9): when both PaddleOCR GPU and
+                # EasyOCR GPU fail (OOM, no torch CUDA), retry PaddleOCR CPU.
                 attempts.append(("paddleocr", lambda: _make_paddle(False, lang)))
-            attempts.append(("easyocr", lambda: _make_easyocr(gpu, ocr_langs)))
+            else:
+                # CPU-only: PaddleOCR first (more accurate), then EasyOCR CPU.
+                attempts.append(("easyocr", lambda: _make_easyocr(gpu, ocr_langs)))
         elif engine == "easyocr":
             attempts.append(("easyocr", lambda: _make_easyocr(gpu, ocr_langs)))
         elif engine == "tesseract":

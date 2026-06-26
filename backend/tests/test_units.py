@@ -3091,16 +3091,23 @@ def test_ocr_dedupe_keeps_highest_confidence_per_label():
 
 
 def test_ocr_gpu_cpu_fallback_attempts_are_ordered():
-    """GPU PaddleOCR → CPU PaddleOCR → EasyOCR in fallback chain."""
+    """GPU PaddleOCR → EasyOCR (GPU) → CPU PaddleOCR in fallback chain."""
     from app.providers import detect_ocr as OCR
     import inspect
     src = inspect.getsource(OCR._get_reader)
     assert "paddleocr" in src
-    # The CPU paddleocr fallback must appear before easyocr in the chain.
-    cpu_pos = src.find("_make_paddle(False")
-    easy_pos = src.find("_make_easyocr")
-    assert cpu_pos >= 0 and easy_pos >= 0
-    assert cpu_pos < easy_pos, "CPU PaddleOCR should be tried before EasyOCR"
+    # On GPU systems EasyOCR (torch CUDA) is preferred over CPU PaddleOCR
+    # since it doesn't need the separate paddlepaddle-gpu package.
+    # The order should be: GPU PaddleOCR → EasyOCR → CPU PaddleOCR.
+    pdoc_pos = src.find("lambda: _make_paddle(gpu, lang)")
+    easy_pos = src.find("lambda: _make_easyocr")
+    cpu_pos = src.find("lambda: _make_paddle(False,")
+    assert pdoc_pos >= 0 and easy_pos >= 0
+    # GPU PaddleOCR must appear before EasyOCR
+    assert pdoc_pos < easy_pos, "GPU PaddleOCR should be tried before EasyOCR"
+    # CPU PaddleOCR fallback (if present) must come after EasyOCR
+    if cpu_pos >= 0:
+        assert easy_pos < cpu_pos, "EasyOCR (GPU) should be tried before CPU PaddleOCR"
 
 
 def test_ocr_tesseract_german_lang_passes_config():
