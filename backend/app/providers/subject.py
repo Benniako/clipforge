@@ -30,6 +30,8 @@ def _load_yolo():
         from ultralytics import YOLO
 
         _yolo = YOLO(_YOLO_MODEL)  # nano default: fast, auto-downloaded once
+        if _yolo:
+            _yolo.to(get_settings().device)
         log.info("YOLO subject model loaded (%s)", _YOLO_MODEL)
     except Exception as e:
         log.info("YOLO unavailable (%s)", e)

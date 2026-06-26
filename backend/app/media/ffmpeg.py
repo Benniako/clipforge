@@ -239,6 +239,16 @@ def grab_frame(src: str | Path, dst: str | Path, *, t: float = 0.0,
         args += ["-vf", ",".join(vf)]
     if quality is not None:
         args += ["-q:v", str(quality)]
+    # GPU-accelerated decode for frame extraction: offloads H.264/HEVC decode
+    # to NVDEC hardware, reducing CPU load. Only when an NVIDIA GPU is present
+    # (the same condition render.py uses for its hwaccel path).
+    try:
+        from ..config import get_settings
+        s = get_settings()
+        if s.use_nvenc or s.has_nvidia:
+            args = ["-hwaccel", "cuda"] + args
+    except Exception:
+        pass  # settings not available yet (e.g. during import) — safe fallback
     args.append(str(dst))
     run(args, timeout=timeout)
     return dst

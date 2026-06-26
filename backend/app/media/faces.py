@@ -39,6 +39,10 @@ def _get_yolo_face():
         # on RTX. Better accuracy than YuNet, especially for profile/occluded
         # faces and the small corner facecam that video reframing needs.
         _yolo_face = YOLO("yolov8n-face.pt")
+        # Ultralytics auto-detects CUDA, but explicitly passing the config
+        # device ensures CLIPFORGE_DEVICE=cpu is honoured.
+        if _yolo_face:
+            _yolo_face.to(get_settings().device)
         return _yolo_face
     except Exception as e:
         log.info("YOLOv8-face unavailable (%s); using YuNet/Haar", e)

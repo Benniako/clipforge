@@ -31,7 +31,9 @@ def _load():
     try:
         from funasr import AutoModel
 
-        _model = AutoModel(model="iic/emotion2vec_plus_large", disable_update=True)
+        _model = AutoModel(model="iic/emotion2vec_plus_large",
+                            device=get_settings().device,
+                            disable_update=True)
         log.info("emotion2vec loaded")
     except Exception as e:
         log.info("emotion2vec unavailable (%s)", e)
