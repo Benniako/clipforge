@@ -27,6 +27,16 @@ def project_dir(project_id: str) -> Path:
     return d
 
 
+def finalize_source(project: Project, path: Path, *, filename: str, url: str | None) -> SourceMedia:
+    """Probe a source file already in place and return its metadata.
+
+    This is the public entry point used by the API after writing the upload
+    directly to the project directory. Separate from attach_source_file which
+    additionally handles the temp-file move.
+    """
+    return _finalize(project, path, filename=filename, url=url)
+
+
 def attach_source_file(project: Project, tmp_path: str | Path, filename: str) -> SourceMedia:
     """Move an uploaded temp file into the project and probe it."""
     ext = Path(filename).suffix.lower() or ".mp4"

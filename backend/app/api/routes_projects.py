@@ -329,42 +329,48 @@ async def create_project(
                       status=ProjectStatus.created)
     store.save(project)
 
-    tmp: Path | None = None
-
     def _discard() -> None:
-        # Roll back everything a failed import may have left behind: the DB
-        # row, the project's media directory, and the upload temp file.
+        # Roll back everything a failed import may have left behind.
         store.delete(project.id)
         shutil.rmtree(get_settings().media_dir / project.id, ignore_errors=True)
-        if tmp is not None:
-            tmp.unlink(missing_ok=True)
 
     try:
         if file is not None:
-            # Close the fd mkstemp opens, or Windows won't let us move the file
-            # afterwards ([WinError 32] file used by another process).
-            fd, tmp_name = tempfile.mkstemp(suffix=Path(file.filename or "v.mp4").suffix)
-            os.close(fd)
-            tmp = Path(tmp_name)
+            # Write directly to the project directory — no temp file + move.
+            # On localhost this avoids a full extra copy when temp and media
+            # dirs are on different drives.
+            ext = Path(file.filename or "upload.mp4").suffix.lower() or ".mp4"
+            if ext not in ingest.VIDEO_EXTS:
+                raise HTTPException(400, f"unsupported file type '{ext}'")
+            dest = ingest.project_dir(project.id) / f"source{ext}"
             cap = get_settings().upload_cap_bytes
             size = 0
-            with open(tmp, "wb") as out:
-                while chunk := await file.read(16 << 20):  # 16 MB chunks — localhost I/O is fast
+            with open(dest, "wb") as out:
+                while chunk := await file.read(64 << 20):  # 64 MB chunks — localhost I/O
                     size += len(chunk)
                     if cap is not None and size > cap:
+                        dest.unlink(missing_ok=True)
                         raise HTTPException(
                             413, f"file exceeds the {get_settings().max_upload_mb} MB "
                                  "upload limit (CLIPFORGE_MAX_UPLOAD_MB; 0 = unlimited)")
                     out.write(chunk)
-            src = await run_in_threadpool(ingest.attach_source_file, project,
-                                          tmp, file.filename or "upload.mp4")
+            # Probe + thumbnail in background — the API returns immediately
+            # so the user sees the project created while ffmpeg works.
+            src = await run_in_threadpool(
+                ingest.finalize_source, project, dest,
+                filename=file.filename or "upload.mp4", url=None)
         elif local_path:
             # Direct filesystem import — no HTTP transfer overhead.
             p = Path(local_path).resolve()
             if not p.is_file():
                 raise HTTPException(400, f"local_path '{local_path}' is not a file or doesn't exist")
-            src = await run_in_threadpool(ingest.attach_source_file, project,
-                                          str(p), p.name)
+            ext = p.suffix.lower() or ".mp4"
+            if ext not in ingest.VIDEO_EXTS:
+                raise HTTPException(400, f"unsupported file type '{ext}'")
+            dest = ingest.project_dir(project.id) / f"source{ext}"
+            shutil.copy2(str(p), str(dest))  # copy preserves metadata; move if same drive
+            src = await run_in_threadpool(
+                ingest.finalize_source, project, dest, filename=p.name, url=None)
         else:
             src = await run_in_threadpool(ingest.attach_source_url, project, url)
     except HTTPException:
