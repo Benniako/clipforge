@@ -50,6 +50,71 @@ _PROFILES["fifa"] = _PROFILES["eafc"]
 # a cue directory on disk, so the API clamps input to this set.
 KNOWN_PROFILES = frozenset(_PROFILES)
 
+# Visual-on-screen markers for game-profile auto-detection.  When the project's
+# game_profile is "auto", we sample a handful of frames, run OCR, and pick the
+# profile whose marker set gets the most hits.  Markers are case-insensitive
+# substrings — the OCR output is noisy, so we keep them loose.
+_AUTO_MARKERS: dict[str, list[str]] = {
+    "valorant": [
+        "getötet", "kampfbericht", "kauphase", "spike", "runde läuft",
+        "runde gewonnen", "agent", "taktiker", "unrated", "competitive",
+        "schießstand", "gewerte",
+    ],
+    "eafc": [
+        "auswechslung", "champions", "fussball", "vorlage", "abpfiff",
+        "pässe", "präzision", "mannschaft", "dribbling", "schuss",
+        "fifa", "eafc", "ultimate team", "kick-off", "karriere",
+        "trikot", "liga", "stadion", "saison", "wechsel",
+        "bewertung", "gesamt", "temp", "sprint",
+    ],
+    "cs2": [
+        "counter-terrorist", "terrorist", "bombe", "defuse",
+    ],
+    "rocketleague": [
+        "rocket league", "punktzahl", "tor",
+    ],
+}
+
+
+def auto_detect_profile(src_path: str, n_samples: int = 5) -> str:
+    """Sample ~5 frames from the source video, run OCR, and pick a matching game
+    profile by counting keyword hits.  Returns "generic" (default gameplay) when
+    nothing clearly matches."""
+    try:
+        from .detect_ocr import _ocr_image_conf as _ocr
+        from ..media.ffmpeg import probe, grab_frame
+        import tempfile, os
+
+        info = probe(src_path)
+        dur = info.duration
+        if dur <= 0:
+            return "generic"
+
+        step = max(20, dur // (n_samples + 1))
+        ts = [int(dur * i / (n_samples + 1)) for i in range(1, n_samples + 1)]
+        text_lower = ""
+        with tempfile.TemporaryDirectory() as td:
+            for t in ts:
+                dst = os.path.join(td, f"f{t}.jpg")
+                grab_frame(src_path, dst, t=t, width=1280)
+                raw, _ = _ocr(dst, "easyocr", lang="de")
+                text_lower += " " + raw.lower()
+
+        hits: dict[str, int] = {}
+        for profile, markers in _AUTO_MARKERS.items():
+            c = sum(1 for m in markers if m.lower() in text_lower)
+            if c:
+                hits[profile] = c
+
+        if not hits:
+            return "generic"
+        best = max(hits, key=hits.get)
+        log.info("auto-detected game_profile=%s (hits=%s)", best, hits)
+        return best
+    except Exception as e:
+        log.debug("auto-detect game profile failed: %s", e)
+        return "generic"
+
 
 def get_profile(name: str | None) -> dict:
     return _PROFILES.get((name or "generic").lower().replace(" ", ""), _PROFILES["generic"])

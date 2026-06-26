@@ -488,6 +488,22 @@ class Engine:
         src_path = str(settings.media_dir / project.source.path)
         info = ffmpeg.probe(src_path)
 
+        # Auto-detect game profile from on-screen text when set to "auto"
+        # (overrides the static "auto"→"generic" alias so cue templates, audio
+        # weights, and OCR lexicon matches are game-specific from the start).
+        if project.settings.game_profile == "auto":
+            try:
+                from ..providers import detect_gameplay as gameplay_mod
+                detected = gameplay_mod.auto_detect_profile(src_path)
+                if detected and detected != "generic":
+                    with store.mutate(project_id) as p:
+                        p.settings.game_profile = detected
+                    project.settings.game_profile = detected
+                    log.info("detected game_profile=%s from on-screen text for %s",
+                             detected, project_id)
+            except Exception as e:
+                log.debug("game profile auto-detect skipped: %s", e)
+
         # 1. transcribe ---------------------------------------------------
         # The wav lives in the project dir (not a TemporaryDirectory) so the
         # gameplay detector can reuse it — decoding an hour-long VOD's audio
