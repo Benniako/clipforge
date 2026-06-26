@@ -428,7 +428,7 @@ class Settings:
     device: str = os.environ.get("CLIPFORGE_DEVICE", "cpu")
     # Batched-inference batch size for faster-whisper on GPU (BatchedInference
     # Pipeline) — bigger keeps the GPU saturated; 0 disables batching.
-    whisper_batch_size: int = int(os.environ.get("CLIPFORGE_WHISPER_BATCH", "8"))
+    whisper_batch_size: int = int(os.environ.get("CLIPFORGE_WHISPER_BATCH", "0"))
     # Which transcriber to prefer: "auto" (whisperX if present, else faster-whisper),
     # or force one of "whisperx" / "faster" / "synthetic".
     transcriber: str = os.environ.get("CLIPFORGE_TRANSCRIBER", "auto")
@@ -649,9 +649,9 @@ class Settings:
             return 0
         mode = (power_mode or "balanced").lower()
         if mode == "max_gpu":
-            return max(base, 16 if self.vram_mb >= 12000 else 8)
+            return max(base, 48 if self.vram_mb >= 16000 else 24 if self.vram_mb >= 12000 else 16 if self.vram_mb >= 8000 else 8)
         if mode == "quality":
-            return max(base, 8)
+            return max(base, 16 if self.vram_mb >= 12000 else 8)
         return base
 
     def vlm_options_for(self, power_mode: str | None) -> dict[str, float | int]:
