@@ -137,7 +137,7 @@ def speakers_in(transcript: Transcript, start: float, end: float) -> list[int]:
     Drives the editor's per-speaker caption toggles — we only offer to mute a
     speaker who is present in the clip."""
     seen = {(w.speaker or 0) for w in transcript.words
-            if w.end > start and w.t < end and _ALNUM.search(w.text or "")}
+            if w.end > start and w.t < end and _ALNUM.search(w.text or "" or "")}
     return sorted(seen)
 
 
@@ -178,7 +178,7 @@ def remove_phrases(words: list[CaptionWord],
     """Drop caption words that form any of the given phrases (n-gram match)."""
     if not words or not phrases:
         return words
-    toks = [_TOKEN_RE.sub("", w.text.lower()) for w in words]
+    toks = [_TOKEN_RE.sub("", (w.text or "").lower()) for w in words]
     drop = [False] * len(words)
     for phrase in phrases:
         ptoks = phrase.split()

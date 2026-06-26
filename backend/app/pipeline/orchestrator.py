@@ -141,6 +141,10 @@ def _speech_intervals(transcript, start: float, end: float
 # Cache for pre-computed full-timeline speech intervals.
 _full_speech_intervals: list[tuple[float, float]] | None = None
 _full_speech_transcript_id: int = 0
+# Lock protects the read-modify-write of the cache across pipeline worker
+# threads (engine._asr_loop can set values from one project while another
+# worker reads for a different project).
+_full_speech_lock = threading.Lock()
 
 
 def _precompute_speech_intervals(transcript) -> None:
@@ -150,16 +154,17 @@ def _precompute_speech_intervals(transcript) -> None:
     intervals (subtract clip start), but the full-timeline scan of the
     transcript is done here once instead of per-clip.
     """
-    global _full_speech_intervals, _full_speech_transcript_id
-    if transcript is None or transcript.provider == "synthetic":
-        _full_speech_intervals = None
-        return
-    # Cheap identity check — skip if already computed for this transcript.
-    tid = id(transcript)
-    if tid == _full_speech_transcript_id and _full_speech_intervals is not None:
-        return
-    _full_speech_transcript_id = tid
-    _full_speech_intervals = transcript.words  # store words list for filtering
+    with _full_speech_lock:
+        global _full_speech_intervals, _full_speech_transcript_id
+        if transcript is None or transcript.provider == "synthetic":
+            _full_speech_intervals = None
+            return
+        # Cheap identity check — skip if already computed for this transcript.
+        tid = id(transcript)
+        if tid == _full_speech_transcript_id and _full_speech_intervals is not None:
+            return
+        _full_speech_transcript_id = tid
+        _full_speech_intervals = transcript.words  # store words list for filtering
     log.debug("pre-computed speech intervals for transcript (%d words)",
               len(transcript.words))
 
@@ -316,7 +321,10 @@ class Engine:
             pid = job.project_id
 
             if pid in self._cancel_requested:
-                job.future.cancel()
+                # Set CancelledProject exception rather than just cancelling —
+                # otherwise .result() on the pipeline worker would hang forever
+                # since the future hasn't been resolved yet.
+                job.future.set_exception(CancelledProject(pid))
                 self._asr_queue.task_done()
                 continue
 
@@ -614,7 +622,10 @@ class Engine:
             # The worker can do I/O work (probe info, VAD prep) while the ASR
             # thread transcribes.  For now this is a no-op placeholder — the
             # future result blocks until transcription finishes.
-            transcript = _asr_future.result()
+            try:
+                transcript = _asr_future.result()
+            except CancelledProject:
+                raise  # let _loop() handle it as a cancellation
             self._raise_if_cancelled(project_id)
         else:
             # No audio track — skip ASR entirely, go straight to synthetic.

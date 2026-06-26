@@ -166,7 +166,12 @@ def _try_transcribe(engine, audio, **kwargs):
                     break
             if not dropped:
                 raise  # not a kwarg issue, re-raise
-    return engine.transcribe(audio)  # bare-minimum fallback
+    # Anti-hallucination kwargs are required to keep Whisper from inventing
+    # "thank you for watching" filler, so preserve them even on bare fallback.
+    fallback.setdefault("word_timestamps", True)
+    fallback.setdefault("vad_filter", True)
+    fallback.setdefault("condition_on_previous_text", False)
+    return engine.transcribe(audio, **fallback)
 
 
 def transcribe(audio_path: str, *, language: str | None = None,
