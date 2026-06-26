@@ -309,6 +309,9 @@ class Engine:
                         p.status = ProjectStatus.failed
                         p.error = error_msg
                         p.progress.message = f"Failed: {error_msg[:200]}"
+                    # Clean up the extracted WAV on failure to avoid disk leaks.
+                    _wav = ingest.project_dir(project_id) / "audio16k.wav"
+                    _wav.unlink(missing_ok=True)
                 except Exception:
                     pass
             finally:
@@ -521,7 +524,12 @@ class Engine:
         with store.mutate(project_id) as p:
             p.content_type = kind
             p.facecam = cam_rect
+            # Preserve warnings from earlier stages (e.g. VAD not installed)
+            # when resetting the warning list at stage boundaries.
+            _existing_warnings = list(p.warnings)
             p.warnings = []
+            if _existing_warnings:
+                p.warnings.extend(_existing_warnings)
             # Placeholder captions are a real degradation — flag as error.
             if synthetic_caption_warning:
                 p.add_warning(
@@ -883,11 +891,21 @@ class Engine:
                 game=project.settings.game_profile if kind == "gameplay" else None,
                 ocr_terms=(ocr_labels + ocr_texts) or None)
         with store.mutate(project_id) as p:
-            # The user may have rated a clip while this stage ran; don't wipe
-            # the marker with our (older) local copies.
-            prev = {c.id: c.feedback for c in p.clips}
+            # The user may have edited a clip (title, trim, speakers, layout)
+            # while the pipeline advanced; don't wipe their changes.
+            prev = {c.id: c for c in p.clips}
             for clip in clips:
-                clip.feedback = prev.get(clip.id, clip.feedback)
+                prev_c = prev.get(clip.id)
+                if prev_c:
+                    clip.feedback = prev_c.feedback
+                    clip.title = prev_c.title
+                    clip.description = prev_c.description
+                    clip.start = prev_c.start
+                    clip.end = prev_c.end
+                    clip.caption_speakers = prev_c.caption_speakers
+                    clip.reframe.layout = prev_c.reframe.layout
+                    clip.aspect = prev_c.aspect
+                    clip.reframe.facecam = prev_c.reframe.facecam
             p.clips = clips
 
         # Optional Demucs vocal isolation: separate the voice once and render
@@ -1108,6 +1126,7 @@ class Engine:
             return
         self._render_one(project_id, clip, src_path, info, out_w, out_h, burn,
                          project.settings.motion,
+                         background_music=project.settings.background_music,
                          ai_boost=project.settings.ai_boost)
 
     def rerender_all(self, project_id: str) -> None:
