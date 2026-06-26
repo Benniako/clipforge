@@ -8,15 +8,24 @@ playback.
 
 The whole filtergraph is written to a script file and passed via
 ``-filter_script:v`` so we never fight shell/filtergraph escaping rules.
+
+Concurrent ffmpeg encodes are capped globally so multiple pipeline workers
+can't collectively starve the GPU encoder and cause thermal throttling or OOM.
 """
 from __future__ import annotations
 
 import logging
 import os
 import tempfile
+import threading
 from pathlib import Path
 
 log = logging.getLogger("clipforge.render")
+
+# Ceiling on ffmpeg encodes running at once — 4 is safely below the 6 NVENC
+# sessions the RTX 5060 Ti can sustain, while preventing runaway parallelism
+# when multiple pipelines are active simultaneously.
+_RENDER_SEMAPHORE = threading.Semaphore(4)
 
 _X264 = ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
          "-pix_fmt", "yuv420p", "-profile:v", "high"]
@@ -389,7 +398,8 @@ def render_clip(clip: Clip, src_path: str, info: MediaInfo, style: StyleTemplate
         last: Exception | None = None
         for enc in encoders:
             try:
-                ffmpeg.run([*base, *enc, *audio, *tail], timeout=900, cwd=tmp)
+                with _RENDER_SEMAPHORE:
+                    ffmpeg.run([*base, *enc, *audio, *tail], timeout=900, cwd=tmp)
                 last = None
                 break
             except ffmpeg.FFmpegError as e:

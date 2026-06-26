@@ -19,21 +19,28 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 
 class SPAStaticFiles(StaticFiles):
-    """StaticFiles that serves index.html for unknown paths (client-side routes).
-
-    Without this, refreshing the browser on e.g. /p/<project-id> returns a 404
-    in the single-server setup. /api and /media are mounted first, so they are
-    never swallowed by the fallback.
+    """StaticFiles that serves index.html for unknown paths (client-side routes),
+    while returning proper 404s for missing file assets (JS, CSS, images) so the
+    browser doesn't choke on index.html served with a wrong MIME type.
     """
+
+    _ASSET_EXTS = frozenset({".js", ".css", ".png", ".jpg", ".jpeg",
+                             ".gif", ".svg", ".ico", ".woff", ".woff2",
+                             ".ttf", ".webp", ".mp4", ".webm"})
 
     async def get_response(self, path: str, scope):
         try:
             response = await super().get_response(path, scope)
         except StarletteHTTPException as exc:
             if exc.status_code == 404:
+                # Missing JS/CSS/images should 404, not return index.html.
+                if any(path.lower().endswith(ext) for ext in self._ASSET_EXTS):
+                    raise
                 return await super().get_response("index.html", scope)
             raise
         if response.status_code == 404:
+            if any(path.lower().endswith(ext) for ext in self._ASSET_EXTS):
+                return response
             return await super().get_response("index.html", scope)
         return response
 
