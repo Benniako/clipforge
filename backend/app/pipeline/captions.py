@@ -42,8 +42,8 @@ def _ts(t: float) -> str:
 # shot. So once the gap past a word exceeds SILENCE_GAP, the caption clears
 # LINGER_PAD after the word instead of lingering. Must be < LINE_GAP, or lines
 # always break before the clamp can fire and captions over-hold into silence.
-SILENCE_GAP = 0.6
-LINGER_PAD = 0.4
+SILENCE_GAP = 0.35
+LINGER_PAD = 0.15
 # Start a fresh caption line after a pause this long, even mid-count — keeps a
 # line from spanning silence so captions begin/end with the speech.
 LINE_GAP = 0.9

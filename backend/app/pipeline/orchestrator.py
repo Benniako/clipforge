@@ -522,6 +522,20 @@ class Engine:
             except Exception as e:
                 log.warning("VAD refine failed: %s", e)
 
+        # Light LLM proofread: fix individual misheard words while keeping
+        # every other word's timing and speaker intact. A single Ollama call
+        # per project (~2-5 s) — only fires when Ollama is available and the
+        # transcript is long enough to benefit.
+        try:
+            if len(transcript.words) >= 20:
+                from ..providers import correct as correct_mod
+                corrected = correct_mod.correct_transcript(
+                    transcript, lang=project.settings.language or "de")
+                if corrected:
+                    log.info("LLM-corrected %d words for %s", corrected, project_id)
+        except Exception as e:
+            log.debug("transcript correction skipped: %s", e)
+
         with store.mutate(project_id) as p:
             p.transcript = transcript
             if vad_absent_warned:
