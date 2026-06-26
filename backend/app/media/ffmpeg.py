@@ -229,6 +229,17 @@ def grab_frame(src: str | Path, dst: str | Path, *, t: float = 0.0,
     frame rate before the scale). Returns the destination path.
     """
     dst = Path(dst)
+
+    # Shared LRU frame cache: check before decoding so VLM, facecam, OCR,
+    # and reframe all share the same frame bytes instead of running N
+    # independent ffmpeg calls for the same timestamp.
+    from .frame_cache import get as _cache_get, put as _cache_put
+
+    cached = _cache_get(str(src), t)
+    if cached is not None:
+        dst.write_bytes(cached)
+        return str(dst)
+
     vf = []
     if fps is not None:
         vf.append(f"fps={fps}")
@@ -251,7 +262,14 @@ def grab_frame(src: str | Path, dst: str | Path, *, t: float = 0.0,
         pass  # settings not available yet (e.g. during import) — safe fallback
     args.append(str(dst))
     run(args, timeout=timeout)
-    return dst
+
+    # Populate cache so subsequent callers skip the ffmpeg call entirely.
+    try:
+        _cache_put(str(src), t, dst.read_bytes())
+    except Exception:
+        pass
+
+    return str(dst)
 
 
 def make_thumbnail(src: str | Path, dst: str | Path, *, at: float = 0.0,
