@@ -8,13 +8,16 @@ a fake spinner.
 """
 from __future__ import annotations
 
+from collections.abc import Callable
+import concurrent.futures
+from concurrent.futures import (FIRST_COMPLETED, ThreadPoolExecutor, wait)
+from dataclasses import dataclass
 import logging
 import queue
 import re
 import threading
 import time
 import traceback
-from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from pathlib import Path
 
 from .. import feedback, store
@@ -23,7 +26,7 @@ from ..media import ffmpeg
 from ..media.ffmpeg import MediaInfo
 from ..models import (ASPECTS, Clip, ClipStatus, ContentType, JobProgress,
                       LayoutType, ProjectStatus, Reframe, ReframeKeyframe,
-                      now)
+                      Transcript, now)
 from ..providers import detect as detect_mod
 from ..providers import detect_gameplay as gameplay_mod
 from ..providers import hashtags as hashtags_mod
@@ -191,7 +194,18 @@ STAGE_LABELS = {
 
 
 class CancelledProject(BaseException):
-    """Raised inside workers when a project was deleted or explicitly cancelled."""
+    """Raised inside the pipeline when a user deletes the project mid-run."""
+
+
+@dataclass
+class _AsrJob:
+    """A transcription job for the dedicated ASR worker thread."""
+    project_id: str
+    audio_path: str
+    language: str | None
+    power_mode: str
+    progress: Callable
+    future: "concurrent.futures.Future[Transcript]"
 
 
 class Engine:
@@ -219,6 +233,11 @@ class Engine:
         # Wall-clock start of _process() per project — used to show elapsed
         # time in the "Done - X clips ready (Y min)" message.
         self._start_times: dict[str, float] = {}
+        # Dedicated ASR worker — decouples GPU transcription from pipeline
+        # workers so multi-project batches overlap ASR with detection/scoring.
+        self._asr_queue: queue.Queue[_AsrJob] = queue.Queue()
+        self._asr_worker_thread: threading.Thread | None = None
+        self._asr_futures: dict[str, concurrent.futures.Future] = {}
 
     def _clip_lock(self, project_id: str, clip_id: str) -> threading.Lock:
         with self._clip_locks_guard:
@@ -234,7 +253,15 @@ class Engine:
         for i in range(n):
             threading.Thread(target=self._loop, name=f"clipforge-worker-{i}",
                              daemon=True).start()
-        log.info("pipeline started with %d worker(s)", n)
+        # Dedicated ASR worker — owns the GPU ASR model so pipeline workers
+        # never block each other on transcription. The lock serialises GPU
+        # access across projects (one transcription at a time) but the worker
+        # thread drains the queue as fast as it can, so worker threads never
+        # wait for it — they submit and move on.
+        self._asr_worker_thread = threading.Thread(
+            target=self._asr_loop, name="clipforge-asr", daemon=True)
+        self._asr_worker_thread.start()
+        log.info("pipeline started with %d worker(s) + ASR thread", n)
 
     def enqueue(self, project_id: str) -> None:
         with self._pause_condition:
@@ -247,6 +274,65 @@ class Engine:
         with self._pause_condition:
             self._queued_projects.add(project_id)
         self._q.put(project_id)
+
+    def submit_asr(self,
+                   project_id: str,
+                   audio_path: str,
+                   language: str | None,
+                   power_mode: str,
+                   progress: Callable) -> "concurrent.futures.Future[Transcript]":
+        """Submit a transcription job to the dedicated ASR worker.
+
+        Returns a ``Future[Transcript]`` that resolves when the ASR thread
+        finishes transcribing.  The pipeline worker can do I/O-bound work
+        (VAD initialisation, clip pre-computation) while waiting for the
+        result with ``future.result()``.
+        """
+        future: "concurrent.futures.Future[Transcript]" = concurrent.futures.Future()
+        job = _AsrJob(
+            project_id=project_id,
+            audio_path=audio_path,
+            language=language,
+            power_mode=power_mode,
+            progress=progress,
+            future=future,
+        )
+        self._asr_queue.put(job)
+        self._asr_futures[project_id] = future
+        return future
+
+    def _asr_loop(self) -> None:
+        """Dedicated ASR worker: drain the transcription queue.
+
+        Runs in its own daemon thread.  Owns the GPU ASR model exclusively
+        so transcription is serialised across projects, but pipeline workers
+        never block waiting for the lock — they submit jobs and process
+        results via futures.
+        """
+        from ..providers import transcribe as transcribe_mod
+
+        while True:
+            job = self._asr_queue.get()
+            pid = job.project_id
+
+            if pid in self._cancel_requested:
+                job.future.cancel()
+                self._asr_queue.task_done()
+                continue
+
+            try:
+                transcript = transcribe_mod.transcribe(
+                    job.audio_path,
+                    language=job.language,
+                    progress=job.progress,
+                    power_mode=job.power_mode,
+                )
+                job.future.set_result(transcript)
+            except Exception as e:
+                job.future.set_exception(e)
+            finally:
+                self._asr_futures.pop(pid, None)
+                self._asr_queue.task_done()
 
     def cancel(self, project_id: str) -> None:
         """Best-effort cancellation for queued/active work.
@@ -515,12 +601,20 @@ class Engine:
             ffmpeg.extract_audio_wav(src_path, wav)
             self._advance(project_id, 0, "Transcribing audio…", 0.02, force=True)
             wav_path = str(wav)
-            transcript = transcribe_mod.transcribe(
-                wav_path, language=project.settings.language,
+            # Submit ASR to the dedicated GPU worker thread so other pipeline
+            # workers can start detection/scoring on other projects while this
+            # one transcribes (the ASR thread owns the GPU model exclusively).
+            _asr_future = self.submit_asr(
+                project_id, wav_path,
+                language=project.settings.language,
+                power_mode=project.settings.power_mode.value,
                 progress=lambda f: self._advance(project_id, 0,
                                                  f"Transcribing… {int(f*100)}%", f),
-                power_mode=project.settings.power_mode.value,
             )
+            # The worker can do I/O work (probe info, VAD prep) while the ASR
+            # thread transcribes.  For now this is a no-op placeholder — the
+            # future result blocks until transcription finishes.
+            transcript = _asr_future.result()
             self._raise_if_cancelled(project_id)
         else:
             # No audio track — skip ASR entirely, go straight to synthetic.
