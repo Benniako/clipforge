@@ -431,18 +431,16 @@ def _get_reader(engine: str, lang: str = "en"):
         ocr_langs = {"de": ["de", "en"], "en": ["en"]}.get(lang[:2].lower(), ["en"])
         attempts = []
         if engine == "paddleocr":
-            attempts.append(("paddleocr", lambda: _make_paddle(gpu, lang)))
-            # EasyOCR runs on the GPU via torch/CUDA without needing a separate
-            # paddlepaddle-gpu install, so on CUDA systems it should be preferred
-            # over a CPU-only PaddleOCR fallback. Place EasyOCR(GPU) *before* the
-            # CPU PaddleOCR path so a CUDA-capable box uses GPU inference.
+            # PaddleOCR needs paddlepaddle compiled with CUDA — the PyPI package
+            # and official CDN wheels for Windows are all CPU-only as of 2026.
+            # Skip the GPU attempt entirely (it logs a scary "device not available"
+            # warning before falling to CPU) and go straight to EasyOCR which
+            # uses torch CUDA. Keep one CPU PaddleOCR attempt as a fallback when
+            # EasyOCR isn't installed either.
             if gpu:
                 attempts.append(("easyocr", lambda: _make_easyocr(gpu, ocr_langs)))
-                # GPU→CPU fallback per engine (#9): when both PaddleOCR GPU and
-                # EasyOCR GPU fail (OOM, no torch CUDA), retry PaddleOCR CPU.
-                attempts.append(("paddleocr", lambda: _make_paddle(False, lang)))
-            else:
-                # CPU-only: PaddleOCR first (more accurate), then EasyOCR CPU.
+            attempts.append(("paddleocr", lambda: _make_paddle(False, lang)))
+            if not gpu:
                 attempts.append(("easyocr", lambda: _make_easyocr(gpu, ocr_langs)))
         elif engine == "easyocr":
             attempts.append(("easyocr", lambda: _make_easyocr(gpu, ocr_langs)))
