@@ -388,12 +388,17 @@ def render_clip(clip: Clip, src_path: str, info: MediaInfo, style: StyleTemplate
         s = get_settings()
         base_cpu = list(base)
         base_gpu = list(base)
-        if s.use_nvenc:
-            # GPU-accelerated decoding: offloads video decoding to the GPU,
-            # reducing CPU load during the crop/scale/encode pipeline. Works
-            # with both h264_nvenc and av1_nvenc encoders without forcing
+        if s.use_nvenc or s.has_nvidia:
+            # GPU-accelerated decoding: offloads video decoding to the GPU's
+            # NVDEC hardware, reducing CPU load during the crop/scale/encode
+            # pipeline. Applied to BOTH the GPU NVENC path AND the CPU x264
+            # fallback because decode offload benefits every encoder.
+            # Works with both h264_nvenc and av1_nvenc encoders without forcing
             # CUDA memory layout (which would break CPU-side filter chains).
-            base_gpu = ["-hwaccel", "cuda"] + base_gpu
+            hwaccel = ["-hwaccel", "cuda"]
+            base_gpu = hwaccel + base_gpu
+            if s.use_nvenc:  # NVENC path gets it; x264 fallback gets it too
+                base_cpu = hwaccel + base_cpu
         encoders: list[tuple[list[str], list[str]]] = [(base_gpu, s.video_encoder_args())]
         if s.use_nvenc:                    # GPU path can fail at runtime -> CPU fallback
             encoders.append((base_cpu, _X264))

@@ -1917,135 +1917,14 @@ def test_optional_powerups_off_by_default_in_ci():
     s = _settings()
     r = s.capability_report()
     assert r["vad"] is False and r["emotion"] is False
-    assert r["scene_detect"] is False and r["active_speaker"] is False
-    assert r["denoise"] is False and r["audio_events"] is False
+    assert r["scene_detect"] is False and r["audio_events"] is False
     assert r["reframe_engine"] in ("haar", "yolo", "mediapipe")
-
-
-def test_active_speaker_not_advertised_until_adapter_exists():
-    from app import config
-
-    old_env = os.environ.pop("CLIPFORGE_ASD_DIR", None)
-    try:
-        assert config._detect_asd_adapter() is False
-    finally:
-        if old_env is not None:
-            os.environ["CLIPFORGE_ASD_DIR"] = old_env
 
 
 def test_optional_nested_module_lookup_is_safe_when_parent_missing():
     from app import config
 
     assert config._has_module("definitely_missing_parent.child") is False
-
-
-def test_active_speaker_adapter_detects_valid_checkout_fixture():
-    from app import config
-
-    old_env = os.environ.get("CLIPFORGE_ASD_DIR")
-    old_has_module = config._has_module
-    old_nvidia = config._detect_nvidia_gpu
-    with tempfile.TemporaryDirectory() as td:
-        root = os.path.join(td, "LR-ASD")
-        os.makedirs(os.path.join(root, "model"), exist_ok=True)
-        os.makedirs(os.path.join(root, "weight"), exist_ok=True)
-        os.makedirs(os.path.join(root, "model", "faceDetector", "s3fd"), exist_ok=True)
-        for rel in ("ASD.py", "Columbia_test.py", os.path.join("model", "Model.py")):
-            with open(os.path.join(root, rel), "w", encoding="utf-8") as f:
-                f.write("# fixture\n")
-        with open(os.path.join(root, "weight", "pretrain_AVA.model"), "wb") as f:
-            f.write(b"x" * 100_001)
-        with open(os.path.join(root, "model", "faceDetector", "s3fd", "sfd_face.pth"), "wb") as f:
-            f.write(b"x" * 100_001)
-        os.environ["CLIPFORGE_ASD_DIR"] = root
-        config._has_module = lambda _name: True
-        config._detect_nvidia_gpu = lambda: True
-        try:
-            assert config._detect_asd_adapter() is True
-        finally:
-            config._has_module = old_has_module
-            config._detect_nvidia_gpu = old_nvidia
-            if old_env is None:
-                os.environ.pop("CLIPFORGE_ASD_DIR", None)
-            else:
-                os.environ["CLIPFORGE_ASD_DIR"] = old_env
-
-
-def test_lr_asd_script_compatibility_accepts_patched_scenedetect_fallback():
-    from pathlib import Path
-    from app import config
-
-    with tempfile.TemporaryDirectory() as td:
-        root = os.path.join(td, "LR-ASD")
-        os.makedirs(root, exist_ok=True)
-        script = os.path.join(root, "Columbia_test.py")
-        with open(script, "w", encoding="utf-8") as f:
-            f.write("from scenedetect.video_manager import VideoManager\n")
-        assert config._lr_asd_script_compatible(Path(root)) is False
-        with open(script, "w", encoding="utf-8") as f:
-            f.write("from scenedetect.video_manager import VideoManager\n"
-                    "from scenedetect import open_video\n"
-                    "VideoManager = None\n")
-        assert config._lr_asd_script_compatible(Path(root)) is True
-
-
-def test_lr_asd_parser_selects_highest_speaking_track():
-    from app.providers import active_speaker as AS
-
-    tracks = [
-        {"track": {"frame": [0, 1, 2], "bbox": [[100, 0, 200, 100],
-                                                [110, 0, 210, 100],
-                                                [120, 0, 220, 100]]}},
-        {"track": {"frame": [0, 1, 2], "bbox": [[700, 0, 800, 100],
-                                                [710, 0, 810, 100],
-                                                [720, 0, 820, 100]]}},
-    ]
-    centers = AS._centers_from_tracks(
-        tracks, [[-0.2, 0.8, 0.7], [1.0, -0.1, -0.2]], frame_width=1000, fps=25.0)
-    assert centers == [(0.0, 0.75), (0.04, 0.16), (0.08, 0.17)]
-    assert AS._centers_from_tracks(tracks, [[-1, -1, -1], [-0.5, -0.2, -0.1]], 1000) is None
-
-
-def test_lr_asd_subprocess_gets_numpy_int_compat_shim():
-    from pathlib import Path
-    from app.providers import active_speaker as AS
-
-    with tempfile.TemporaryDirectory() as td:
-        env: dict[str, str] = {}
-        shim_dir = Path(td) / "compat"
-        AS._add_numpy_int_compat(env, shim_dir)
-        import numpy as np
-
-        if hasattr(np, "int"):
-            assert "PYTHONPATH" not in env
-        else:
-            assert env["PYTHONPATH"].split(os.pathsep)[0] == str(shim_dir)
-            assert (shim_dir / "sitecustomize.py").exists()
-
-
-def test_lr_asd_runner_patches_numpy_int_before_demo_script():
-    from app.providers import active_speaker as AS
-
-    with tempfile.TemporaryDirectory() as td:
-        runner = AS._write_lrasd_runner(Path(td))
-        text = runner.read_text(encoding="utf-8")
-        assert "_np.int = int" in text
-        assert "runpy.run_path('Columbia_test.py'" in text
-
-
-def test_reframe_uses_lr_asd_centers_before_face_fallback():
-    from app.pipeline import reframe as RF
-    from app.providers import active_speaker as AS
-
-    old_settings, old_track = RF.get_settings, AS.track_centers
-    RF.get_settings = lambda: _settings(has_asd=True, has_opencv=False)
-    AS.track_centers = lambda *_args: [(0.0, 0.8), (0.4, 0.82), (0.8, 0.84)]
-    try:
-        rf = RF.compute_reframe("unused.mp4", 10.0, 11.0, 16 / 9)
-    finally:
-        RF.get_settings, AS.track_centers = old_settings, old_track
-    assert rf.tracked is True
-    assert rf.keyframes[0].cx > 0.7
 
 
 def test_audio_event_reduce_and_bonus():
@@ -3129,8 +3008,10 @@ def test_broll_pip_writes_complex_filtergraph():
     assert "filter_complex_script" in src  # switches from simple to complex
 
 
-def test_render_cpu_fallback_drops_cuda_hwaccel(monkeypatch):
-    """If NVENC fails, the x264 fallback must not keep CUDA decode flags."""
+def test_render_cpu_fallback_keeps_gpu_decode(monkeypatch):
+    """If NVENC fails, the x264 fallback keeps CUDA decode (NVDEC offloads
+    video decoding to the GPU regardless of encoder — the hwaccel is about
+    decode, not encode)."""
     import tempfile
     from pathlib import Path
     from app.media import ffmpeg
@@ -3140,6 +3021,7 @@ def test_render_cpu_fallback_drops_cuda_hwaccel(monkeypatch):
 
     class FakeSettings:
         use_nvenc = True
+        has_nvidia = True
 
         def video_encoder_args(self):
             return ["-c:v", "h264_nvenc"]
@@ -3151,7 +3033,9 @@ def test_render_cpu_fallback_drops_cuda_hwaccel(monkeypatch):
         if "h264_nvenc" in args:
             raise ffmpeg.FFmpegError(args, 1, "Invalid argument")
         assert "libx264" in args
-        assert "-hwaccel" not in args
+        # GPU decode (NVDEC) stays active — it's a decode offload, not an
+        # encoder flag, and benefits both NVENC and x264 encode paths.
+        assert "-hwaccel" in args
         return ""
 
     monkeypatch.setattr(R, "get_settings", lambda: FakeSettings())
@@ -3169,7 +3053,7 @@ def test_render_cpu_fallback_drops_cuda_hwaccel(monkeypatch):
 
     assert len(calls) == 2
     assert "-hwaccel" in calls[0]
-    assert "-hwaccel" not in calls[1]
+    assert "-hwaccel" in calls[1]
 
 
 # --------------------------------------------------------------------------- #

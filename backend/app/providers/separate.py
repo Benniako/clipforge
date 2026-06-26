@@ -26,7 +26,8 @@ log = logging.getLogger("clipforge.separate")
 
 
 def available() -> bool:
-    return get_settings().has_demucs
+    """Demucs vocal isolation has been removed — always returns False."""
+    return False
 
 
 def denoise_source(src_path: str, dst_path: str) -> str | None:

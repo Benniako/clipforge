@@ -7,13 +7,14 @@ if not exist ".venv\Scripts\python.exe" (
     exit /b 1
 )
 
-REM ---- Responsive defaults for this workstation ------------------------
-REM The backend auto-selects Whisper size from actually usable CUDA. Do not
-REM force large-v3-turbo here: when cuBLAS/cuDNN are missing, that would push
-REM a huge model onto CPU and make long videos feel frozen.
-REM Render fan-out is kept moderate so the UI stays usable while clips render.
-set CLIPFORGE_RENDER_WORKERS=4
-set CLIPFORGE_PIPELINE_WORKERS=1
+REM ---- GPU-maximised throughput for this workstation -------------------
+REM The backend auto-selects Whisper size and batch from actually usable CUDA
+REM and VRAM. max_gpu saturates the GPU for transcription + VLM scoring.
+REM Render fan-out and pipeline workers are tuned for the RTX 5060 Ti 16 GB
+REM NVENC encoder (6 concurrent sessions) so batch creation is never CPU-bound.
+set CLIPFORGE_DEFAULT_POWER_MODE=max_gpu
+set CLIPFORGE_RENDER_WORKERS=6
+set CLIPFORGE_PIPELINE_WORKERS=2
 REM Ollama flash attention: ~2x faster LLM inference for AI titles/virality.
 set OLLAMA_FLASH_ATTENTION=1
 REM Keep Ollama model loaded between requests (avoids reload delays).
@@ -22,7 +23,6 @@ REM Add optional tools to PATH for capability detection and yt-dlp YouTube parsi
 set PATH=%~dp0.tools\deno;%PATH%;%LOCALAPPDATA%;%ProgramFiles%\Tesseract-OCR
 REM Pull private/local account settings written by setup.bat into this process.
 for /f "usebackq delims=" %%T in (`powershell -NoProfile -Command "[Environment]::GetEnvironmentVariable('HF_TOKEN','User')"`) do if not "%%T"=="" set "HF_TOKEN=%%T"
-for /f "usebackq delims=" %%T in (`powershell -NoProfile -Command "[Environment]::GetEnvironmentVariable('CLIPFORGE_ASD_DIR','User')"`) do if not "%%T"=="" set "CLIPFORGE_ASD_DIR=%%T"
 REM AI titles/vision auto-pick the strongest installed Ollama models. setup.bat
 REM pulls hardware-fit defaults; set CLIPFORGE_LLM_MODEL / CLIPFORGE_VLM_MODEL
 REM only if you want to force a specific model.

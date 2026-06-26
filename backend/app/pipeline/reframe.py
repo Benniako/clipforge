@@ -179,14 +179,7 @@ def compute_reframe(src: str, start: float, end: float, src_aspect: float,
 
     s = get_settings()
     centers = None
-    if s.has_asd:
-        try:
-            from ..providers import active_speaker
-
-            centers = active_speaker.track_centers(src, start, end)
-        except Exception as e:
-            log.warning("active-speaker reframe failed: %s", e)
-    if not centers and s.has_opencv:
+    if s.has_opencv:
         # Use pre-computed face tracks (whole-source single ffmpeg pass) if
         # available — this is 3-10x faster than per-clip ffmpeg decoding.
         precomputed = _PRECOMPUTED_TRACKS.get(src)

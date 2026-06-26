@@ -521,15 +521,6 @@ class Engine:
                     log.warning("Silero VAD not installed — captions may drift")
             except Exception as e:
                 log.warning("VAD refine failed: %s", e)
-            # Optional LR-ASD: attribute each word to the on-screen active speaker
-            # (no-op unless the LR-ASD checkout is wired via CLIPFORGE_ASD_DIR).
-            try:
-                from ..providers import active_speaker as asd_mod
-                if asd_mod.available():
-                    transcript.words = asd_mod.attribute_speakers(
-                        src_path, transcript.words)
-            except Exception as e:
-                log.warning("active-speaker attribution failed: %s", e)
 
         with store.mutate(project_id) as p:
             p.transcript = transcript
@@ -952,26 +943,10 @@ class Engine:
                     clip.reframe.facecam = prev_c.reframe.facecam
             p.clips = clips
 
-        # Optional Demucs vocal isolation: separate the voice once and render
-        # from a denoised copy (video stream copied, untouched) so every clip
-        # gets studio-clean speech. Falls back to the original on any failure.
-        render_src = src_path
-        if project.settings.denoise and settings.has_demucs and info.has_audio:
-            self._advance(project_id, 5, "Isolating voice (Demucs)…")
-            try:
-                from ..providers import separate as sep_mod
-                dst_path = ingest.project_dir(project_id) / "source.denoised.mp4"
-                dst = str(dst_path)
-                cleaned = dst if dst_path.exists() else sep_mod.denoise_source(src_path, dst)
-                if cleaned:
-                    render_src = cleaned
-            except Exception as e:
-                log.warning("denoise failed: %s", e)
-
         # 6. render (parallel per clip) ----------------------------------
         out_w, out_h = project.settings.dims()
         self._advance(project_id, 5, "Rendering clips…")
-        self._render_all(project_id, clips, render_src, info, out_w, out_h,
+        self._render_all(project_id, clips, src_path, info, out_w, out_h,
                          project.settings.burn_captions, project.settings.motion,
                          project.settings.power_mode.value,
                          ai_boost=project.settings.ai_boost)
@@ -1155,7 +1130,7 @@ class Engine:
             clip = project.clip(clip_id)
             if not clip:
                 raise RuntimeError("clip not found")
-            src_path = self._render_source(project_id, project)
+            src_path = str(get_settings().media_dir / project.source.path)
             info = ffmpeg.probe(src_path)
             # _render_one resolves a per-clip aspect override on its own.
             out_w, out_h = project.settings.dims()
@@ -1181,7 +1156,7 @@ class Engine:
             project = store.get(project_id)
             if not project or not project.source:
                 raise RuntimeError("project or source media missing")
-            src_path = self._render_source(project_id, project)
+            src_path = str(get_settings().media_dir / project.source.path)
             info = ffmpeg.probe(src_path)
             out_w, out_h = project.settings.dims()
             self._render_all(project_id, project.clips, src_path, info,
@@ -1209,7 +1184,7 @@ class Engine:
             clips = [c for c in project.clips if c.id in wanted]
             if not clips:
                 raise RuntimeError("no selected clips found")
-            src_path = self._render_source(project_id, project)
+            src_path = str(get_settings().media_dir / project.source.path)
             info = ffmpeg.probe(src_path)
             out_w, out_h = project.settings.dims()
             with store.mutate(project_id) as p:
@@ -1233,14 +1208,6 @@ class Engine:
                     p.progress.message = f"Selected re-render failed: {e}"
             except Exception:
                 pass  # project deleted underneath us
-
-    def _render_source(self, project_id: str, project) -> str:
-        """The video to render clips from: a Demucs-denoised copy when one was
-        produced for this project, else the original source."""
-        denoised = ingest.project_dir(project_id) / "source.denoised.mp4"
-        if project.settings.denoise and denoised.exists():
-            return str(denoised)
-        return str(get_settings().media_dir / project.source.path)
 
     def _mark_clip_failed(self, project_id: str, clip_id: str, err: Exception) -> None:
         try:

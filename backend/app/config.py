@@ -134,8 +134,6 @@ def _detect_ocr() -> str:
         return "paddleocr"
     if _has_module("easyocr"):
         return "easyocr"
-    if _has_module("surya"):
-        return "surya"
     if _has_module("pytesseract") and shutil.which("tesseract"):
         return "tesseract"
     return ""
@@ -222,56 +220,6 @@ def _detect_reframe_engine() -> str:
     return "haar"
 
 
-def _detect_asd_adapter() -> bool:
-    """True only when active-speaker detection can actually relabel words.
-
-    ``CLIPFORGE_ASD_DIR`` alone is not enough: the LR-ASD checkout must include
-    its demo entrypoint, model code, weights, and the small MFCC dependency.
-    """
-    candidates: list[Path] = []
-    env = os.environ.get("CLIPFORGE_ASD_DIR")
-    if env:
-        candidates.append(Path(env))
-    data_dir = Path(os.environ.get("CLIPFORGE_DATA_DIR",
-                                   Path(__file__).resolve().parents[1] / "data"))
-    candidates.append(data_dir / "models" / "LR-ASD")
-
-    required = ("ASD.py", "Columbia_test.py", "model/Model.py")
-    weights = ("weight/pretrain_AVA.model", "model/faceDetector/s3fd/sfd_face.pth")
-    deps = ("cv2", "numpy", "python_speech_features", "scipy", "sklearn", "torch")
-    for asd_dir in candidates:
-        if not all((asd_dir / rel).exists() for rel in required):
-            continue
-        missing_weight = False
-        for rel in weights:
-            weight_path = asd_dir / rel
-            if not weight_path.exists() or weight_path.stat().st_size < 100_000:
-                missing_weight = True
-                break
-        if missing_weight:
-            continue
-        if not _lr_asd_script_compatible(asd_dir):
-            continue
-        if not all(_has_module(dep) for dep in deps):
-            continue
-        if not _detect_nvidia_gpu():
-            continue
-        return True
-    return False
-
-
-def _lr_asd_script_compatible(asd_dir: Path) -> bool:
-    """Guard against an old LR-ASD demo script + new PySceneDetect install."""
-    script = asd_dir / "Columbia_test.py"
-    try:
-        text = script.read_text(encoding="utf-8", errors="ignore")
-    except Exception:
-        return False
-    if "VideoManager = None" in text and "open_video" in text:
-        return True
-    if "from scenedetect.video_manager import VideoManager" not in text:
-        return True
-    return _has_module("scenedetect.video_manager")
 
 
 def _torch_cuda_available() -> bool:
@@ -328,7 +276,10 @@ def _ct2_cuda_runtime_available() -> bool:
 
 
 def _detect_cuda() -> bool:
-    """True if CUDA is usable by the ASR stack, not only visible to PyTorch."""
+    """True if CUDA is usable by the ASR stack (ctranslate2), not only visible
+    to PyTorch. This is the stricter check — used for capability reporting and
+    ASR-specific decisions. For the broader `device` default (which also covers
+    torch-based models like whisperX), see :func:`_detect_any_cuda`."""
     if os.name == "nt":
         if not _detect_nvidia_gpu():
             return False
@@ -344,6 +295,22 @@ def _detect_cuda() -> bool:
     if _torch_cuda_available():
         log.info("PyTorch sees CUDA, but ctranslate2 ASR CUDA is unavailable; using CPU transcription")
     return False
+
+
+def _detect_any_cuda() -> bool:
+    """True when ANY CUDA-capable backend is usable (ctranslate2 OR torch).
+
+    This is the broader check used to decide the default ``device``: if the
+    NVIDIA driver is present and either ctranslate2 or torch can use it, we
+    default to CUDA. ASR (faster-whisper via ctranslate2) gracefully falls back
+    to CPU when the strict ``has_cuda`` is False but ``device="cuda"`` still
+    accelerates alignment, VAD, VLM, and other torch-based stages.
+    """
+    if not _detect_nvidia_gpu():
+        return False
+    if _detect_cuda():
+        return True
+    return _torch_cuda_available()
 
 
 def _detect_nvenc(ffmpeg: str | None) -> tuple[bool, bool]:
@@ -424,43 +391,23 @@ def _auto_workers(cpu: int) -> int:
     return max(2, min(cpu // 4, 4))
 
 
-def _check_image_gen() -> bool:
-    try:
-        from .providers.image_gen import detected
-        return detected()
-    except Exception:
-        return False
+def _auto_batch_size(vram_mb: int, has_cuda: bool) -> int:
+    """Auto-compute a sensible whisper batch size from VRAM.
 
-
-_CACHE: dict[str, tuple[float, bool]] = {}
-_CACHE_TTL = 60.0
-
-
-def _cached_check(name: str, fn) -> bool:
-    now = time.time()
-    cached = _CACHE.get(name)
-    if cached and now - cached[0] < _CACHE_TTL:
-        return cached[1]
-    try:
-        val = fn()
-    except Exception:
-        val = False
-    _CACHE[name] = (now, val)
-    return val
-
-
-def _check_agent_virality() -> bool:
-    return _cached_check("agent_virality", lambda: _import_detected("agent_virality"))
-
-
-def _check_tts() -> bool:
-    return _cached_check("tts", lambda: _import_detected("tts"))
-
-
-def _import_detected(module: str) -> bool:
-    import importlib
-    mod = importlib.import_module(f".providers.{module}", package=__package__)
-    return mod.detected()
+    Returns 0 (batching disabled) when no CUDA is available. On GPU the batch
+    keeps the card saturated without OOM: 48 on 16 GB cards, 24 on 12 GB,
+    16 on 8 GB, 8 on smaller. These match ``whisper_batch_for("max_gpu")`` so
+    the default path already uses GPU-efficient batching.
+    """
+    if not has_cuda:
+        return 0
+    if vram_mb >= 16000:
+        return 48
+    if vram_mb >= 12000:
+        return 24
+    if vram_mb >= 8000:
+        return 16
+    return 8
 
 
 @dataclass(frozen=True)
@@ -488,11 +435,9 @@ class Settings:
     has_vad: bool = False        # Silero VAD — snap captions to exact speech
     has_scenedetect: bool = False  # PySceneDetect — better scene-cut snapping
     has_emotion: bool = False    # emotion2vec/FunASR — excitement virality signal
-    has_demucs: bool = False     # Demucs — isolate voice from music/game audio
     has_audio_events: bool = False  # PANNs — cheering/laughter/explosion detection
     has_clap: bool = False       # CLAP zero-shot audio cue detection
     reframe_engine: str = "haar"  # "yolo" | "mediapipe" | "haar"
-    has_asd: bool = False        # LR-ASD active-speaker detection wired in
     vram_mb: int = 0        # total VRAM of the first GPU (MB)
     auto_model: bool = True  # whisper model was auto-selected for this hardware
     # --- individual optional tools surfaced in the capability report ----------
@@ -506,7 +451,6 @@ class Settings:
     has_easyocr: bool = False    # OCR engine (best on noisy frames)
     has_tesseract: bool = False  # OCR engine (fallback)
     has_scrfd: bool = False      # SCRFD face detection (upgrade from YuNet)
-    has_surya: bool = False      # Surya OCR (vision-language based OCR)
 
     # --- pipeline tunables ----------------------------------------------
     whisper_model: str = os.environ.get("CLIPFORGE_WHISPER_MODEL", "tiny")
@@ -526,6 +470,8 @@ class Settings:
     device: str = os.environ.get("CLIPFORGE_DEVICE", "cpu")
     # Batched-inference batch size for faster-whisper on GPU (BatchedInference
     # Pipeline) — bigger keeps the GPU saturated; 0 disables batching.
+    # When CUDA is available and the env var is not explicitly set,
+    # get_settings() auto-computes a VRAM-based default (see _auto_batch_size).
     whisper_batch_size: int = int(os.environ.get("CLIPFORGE_WHISPER_BATCH", "0"))
     # Which transcriber to prefer: "auto" (whisperX if present, else faster-whisper),
     # or force one of "whisperx" / "faster" / "synthetic".
@@ -621,9 +567,6 @@ class Settings:
                 item("reframe_engine", True,
                      f"Reframe backend: {self.reframe_engine}",
                      "yolo (best) > mediapipe > haar/YuNet (always available)."),
-                item("asd", self.has_asd,
-                     "LR-ASD active speaker",
-                     "Ties transcript words to the on-screen speaker for multi-person content."),
                 item("scrfd", self.has_scrfd,
                      "SCRFD face detection",
                      "Improved face detection. Replaces YuNet. ONNX GPU-accelerated."),
@@ -635,8 +578,6 @@ class Settings:
                      "EasyOCR", "Better than PaddleOCR on noisy/bitrate-starved frames."),
                 item("tesseract", self.has_tesseract,
                      "Tesseract", "Fallback OCR engine."),
-                item("surya", self.has_surya,
-                     "Surya OCR", "Vision-language based OCR (90+ langs, GPU). Alternative to PaddleOCR."),
                 item("ocr_selected", bool(self.ocr_engine),
                      f"Active OCR: {self.ocr_engine or 'none'}",
                      "Selected automatically from the engines above. None = OCR detection skipped."),
@@ -648,8 +589,6 @@ class Settings:
                      "PANNs", "Cheering/laughter/explosion detection as a virality signal."),
                 item("emotion", self.has_emotion,
                      "emotion2vec/FunASR", "Excitement/intensity virality signal from voice."),
-                item("demucs", self.has_demucs,
-                     "Demucs", "Isolates voice from music/game audio for cleaner transcription."),
             ]},
             {"name": "gpu", "items": [
                 item("nvidia", self.has_nvidia,
@@ -668,21 +607,6 @@ class Settings:
             {"name": "scenework", "items": [
                 item("scenedetect", self.has_scenedetect,
                      "PySceneDetect", "Snaps clip boundaries to real scene cuts."),
-            ]},
-            {"name": "extras", "items": [
-                item("image_gen", _check_image_gen(),
-                     "AI Cover Image Generation",
-                     "Generate stylised thumbnails from clip titles using a local "
-                     "diffusion model (Krea-2-Raw or ideogram). Install deps to enable."),
-                item("agent_virality", _check_agent_virality(),
-                     "Tool-calling Virality Agent",
-                     "Multi-step agent virality scoring using Qwen-AgentWorld. "
-                     "Reads OCR + audio + facecam signals before judging. "
-                     "Install vLLM or Ollama with an agent model to enable."),
-                item("tts", _check_tts(),
-                     "Text-to-Speech",
-                     "Optional voice narration for generated clips "
-                     "(voicebox / piper / XTTS). Install a TTS engine to enable."),
             ]},
         ]}
 
@@ -776,12 +700,10 @@ class Settings:
             "vad": self.has_vad,
             "scene_detect": self.has_scenedetect,
             "emotion": self.has_emotion,
-            "denoise": self.has_demucs,
             "audio_events": self.has_audio_events or self.has_clap,
             "panns_audio": self.has_audio_events,
             "clap_audio": self.has_clap,
             "reframe_engine": self.reframe_engine,
-            "active_speaker": self.has_asd,
             "face_tracking": self.has_opencv,
             "url_import": self.has_ytdlp,
             "gpu": self.has_cuda,
@@ -806,7 +728,6 @@ class Settings:
             "easyocr": self.has_easyocr,
             "tesseract": self.has_tesseract,
             "scrfd": self.has_scrfd,
-            "surya": self.has_surya,
         }
 
 
@@ -820,15 +741,22 @@ def get_settings() -> Settings:
 
     ffmpeg, ffprobe = _resolve_ffmpeg()
     has_cuda = _detect_cuda()
+    has_any_cuda = _detect_any_cuda()
     has_nvenc, has_av1_nvenc = _detect_nvenc(ffmpeg)
     has_nvidia = _detect_nvidia_gpu()
     vram_mb = _detect_vram_mb()
-    device = os.environ.get("CLIPFORGE_DEVICE") or ("cuda" if has_cuda else "cpu")
+    # Device default: prefer CUDA when *any* GPU backend is usable (not just
+    # ctranslate2). torch-based models (whisperX alignment, VAD, VLM) benefit
+    # even when the stricter ASR-specific check fails. ASR itself falls back to
+    # CPU gracefully in transcribe.py if ctranslate2 can't use the GPU.
+    device = os.environ.get("CLIPFORGE_DEVICE") or ("cuda" if has_any_cuda else "cpu")
 
     cpu = os.cpu_count() or 4
     _ollama_result = _detect_ollama()  # call once, use for both availability + models string
     model_env = os.environ.get("CLIPFORGE_WHISPER_MODEL")
     whisper_model = model_env or _auto_whisper_model(has_cuda, vram_mb, cpu)
+    batch_env = os.environ.get("CLIPFORGE_WHISPER_BATCH")
+    whisper_batch_size = int(batch_env) if batch_env else _auto_batch_size(vram_mb, has_cuda or has_any_cuda)
     workers_env = os.environ.get("CLIPFORGE_RENDER_WORKERS")
     render_workers = int(workers_env) if workers_env else _auto_workers(cpu)
 
@@ -848,11 +776,9 @@ def get_settings() -> Settings:
         has_vad=_has_module("silero_vad"),
         has_scenedetect=_has_module("scenedetect"),
         has_emotion=_has_module("funasr"),
-        has_demucs=_has_module("demucs"),
         has_audio_events=_has_module("panns_inference"),
         has_clap=_has_module("laion_clap"),
         reframe_engine=_detect_reframe_engine(),
-        has_asd=_detect_asd_adapter(),
         has_cuda=has_cuda,
         has_nvenc=has_nvenc,
         has_nvidia=has_nvidia,
@@ -868,9 +794,9 @@ def get_settings() -> Settings:
         has_easyocr=_has_module("easyocr"),
         has_tesseract=bool(_has_module("pytesseract") and shutil.which("tesseract")),
         has_scrfd=_has_module("scrfd"),
-        has_surya=_has_module("surya"),
         device=device,
         whisper_model=whisper_model,
+        whisper_batch_size=whisper_batch_size,
         render_workers=render_workers,
         diarization_model=os.environ.get(
             "CLIPFORGE_DIARIZATION_MODEL",

@@ -55,10 +55,30 @@ class PowerMode(str, Enum):
 
 
 def _default_power_mode() -> PowerMode:
-    try:
-        return PowerMode(os.environ.get("CLIPFORGE_DEFAULT_POWER_MODE", "balanced"))
-    except ValueError:
-        return PowerMode.balanced
+    """Pick the power mode for new projects.
+
+    1. Explicit ``CLIPFORGE_DEFAULT_POWER_MODE`` env var wins.
+    2. Auto-detected NVIDIA GPU → ``max_gpu`` (saturate the card for speed).
+    3. Fallback → ``balanced`` (conservative, keeps the desktop responsive).
+    """
+    env = os.environ.get("CLIPFORGE_DEFAULT_POWER_MODE")
+    if env:
+        try:
+            return PowerMode(env)
+        except ValueError:
+            return PowerMode.balanced
+    # Quick GPU probe: nvidia-smi returns 0 when the driver + GPU are working.
+    # Import locally so models.py stays at the bottom of the dep stack.
+    import shutil
+    if shutil.which("nvidia-smi"):
+        import subprocess
+        try:
+            r = subprocess.run(["nvidia-smi"], capture_output=True, timeout=5)
+            if r.returncode == 0:
+                return PowerMode.max_gpu
+        except Exception:
+            pass
+    return PowerMode.balanced
 
 
 class LayoutType(str, Enum):

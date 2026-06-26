@@ -27,8 +27,8 @@ MIN_SPEAKING_SCORE = 0.0
 
 
 def available() -> bool:
-    """True only after the LR-ASD inference adapter is fully wired."""
-    return get_settings().has_asd
+    """LR-ASD has been removed — always returns False."""
+    return False
 
 
 def _asd_dir() -> Path | None:
