@@ -36,6 +36,10 @@ if errorlevel 1 (
 )
 echo [OK] Node.js found
 
+REM --- 2b. Deno JS runtime (yt-dlp YouTube player parsing) --------------
+REM Installed locally into .tools\deno so setup does not require admin rights.
+powershell -ExecutionPolicy Bypass -NoProfile -File "%~dp0scripts\setup_deno.ps1" || echo [..] Deno setup skipped - YouTube imports may be capped at 360p.
+
 REM --- 3. VC++ runtime (Whisper / ctranslate2 needs it) ----------------
 if not exist "%SystemRoot%\System32\vcruntime140.dll" (
     echo [!] Microsoft VC++ Redistributable looks missing - transcription may fail.

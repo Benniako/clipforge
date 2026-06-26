@@ -90,8 +90,11 @@ def _download_ytdlp(url: str, dest_stem: Path) -> Path:
         "no_warnings": False,
         "ignoreerrors": False,
     }
-    if get_settings().ffmpeg:
-        opts["ffmpeg_location"] = str(Path(get_settings().ffmpeg).parent)
+    settings = get_settings()
+    if settings.ffmpeg:
+        opts["ffmpeg_location"] = str(Path(settings.ffmpeg).parent)
+    if settings.deno_path:
+        opts["js_runtimes"] = {"deno": {"path": settings.deno_path}}
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=True)
@@ -126,9 +129,7 @@ def detect_ytdlp_warnings() -> str | None:
     (typically 360p). We surface this proactively so the user knows to install
     deno, rather than getting silent 360p. Returns None when all clear.
     """
-    import shutil
-
-    if shutil.which("deno"):
+    if get_settings().deno_path:
         return None
     # yt-dlp only uses deno for YouTube-family extractors, so the warning is
     # relevant specifically to URL imports.

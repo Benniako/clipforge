@@ -1370,7 +1370,7 @@ def test_gameplay_hashtags_lead_with_the_game():
 
 
 def test_ollama_model_autopick_prefers_strongest():
-    from app.providers import llm
+    from app.providers import llm, vlm
     assert llm._resolve_model(["llama3.2:latest", "qwen3:8b"]) == "qwen3:8b"
     assert llm._resolve_model(["gemma4:12b", "llama3.3:70b"]) == "gemma4:12b"
     assert llm._resolve_model(["qwen3:8b", "qwen3:14b"]) == "qwen3:14b"
@@ -1378,6 +1378,9 @@ def test_ollama_model_autopick_prefers_strongest():
     assert llm._resolve_model(["llama3.2:latest"]) == "llama3.2:latest"
     assert llm._resolve_model(["some-custom:7b"]) == "some-custom:7b"  # anything > nothing
     assert llm._resolve_model([]) is None
+    tags = "qwen3-vl:8b, qwen3:8b, llama3.2:latest"
+    assert llm.model_from_tags(tags) == "qwen3:8b"
+    assert vlm.model_from_tags(tags) == "qwen3-vl:8b"
 
 
 def test_llm_title_strips_reasoning_blocks():
@@ -1941,7 +1944,7 @@ def test_active_speaker_adapter_detects_valid_checkout_fixture():
 
     old_env = os.environ.get("CLIPFORGE_ASD_DIR")
     old_has_module = config._has_module
-    old_cuda = config._torch_cuda_available
+    old_nvidia = config._detect_nvidia_gpu
     with tempfile.TemporaryDirectory() as td:
         root = os.path.join(td, "LR-ASD")
         os.makedirs(os.path.join(root, "model"), exist_ok=True)
@@ -1956,12 +1959,12 @@ def test_active_speaker_adapter_detects_valid_checkout_fixture():
             f.write(b"x" * 100_001)
         os.environ["CLIPFORGE_ASD_DIR"] = root
         config._has_module = lambda _name: True
-        config._torch_cuda_available = lambda: True
+        config._detect_nvidia_gpu = lambda: True
         try:
             assert config._detect_asd_adapter() is True
         finally:
             config._has_module = old_has_module
-            config._torch_cuda_available = old_cuda
+            config._detect_nvidia_gpu = old_nvidia
             if old_env is None:
                 os.environ.pop("CLIPFORGE_ASD_DIR", None)
             else:
@@ -2584,6 +2587,98 @@ def test_ytdlp_error_unwraps_to_useful_message():
         # Restore real modules if present.
         for mod in ("yt_dlp", "yt_dlp.utils"):
             sys.modules.pop(mod, None)
+
+
+def test_local_tool_lookup_finds_project_deno_dir():
+    from pathlib import Path
+    from app import config
+
+    old_tools = os.environ.get("CLIPFORGE_TOOLS_DIR")
+    old_bin = os.environ.pop("CLIPFORGE_DENO_BIN", None)
+    with tempfile.TemporaryDirectory() as td:
+        exe = Path(td) / ("deno.exe" if os.name == "nt" else "deno")
+        exe.write_text("", encoding="utf-8")
+        os.environ["CLIPFORGE_TOOLS_DIR"] = td
+        try:
+            assert config._find_executable("deno", env_var="CLIPFORGE_DENO_BIN") == str(exe)
+        finally:
+            if old_tools is None:
+                os.environ.pop("CLIPFORGE_TOOLS_DIR", None)
+            else:
+                os.environ["CLIPFORGE_TOOLS_DIR"] = old_tools
+            if old_bin is not None:
+                os.environ["CLIPFORGE_DENO_BIN"] = old_bin
+
+
+def test_ytdlp_receives_explicit_deno_runtime_path():
+    from pathlib import Path
+    from app.pipeline import ingest
+
+    import sys, types
+    from importlib.util import spec_from_loader
+
+    fake = types.ModuleType("yt_dlp")
+    fake.__spec__ = spec_from_loader("yt_dlp", loader=None)
+    utils_mod = types.ModuleType("yt_dlp.utils")
+    utils_mod.__spec__ = spec_from_loader("yt_dlp.utils", loader=None)
+
+    class _DownloadError(Exception):
+        pass
+
+    utils_mod.DownloadError = _DownloadError
+    fake.utils = utils_mod
+    captured: dict = {}
+
+    class _YDL:
+        def __init__(self, opts):
+            captured.update(opts)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def extract_info(self, url, download):
+            out = Path(captured["outtmpl"].replace("%(ext)s", "mp4"))
+            out.write_bytes(b"video")
+            return {"id": "x", "ext": "mp4"}
+
+        def prepare_filename(self, info):
+            return captured["outtmpl"].replace("%(ext)s", "mp4")
+
+    fake.YoutubeDL = _YDL
+    sys.modules["yt_dlp"] = fake
+    sys.modules["yt_dlp.utils"] = utils_mod
+    old_get = ingest.get_settings
+    ingest.get_settings = lambda: _settings(
+        ffmpeg=None,
+        deno_path=r"C:\tools\deno\deno.exe",
+    )
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            dest = Path(td) / "source"
+            assert ingest._download_ytdlp("https://youtu.be/x", dest).name == "source.mp4"
+        assert captured["js_runtimes"] == {
+            "deno": {"path": r"C:\tools\deno\deno.exe"}
+        }
+    finally:
+        ingest.get_settings = old_get
+        for mod in ("yt_dlp", "yt_dlp.utils"):
+            sys.modules.pop(mod, None)
+
+
+def test_ytdlp_warning_uses_configured_deno_path():
+    from app.pipeline import ingest
+
+    old_get = ingest.get_settings
+    try:
+        ingest.get_settings = lambda: _settings(deno_path=r"C:\tools\deno\deno.exe")
+        assert ingest.detect_ytdlp_warnings() is None
+        ingest.get_settings = lambda: _settings(deno_path=None)
+        assert "360p" in (ingest.detect_ytdlp_warnings() or "")
+    finally:
+        ingest.get_settings = old_get
 
 
 def test_vad_available_is_cached_and_boolean():

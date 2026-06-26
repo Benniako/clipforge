@@ -1,5 +1,6 @@
 param(
-    [switch]$StartOnly
+    [switch]$StartOnly,
+    [int]$MaxWaitSeconds = 20
 )
 
 $ErrorActionPreference = "Continue"
@@ -39,7 +40,7 @@ function Start-OllamaServer($ollama) {
         Write-Host "[..] Could not start Ollama automatically: $($_.Exception.Message)"
         return $false
     }
-    for ($i = 0; $i -lt 20; $i++) {
+    for ($i = 0; $i -lt ([Math]::Max(1, $MaxWaitSeconds)); $i++) {
         Start-Sleep -Seconds 1
         if (Test-OllamaServer) {
             Write-Host "[OK] Ollama server is running"

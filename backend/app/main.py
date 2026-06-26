@@ -109,10 +109,14 @@ def create_app() -> FastAPI:
         from .providers import audio_events, llm, vlm
         caps = settings.capability_report()
         caps.update(audio_events.capability_flags())
-        caps["llm"] = llm.available()
-        caps["llm_model"] = llm.active_model()
-        caps["vlm"] = vlm.available()
-        caps["vlm_model"] = vlm.active_model()
+        # Keep first-page health cheap. Settings already collected Ollama tags
+        # at startup; avoid fresh /api/tags probes just to paint the nav strip.
+        llm_model = llm.model_from_tags(settings.ollama_models)
+        vlm_model = vlm.model_from_tags(settings.ollama_models)
+        caps["llm"] = bool(llm_model)
+        caps["llm_model"] = llm_model
+        caps["vlm"] = bool(vlm_model)
+        caps["vlm_model"] = vlm_model
         return {
             "ok": True,
             "version": __version__,

@@ -22,6 +22,53 @@ from pathlib import Path
 log = logging.getLogger("clipforge.config")
 
 
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[2]
+
+
+def _local_tool_dirs() -> list[Path]:
+    """Project/user-local tool bins that should behave like PATH entries."""
+    roots: list[Path] = []
+    env_root = os.environ.get("CLIPFORGE_TOOLS_DIR")
+    if env_root:
+        roots.append(Path(env_root))
+    roots.extend([
+        _repo_root() / ".tools",
+        _repo_root() / ".tools" / "deno",
+        _repo_root() / ".tools" / "deno" / "bin",
+        Path(os.environ.get("LOCALAPPDATA", "")) / "deno" / "bin",
+    ])
+    return [p for p in roots if str(p)]
+
+
+def _add_local_tool_dirs_to_path() -> None:
+    parts = os.environ.get("PATH", "").split(os.pathsep)
+    seen = {p.lower() for p in parts}
+    prepend: list[str] = []
+    for d in _local_tool_dirs():
+        if d.is_dir():
+            s = str(d)
+            if s.lower() not in seen:
+                prepend.append(s)
+                seen.add(s.lower())
+    if prepend:
+        os.environ["PATH"] = os.pathsep.join([*prepend, os.environ.get("PATH", "")])
+
+
+def _find_executable(name: str, *, env_var: str | None = None) -> str | None:
+    """Find an executable from explicit env, local tools, then PATH."""
+    explicit = os.environ.get(env_var or f"CLIPFORGE_{name.upper()}_BIN")
+    if explicit and Path(explicit).is_file():
+        return explicit
+
+    exe = name + (".exe" if os.name == "nt" and not name.endswith(".exe") else "")
+    for root in _local_tool_dirs():
+        for candidate in (root / exe, root / name / exe, root / name / "bin" / exe):
+            if candidate.is_file():
+                return str(candidate)
+    return shutil.which(name)
+
+
 def _resolve_ffmpeg() -> tuple[str | None, str | None]:
     """Find an ffmpeg + ffprobe pair, preferring a fully static build.
 
@@ -207,7 +254,7 @@ def _detect_asd_adapter() -> bool:
             continue
         if not all(_has_module(dep) for dep in deps):
             continue
-        if not _torch_cuda_available():
+        if not _detect_nvidia_gpu():
             continue
         return True
     return False
@@ -282,10 +329,15 @@ def _ct2_cuda_runtime_available() -> bool:
 
 def _detect_cuda() -> bool:
     """True if CUDA is usable by the ASR stack, not only visible to PyTorch."""
+    if os.name == "nt":
+        if not _detect_nvidia_gpu():
+            return False
+        if not _ct2_cuda_runtime_available():
+            return False
     try:
         import ctranslate2
 
-        if ctranslate2.get_cuda_device_count() > 0 and _ct2_cuda_runtime_available():
+        if ctranslate2.get_cuda_device_count() > 0:
             return True
     except Exception as exc:
         log.debug("ctranslate2 GPU check: %s", exc)
@@ -445,6 +497,7 @@ class Settings:
     auto_model: bool = True  # whisper model was auto-selected for this hardware
     # --- individual optional tools surfaced in the capability report ----------
     has_deno: bool = False       # deno JS runtime — yt-dlp needs it for 1080p YouTube
+    deno_path: str | None = None # explicit deno executable path passed to yt-dlp
     has_ollama: bool = False     # local LLM server — virality re-ranking (optional)
     ollama_models: str = ""      # installed model names (comma-separated)
     has_openmodel: bool = False  # OpenModel.ai API key — cloud LLM replacement
@@ -461,11 +514,10 @@ class Settings:
     # Concurrent *projects* in the pipeline. Default 1: transcription and the GPU
     # encoder are the bottlenecks, so a second project mostly contends; raise it
     # if you batch many small videos (transcription is internally serialized).
-    # Default 2: safe when GPU encoding is active (NVENC offloads encode to
-    # hardware, freeing the CPU for a second project). Bump higher for batches
-    # of short videos where I/O dominates. Set CLIPFORGE_PIPELINE_WORKERS=1 to
-    # revert to the sequential behaviour.
-    pipeline_workers: int = int(os.environ.get("CLIPFORGE_PIPELINE_WORKERS", "2"))
+    # Default 1: keep a single desktop responsive while a large VOD transcribes
+    # or renders. Raise CLIPFORGE_PIPELINE_WORKERS only for batch processing
+    # many short videos.
+    pipeline_workers: int = int(os.environ.get("CLIPFORGE_PIPELINE_WORKERS", "1"))
     # Upload / URL-import size cap in MB; 0 (default) = unlimited. A local
     # single-user tool processing your own VODs shouldn't reject them — set
     # this only to guard a small disk.
@@ -540,8 +592,10 @@ class Settings:
                      "ffprobe", "Media probing (duration, dimensions, audio)."),
                 item("deno", self.has_deno,
                      "deno (JS runtime)",
-                     "yt-dlp needs this to read YouTube's player. Without it, YouTube "
-                     "imports may be capped at 360p."),
+                     "yt-dlp uses this to read YouTube's player. "
+                     + (f"Using {self.deno_path}."
+                        if self.deno_path else
+                        "Without it, YouTube imports may be capped at 360p.")),
                 item("yt_dlp", self.has_ytdlp,
                      "yt-dlp", "Enables importing from a pasted URL (YouTube + ~1000 sites)."),
             ]},
@@ -758,6 +812,7 @@ class Settings:
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
+    _add_local_tool_dirs_to_path()
     data_dir = Path(os.environ.get("CLIPFORGE_DATA_DIR", Path(__file__).resolve().parents[1] / "data"))
     media_dir = data_dir / "media"
     data_dir.mkdir(parents=True, exist_ok=True)
@@ -776,6 +831,8 @@ def get_settings() -> Settings:
     whisper_model = model_env or _auto_whisper_model(has_cuda, vram_mb, cpu)
     workers_env = os.environ.get("CLIPFORGE_RENDER_WORKERS")
     render_workers = int(workers_env) if workers_env else _auto_workers(cpu)
+
+    deno_path = _find_executable("deno", env_var="CLIPFORGE_DENO_BIN")
 
     return Settings(
         data_dir=data_dir,
@@ -801,10 +858,11 @@ def get_settings() -> Settings:
         has_nvidia=has_nvidia,
         has_av1_nvenc=has_av1_nvenc,
         vram_mb=vram_mb,
-	        auto_model=model_env is None,
-        has_deno=bool(shutil.which("deno")),
-	        has_ollama=_ollama_result[0],
-	        ollama_models=_ollama_result[1],
+        auto_model=model_env is None,
+        has_deno=bool(deno_path),
+        deno_path=deno_path,
+        has_ollama=_ollama_result[0],
+        ollama_models=_ollama_result[1],
         has_torchaudio=_has_module("torchaudio"),
         has_paddleocr=_has_module("paddleocr"),
         has_easyocr=_has_module("easyocr"),

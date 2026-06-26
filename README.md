@@ -119,10 +119,11 @@ fully transparent (`/api/learning` shows what it learned), and resettable.
 
 ### Easiest — Windows (double-click)
 1. **Double-click `setup.bat`** — creates an isolated Python 3.12 env, installs
-   everything, pulls the strongest local Qwen/Ollama text + vision models that
-   fit your GPU/RAM when possible, guides you through the private Hugging Face
-   token needed for speaker diarization, sets up LR-ASD active-speaker tracking
-   when possible, and builds the UI. (Run once.)
+   everything, installs a local Deno runtime for high-resolution YouTube imports,
+   pulls the strongest local Qwen/Ollama text + vision models that fit your
+   GPU/RAM when possible, guides you through the private Hugging Face token
+   needed for speaker diarization, sets up LR-ASD active-speaker tracking when
+   possible, and builds the UI. (Run once.)
 2. **Double-click `run.bat`** — starts the server and opens
    **http://localhost:8000**. That's it — one window, one URL.
 
@@ -159,6 +160,7 @@ runs from a **single process on http://localhost:8000** — no second terminal.
 | `CLIPFORGE_RENDER_WORKERS` | *auto* | Parallel clip renders (scaled to CPU cores). |
 | `CLIPFORGE_CODEC` | `h264` | `av1` opts into av1_nvenc (RTX 40/50 series) — better quality per bitrate. |
 | `CLIPFORGE_WHISPER_BATCH` | `8` | Batched-inference batch size for faster-whisper on GPU (keeps the card saturated). |
+| `CLIPFORGE_DENO_BIN` | auto | Override Deno executable path for yt-dlp YouTube player parsing. Setup installs a local copy in `.tools/deno`. |
 | `CLIPFORGE_YOLO_MODEL` | `yolo11n.pt` | YOLO subject-tracking model. Set `yolo26n.pt` to opt into YOLO26 when `ultralytics>=8.4` is installed. |
 | `CLIPFORGE_ASD_DIR` | – | Path to an [LR-ASD](https://github.com/Junhua-Liao/LR-ASD) checkout to enable active-speaker attribution. |
 | `CLIPFORGE_WATCH_DIR` | – | Watch folder path. New videos dropped here are auto-imported and processed. |
@@ -170,10 +172,12 @@ By default, `setup.bat` pulls the strongest hardware-fit local models it can:
 on a 16 GB NVIDIA GPU / 32 GB RAM machine this is the strongest installed
 compatible vision model (`qwen3-vl` if available, then `qwen2.5vl`) for visual
 scoring and `qwen3:14b` / `gemma4` tier models for titles/virality. `run.bat`
-starts Ollama when available, sets `CLIPFORGE_DEFAULT_POWER_MODE=max_gpu`, and
-leaves `CLIPFORGE_LLM_MODEL` / `CLIPFORGE_VLM_MODEL` unset so ClipForge
-automatically chooses the strongest installed compatible model. Set either
-variable only when you want to force a specific model.
+starts Ollama when available, but does not force `max_gpu` or a large Whisper
+model. ClipForge chooses balanced/CPU-safe defaults when CUDA ASR dependencies
+are missing, and upgrades automatically once the CUDA runtime is usable.
+`CLIPFORGE_LLM_MODEL` / `CLIPFORGE_VLM_MODEL` stay unset so ClipForge
+automatically chooses the strongest installed compatible Ollama model. Set
+either variable only when you want to force a specific model.
 
 For German-heavy videos on a strong GPU, set `CLIPFORGE_WHISPER_MODEL=large-v3`
 when accuracy matters more than speed. The default auto/turbo path stays faster

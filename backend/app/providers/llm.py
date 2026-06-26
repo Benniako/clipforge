@@ -57,6 +57,13 @@ def _resolve_model(tags: list[str]) -> str | None:
     return max(text, key=_rank_text_model) if text else None
 
 
+def model_from_tags(tags: str | list[str]) -> str | None:
+    """Resolve the text model from a cached Ollama tag snapshot."""
+    if isinstance(tags, str):
+        tags = [t.strip() for t in tags.split(",") if t.strip()]
+    return _resolve_model(tags)
+
+
 # Shared availability cache, wired to the text-model picker.
 _cache = _oc.AvailabilityCache(resolver=_resolve_model)
 

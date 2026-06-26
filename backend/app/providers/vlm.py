@@ -55,6 +55,13 @@ def _resolve_model(tags: list[str]) -> str | None:
     return max(vision, key=_rank_vision_model) if vision else None
 
 
+def model_from_tags(tags: str | list[str]) -> str | None:
+    """Resolve the vision model from a cached Ollama tag snapshot."""
+    if isinstance(tags, str):
+        tags = [t.strip() for t in tags.split(",") if t.strip()]
+    return _resolve_model(tags)
+
+
 # Shared availability cache, wired to the vision-model picker.
 _cache = _oc.AvailabilityCache(resolver=_resolve_model)
 
