@@ -25,7 +25,7 @@ from . import detect_cues, detect_ocr
 log = logging.getLogger("clipforge.gameplay")
 
 # Map a game profile to its cue-template folder (aliases included).
-_CUE_DIR = {"auto": "generic", "cs": "cs2", "fifa": "eafc"}
+_CUE_DIR = {"auto": "generic", "cs": "cs2", "fifa": "eafc", "valorant": "valorant"}
 
 # Per-game tuning of the audio signals. "generic"/"auto" work for ANY game; the
 # named profiles bias how peaks are picked and scored:
