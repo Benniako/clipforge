@@ -262,9 +262,10 @@ async def create_project(
     ai_boost_broll: bool = Form(False),
     ai_boost_hook_check: bool = Form(True),
     file: UploadFile | None = File(None),
+    local_path: str | None = Form(None, description="Local file path — imports directly without HTTP upload (instant on localhost)"),
 ) -> Project:
-    if not file and not url:
-        raise HTTPException(400, "provide either a file upload or a url")
+    if not file and not url and not local_path:
+        raise HTTPException(400, "provide a file upload, a url, or a local_path")
     try:
         plat = Platform(platform)
     except ValueError:
@@ -348,7 +349,7 @@ async def create_project(
             cap = get_settings().upload_cap_bytes
             size = 0
             with open(tmp, "wb") as out:
-                while chunk := await file.read(1 << 20):
+                while chunk := await file.read(16 << 20):  # 16 MB chunks — localhost I/O is fast
                     size += len(chunk)
                     if cap is not None and size > cap:
                         raise HTTPException(
@@ -357,6 +358,13 @@ async def create_project(
                     out.write(chunk)
             src = await run_in_threadpool(ingest.attach_source_file, project,
                                           tmp, file.filename or "upload.mp4")
+        elif local_path:
+            # Direct filesystem import — no HTTP transfer overhead.
+            p = Path(local_path).resolve()
+            if not p.is_file():
+                raise HTTPException(400, f"local_path '{local_path}' is not a file or doesn't exist")
+            src = await run_in_threadpool(ingest.attach_source_file, project,
+                                          str(p), p.name)
         else:
             src = await run_in_threadpool(ingest.attach_source_url, project, url)
     except HTTPException:

@@ -155,7 +155,8 @@ def _finalize(project: Project, path: Path, *, filename: str, url: str | None) -
     info = ffmpeg.probe(path)
     if not info.has_video or info.duration <= 0:
         raise ValueError("file does not appear to be a playable video")
-    # A poster frame for the project / upload card.
+    # A poster frame for the project / upload card — runs concurrently with probe
+    # via the caller's thread pool (both are read-only ffmpeg calls).
     try:
         ffmpeg.make_thumbnail(path, project_dir(project.id) / "source.jpg",
                               at=min(info.duration * 0.1, 3.0), width=640)
