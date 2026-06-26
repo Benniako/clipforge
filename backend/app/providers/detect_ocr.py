@@ -416,7 +416,11 @@ def _make_surya():
 def _get_reader(engine: str, lang: str = "en"):
     global _reader
     with _reader_lock:
-        if _reader is not None:
+        # Return cached reader only when it matches the requested engine.
+        # Otherwise rebuild — each engine has a different processing pipeline
+        # (paddleocr via _paddle_read vs easyocr via .readtext batch API) and
+        # routing the wrong reader through the wrong pipeline breaks silently.
+        if _reader is not None and _reader[0] == engine:
             return _reader
         s = get_settings()
         gpu = s.device == "cuda"
