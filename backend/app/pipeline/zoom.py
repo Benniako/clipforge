@@ -65,7 +65,8 @@ def merge_spikes(*spike_lists: list[ZoomSpike]) -> list[ZoomSpike]:
     return out
 
 
-def zoom_expr(spikes: list[ZoomSpike], base: float = 1.0) -> str:
+def zoom_expr(spikes: list[ZoomSpike], base: float = 1.0,
+              time_var: str = "t") -> str:
     """ffmpeg ``z(t)`` expression: a baseline scale plus a sum of triangle bumps.
 
     Each spike contributes ``amp * max(0, 1 - 2*|t - t0|/duration)`` — a tent
@@ -82,13 +83,13 @@ def zoom_expr(spikes: list[ZoomSpike], base: float = 1.0) -> str:
             continue
         half = (s.duration / 2.0) or 1e-6
         # tent(t) = amp * max(0, 1 - |t - t0|/half)  — triangular bump centred at t0
-        tent = f"{amp:.4f}*max(0,1-abs(t-{s.t:.3f})/{half:.4f})"
+        tent = f"{amp:.4f}*max(0,1-abs({time_var}-{s.t:.3f})/{half:.4f})"
         expr = f"({expr})+{tent}"
     return expr
 
 
 def build_zoom_filter(spikes: list[ZoomSpike], out_w: int, out_h: int,
-                      base: float = 1.0) -> str | None:
+                      base: float = 1.0, fps: float = 30.0) -> str | None:
     """Return a ``scale,crop`` filter pair that realises the time-varying zoom,
     or None when there are no spikes (caller skips the filter entirely).
 
@@ -104,10 +105,13 @@ def build_zoom_filter(spikes: list[ZoomSpike], out_w: int, out_h: int,
     # midpoint. The zoom depth is baked into the over-scale size derived from
     # the max peak; ffmpeg evaluates the crop per frame. The reframe crop
     # already tracks the speaker, so a centred punch-in stays on-face.
-    z = zoom_expr(spikes, base=base)
+    # zoompan expressions do not expose ``t`` on all ffmpeg builds. ``on`` is
+    # the output frame index, so on/fps gives us portable clip-relative time.
+    fps = max(float(fps or 30.0), 1.0)
+    z = zoom_expr(spikes, base=base, time_var=f"(on/{fps:.6f})")
     max_z = max((s.peak for s in spikes), default=base)
     sw = int(out_w * max_z) | 1   # odd dimensions keep libswscale happy
     sh = int(out_h * max_z) | 1
     # z(t) is exposed via the expression but the centred crop form is what the
     # renderer composes; reference it so the time-varying path stays available.
-    return f"scale={sw}:{sh}:eval=frame,zoompan=z='{z}':d=1:s={out_w}x{out_h}"
+    return f"scale={sw}:{sh}:eval=frame,zoompan=z='{z}':d=1:s={out_w}x{out_h}:fps={fps:.3f}"

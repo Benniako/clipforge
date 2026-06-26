@@ -189,6 +189,10 @@ STAGE_LABELS = {
 }
 
 
+class CancelledProject(BaseException):
+    """Raised inside workers when a project was deleted or explicitly cancelled."""
+
+
 class Engine:
     def __init__(self) -> None:
         self._q: "queue.Queue[str]" = queue.Queue()
@@ -210,6 +214,7 @@ class Engine:
         self._last_progress_ts: dict[str, float] = {}
         self._queued_projects: set[str] = set()
         self._active_projects: set[str] = set()
+        self._cancel_requested: set[str] = set()
 
     def _clip_lock(self, project_id: str, clip_id: str) -> threading.Lock:
         with self._clip_locks_guard:
@@ -228,6 +233,8 @@ class Engine:
         log.info("pipeline started with %d worker(s)", n)
 
     def enqueue(self, project_id: str) -> None:
+        with self._pause_condition:
+            self._cancel_requested.discard(project_id)
         with store.mutate(project_id) as p:
             p.status = ProjectStatus.queued
             p.progress = JobProgress(stage="queued", total_stages=len(STAGES),
@@ -236,6 +243,28 @@ class Engine:
         with self._pause_condition:
             self._queued_projects.add(project_id)
         self._q.put(project_id)
+
+    def cancel(self, project_id: str) -> None:
+        """Best-effort cancellation for queued/active work.
+
+        Native ASR/GPU calls cannot always be interrupted mid-call, but every
+        queue boundary, pause wait, progress callback, and stage transition
+        checks this flag so deleted projects stop as soon as Python regains
+        control.
+        """
+        with self._pause_condition:
+            self._cancel_requested.add(project_id)
+            self._pause_requested.discard(project_id)
+            self._queued_projects.discard(project_id)
+            self._pause_condition.notify_all()
+
+    def _is_cancelled(self, project_id: str) -> bool:
+        with self._pause_condition:
+            return project_id in self._cancel_requested
+
+    def _raise_if_cancelled(self, project_id: str) -> None:
+        if self._is_cancelled(project_id):
+            raise CancelledProject(project_id)
 
     def pause(self, project_id: str) -> None:
         with self._pause_condition:
@@ -295,11 +324,16 @@ class Engine:
     def _loop(self) -> None:
         while True:
             project_id = self._q.get()
-            with self._pause_condition:
-                self._queued_projects.discard(project_id)
-                self._active_projects.add(project_id)
             try:
+                with self._pause_condition:
+                    self._queued_projects.discard(project_id)
+                    if project_id in self._cancel_requested:
+                        log.info("skipping cancelled project %s", project_id)
+                        continue
+                    self._active_projects.add(project_id)
                 self._process(project_id)
+            except CancelledProject:
+                log.info("project %s cancelled; stopping worker task", project_id)
             except BaseException as e:  # never let the worker die
                 error_msg = _friendly_error(e)
                 log.error("pipeline failed for %s: %s\n%s", project_id, error_msg,
@@ -310,13 +344,14 @@ class Engine:
                         p.error = error_msg
                         p.progress.message = f"Failed: {error_msg[:200]}"
                     # Clean up the extracted WAV on failure to avoid disk leaks.
-                    _wav = ingest.project_dir(project_id) / "audio16k.wav"
+                    _wav = get_settings().media_dir / project_id / "audio16k.wav"
                     _wav.unlink(missing_ok=True)
                 except Exception:
                     pass
             finally:
                 with self._pause_condition:
                     self._active_projects.discard(project_id)
+                    self._cancel_requested.discard(project_id)
                 self._q.task_done()
 
     # -- progress helpers -------------------------------------------------
@@ -351,7 +386,8 @@ class Engine:
         return view
 
     def _advance(self, project_id: str, stage_idx: int, message: str,
-                 frac: float = 0.0) -> None:
+                 frac: float = 0.0, *, force: bool = False) -> None:
+        self._raise_if_cancelled(project_id)
         self._wait_if_paused(project_id)
         overall = (stage_idx + max(min(frac, 1.0), 0.0)) / len(STAGES) * 100.0
         # Throttle DB writes: only persist when progress crosses a 2% boundary
@@ -360,7 +396,7 @@ class Engine:
         last_pct = self._last_progress_pct.get(project_id, -1.0)
         last_ts = self._last_progress_ts.get(project_id, 0.0)
         now_ts = now()
-        if (abs(overall - last_pct) < 2.0 and now_ts - last_ts < 5.0
+        if (not force and abs(overall - last_pct) < 2.0 and now_ts - last_ts < 5.0
                 and stage_idx == self._stage_idx.get(project_id, -1)):
             # Update in-memory state only — skip the DB write.
             self._stage_started[project_id] = self._stage_started.get(
@@ -418,9 +454,12 @@ class Engine:
         while True:
             p = store.get(project_id)
             if p is None:
-                return
+                raise CancelledProject(project_id)
             with self._pause_condition:
                 requested = project_id in self._pause_requested
+                cancelled = project_id in self._cancel_requested
+            if cancelled:
+                raise CancelledProject(project_id)
             paused = bool(p and p.status == ProjectStatus.paused)
             if not requested and not paused:
                 return
@@ -436,6 +475,7 @@ class Engine:
         if project is None or project.source is None:
             raise RuntimeError("project or source media missing")
         self._wait_if_paused(project_id)
+        self._raise_if_cancelled(project_id)
         settings = get_settings()
         src_path = str(settings.media_dir / project.source.path)
         info = ffmpeg.probe(src_path)
@@ -444,11 +484,12 @@ class Engine:
         # The wav lives in the project dir (not a TemporaryDirectory) so the
         # gameplay detector can reuse it — decoding an hour-long VOD's audio
         # twice costs minutes. Deleted as soon as detection is done.
-        self._advance(project_id, 0, "Extracting audio…")
+        self._advance(project_id, 0, "Extracting audio…", force=True)
         wav = ingest.project_dir(project_id) / "audio16k.wav"
         wav_path: str | None = None
         if info.has_audio:
             ffmpeg.extract_audio_wav(src_path, wav)
+            self._advance(project_id, 0, "Transcribing audio…", 0.02, force=True)
             wav_path = str(wav)
             transcript = transcribe_mod.transcribe(
                 wav_path, language=project.settings.language,
@@ -456,6 +497,7 @@ class Engine:
                                                  f"Transcribing… {int(f*100)}%", f),
                 power_mode=project.settings.power_mode.value,
             )
+            self._raise_if_cancelled(project_id)
         else:
             # No audio track — skip ASR entirely, go straight to synthetic.
             transcript = transcribe_mod.synthetic_transcript(
@@ -540,6 +582,8 @@ class Engine:
 
         # 2. detect + 3. score (branch on content type) -------------------
         plat = project.settings.platform.value
+        ocr_labels: list[str] = []
+        ocr_texts: list[str] = []
         if kind == "gameplay":
             self._advance(project_id, 1, "Finding gameplay highlights…")
             prof = project.settings.game_profile
@@ -562,9 +606,9 @@ class Engine:
             # "victory") AND the actual in-game text ("Ace", "1v5 Clutch")
             # the transcript alone doesn't contain.
             ocr_labels = [e.label for e in detected
-                          if getattr(e, "source", "") == "ocr" and e.label] if detected else []
+                          if getattr(e, "source", "") == "ocr" and e.label]
             ocr_texts = [e.detail for e in detected
-                         if getattr(e, "source", "") == "ocr" and e.detail] if detected else []
+                         if getattr(e, "source", "") == "ocr" and e.detail]
             # Learn reusable AUDIO cues from the on-screen (OCR) events: snip the
             # game sound at each banner and save it, so the cheap audio matcher
             # catches that event on future videos even with OCR off.

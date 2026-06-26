@@ -514,6 +514,7 @@ def delete_project(project_id: str) -> dict:
     p = store.get(project_id)
     if not p:
         raise HTTPException(404, "project not found")
+    engine.cancel(project_id)
     shutil.rmtree(get_settings().media_dir / project_id, ignore_errors=True)
     store.delete(project_id)
     return {"deleted": project_id}
@@ -528,6 +529,7 @@ def purge_project(project_id: str) -> dict:
     Returns {"ok": true} regardless of whether the project existed, so
     callers can safely purge without a preliminary existence check.
     """
+    engine.cancel(project_id)
     p = store.get(project_id)
     if p:
         shutil.rmtree(get_settings().media_dir / project_id, ignore_errors=True)

@@ -1067,6 +1067,57 @@ def test_pause_resume_project_endpoint():
     assert missing.status_code == 404
 
 
+def test_forced_progress_update_bypasses_throttle():
+    from app import store
+    from app.pipeline.orchestrator import Engine
+
+    store.init_db()
+    p = Project(id="proj_force_progress", status=ProjectStatus.created)
+    store.save(p)
+
+    eng = Engine()
+    eng._advance(p.id, 0, "Extracting audio...", 0.0, force=True)
+    eng._advance(p.id, 0, "Transcribing audio...", 0.02, force=True)
+
+    out = store.get(p.id)
+    assert out.progress.message == "Transcribing audio..."
+    assert out.progress.pct > 0
+
+
+def test_delete_project_requests_engine_cancel(monkeypatch):
+    from starlette.testclient import TestClient
+    from app import store
+    from app.config import get_settings
+    from app.main import create_app
+    from app.api import routes_projects
+
+    class FakeEngine:
+        def __init__(self):
+            self.cancelled = []
+
+        def cancel(self, project_id: str) -> None:
+            self.cancelled.append(project_id)
+
+    store.init_db()
+    pid = "proj_delete_cancel"
+    p = Project(
+        id=pid,
+        status=ProjectStatus.processing,
+        source=SourceMedia(filename="source.mp4", path=f"{pid}/source.mp4"),
+    )
+    store.save(p)
+    (get_settings().media_dir / pid).mkdir(parents=True, exist_ok=True)
+
+    fake = FakeEngine()
+    monkeypatch.setattr(routes_projects, "engine", fake)
+    c = TestClient(create_app(), raise_server_exceptions=False)
+
+    resp = c.delete(f"/api/projects/{pid}")
+    assert resp.status_code == 200
+    assert fake.cancelled == [pid]
+    assert store.get(pid) is None
+
+
 def test_render_finish_fails_project_when_no_clips_ready():
     from app import store
     from app.pipeline.orchestrator import Engine
@@ -1950,6 +2001,33 @@ def test_lr_asd_parser_selects_highest_speaking_track():
         tracks, [[-0.2, 0.8, 0.7], [1.0, -0.1, -0.2]], frame_width=1000, fps=25.0)
     assert centers == [(0.0, 0.75), (0.04, 0.16), (0.08, 0.17)]
     assert AS._centers_from_tracks(tracks, [[-1, -1, -1], [-0.5, -0.2, -0.1]], 1000) is None
+
+
+def test_lr_asd_subprocess_gets_numpy_int_compat_shim():
+    from pathlib import Path
+    from app.providers import active_speaker as AS
+
+    with tempfile.TemporaryDirectory() as td:
+        env: dict[str, str] = {}
+        shim_dir = Path(td) / "compat"
+        AS._add_numpy_int_compat(env, shim_dir)
+        import numpy as np
+
+        if hasattr(np, "int"):
+            assert "PYTHONPATH" not in env
+        else:
+            assert env["PYTHONPATH"].split(os.pathsep)[0] == str(shim_dir)
+            assert (shim_dir / "sitecustomize.py").exists()
+
+
+def test_lr_asd_runner_patches_numpy_int_before_demo_script():
+    from app.providers import active_speaker as AS
+
+    with tempfile.TemporaryDirectory() as td:
+        runner = AS._write_lrasd_runner(Path(td))
+        text = runner.read_text(encoding="utf-8")
+        assert "_np.int = int" in text
+        assert "runpy.run_path('Columbia_test.py'" in text
 
 
 def test_reframe_uses_lr_asd_centers_before_face_fallback():
@@ -2914,6 +2992,8 @@ def test_render_filter_chain_includes_zoom_when_spikes_exist():
     assert len(spikes) == 1
     zf = build_zoom_filter(spikes, 1080, 1920)
     assert zf is not None and "zoompan" in zf
+    assert "on/30.000000" in zf
+    assert "abs(t-" not in zf
 
 
 def test_broll_overlay_field_stores_and_reads():
@@ -2952,6 +3032,49 @@ def test_broll_pip_writes_complex_filtergraph():
     assert "broll_overlay" in src
     assert "between(t," in src  # enable gate
     assert "filter_complex_script" in src  # switches from simple to complex
+
+
+def test_render_cpu_fallback_drops_cuda_hwaccel(monkeypatch):
+    """If NVENC fails, the x264 fallback must not keep CUDA decode flags."""
+    import tempfile
+    from pathlib import Path
+    from app.media import ffmpeg
+    from app.media.ffmpeg import MediaInfo
+    from app.pipeline import render as R
+    from app.styles import get_style
+
+    class FakeSettings:
+        use_nvenc = True
+
+        def video_encoder_args(self):
+            return ["-c:v", "h264_nvenc"]
+
+    calls = []
+
+    def fake_run(args, **kwargs):
+        calls.append(args)
+        if "h264_nvenc" in args:
+            raise ffmpeg.FFmpegError(args, 1, "Invalid argument")
+        assert "libx264" in args
+        assert "-hwaccel" not in args
+        return ""
+
+    monkeypatch.setattr(R, "get_settings", lambda: FakeSettings())
+    monkeypatch.setattr(ffmpeg, "run", fake_run)
+    monkeypatch.setattr(R, "_make_thumbnail", lambda *a, **k: None)
+
+    clip = Clip(start=0.0, end=4.0, title="fallback")
+    info = MediaInfo(duration=6.0, width=640, height=360, fps=30.0,
+                     has_audio=False, has_video=True, codec="h264")
+    with tempfile.TemporaryDirectory() as td:
+        out = Path(td) / "out.mp4"
+        thumb = Path(td) / "out.jpg"
+        R.render_clip(clip, "source.mp4", info, get_style("bold-pop"), out, thumb,
+                      out_w=1080, out_h=1920, burn_captions=False)
+
+    assert len(calls) == 2
+    assert "-hwaccel" in calls[0]
+    assert "-hwaccel" not in calls[1]
 
 
 # --------------------------------------------------------------------------- #

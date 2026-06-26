@@ -176,6 +176,8 @@ def transcribe(audio_path: str, *, language: str | None = None,
     batch_size = s.whisper_batch_for(power_mode)
     lang = None if (language in (None, "auto", "")) else language
     engine = s.transcription_engine
+    if progress:
+        progress(0.02)
 
     if engine == "whisperx":
         try:
@@ -243,9 +245,15 @@ def _whisperx_transcribe(audio_path, language, progress, batch_size: int) -> Tra
 
     _ensure_ffmpeg_on_path()
     s = get_settings()
+    if progress:
+        progress(0.03)
     audio = whisperx.load_audio(audio_path)
+    if progress:
+        progress(0.05)
 
     model = _load_whisperx_model()
+    if progress:
+        progress(0.08)
     result = _try_transcribe(
         model, audio, batch_size=max(batch_size, 1), language=language,
         condition_on_previous_text=False,
@@ -300,7 +308,11 @@ def _whisperx_transcribe(audio_path, language, progress, batch_size: int) -> Tra
 
 
 def _whisper_transcribe(audio_path, language, progress, batch_size: int) -> Transcript:
+    if progress:
+        progress(0.03)
     model = _load_whisper()
+    if progress:
+        progress(0.05)
     batched = _batched_pipeline(model, batch_size)
     prompt = _initial_prompt(language)
     # Anti-hallucination transcription params. Whisper famously hallucinates

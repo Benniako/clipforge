@@ -236,16 +236,62 @@ def _torch_cuda_available() -> bool:
         return False
 
 
+def _add_nvidia_dll_dirs() -> None:
+    """Expose pip-installed NVIDIA runtime DLLs to Windows LoadLibrary.
+
+    ctranslate2 reports a CUDA device when the driver is present, but model
+    execution still fails later if cuBLAS/cuDNN DLLs are not on PATH. Detecting
+    that at settings time keeps long jobs from starting on a broken GPU path.
+    """
+    if os.name != "nt":
+        return
+    try:
+        import nvidia  # namespace package owned by nvidia-*-cu12/cu13 wheels
+    except Exception:
+        return
+    for root in getattr(nvidia, "__path__", []):
+        for bin_dir in Path(root).glob("*/bin"):
+            d = str(bin_dir)
+            if d not in os.environ.get("PATH", "").split(os.pathsep):
+                os.environ["PATH"] = d + os.pathsep + os.environ.get("PATH", "")
+            try:
+                os.add_dll_directory(d)
+            except Exception:
+                pass
+
+
+def _ct2_cuda_runtime_available() -> bool:
+    """True when ctranslate2 can actually load its CUDA runtime dependencies."""
+    if os.name != "nt":
+        return True
+    _add_nvidia_dll_dirs()
+    try:
+        import ctypes
+
+        ctypes.WinDLL("cublas64_12.dll")
+        return True
+    except Exception as exc:
+        log.warning(
+            "CUDA detected, but ctranslate2 cannot load cuBLAS (%s); "
+            "falling back to CPU transcription. Install nvidia-cublas-cu12 "
+            "and nvidia-cudnn-cu12 in the ClipForge venv to enable GPU ASR.",
+            exc,
+        )
+        return False
+
+
 def _detect_cuda() -> bool:
-    """True if an NVIDIA GPU is usable for the neural models."""
+    """True if CUDA is usable by the ASR stack, not only visible to PyTorch."""
     try:
         import ctranslate2
 
-        if ctranslate2.get_cuda_device_count() > 0:
+        if ctranslate2.get_cuda_device_count() > 0 and _ct2_cuda_runtime_available():
             return True
     except Exception as exc:
         log.debug("ctranslate2 GPU check: %s", exc)
-    return _torch_cuda_available()
+    if _torch_cuda_available():
+        log.info("PyTorch sees CUDA, but ctranslate2 ASR CUDA is unavailable; using CPU transcription")
+    return False
 
 
 def _detect_nvenc(ffmpeg: str | None) -> tuple[bool, bool]:

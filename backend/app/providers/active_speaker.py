@@ -44,6 +44,51 @@ def _asd_dir() -> Path | None:
     return None
 
 
+def _add_numpy_int_compat(env: dict[str, str], shim_root: Path) -> None:
+    """Give old LR-ASD scripts the NumPy alias removed in NumPy 2.x."""
+    try:
+        import numpy as np
+
+        needs_shim = not hasattr(np, "int")
+    except Exception:
+        needs_shim = False
+    if not needs_shim:
+        return
+    shim_root.mkdir(parents=True, exist_ok=True)
+    (shim_root / "sitecustomize.py").write_text(
+        "try:\n"
+        "    import numpy as _np\n"
+        "    if not hasattr(_np, 'int'):\n"
+        "        _np.int = int\n"
+        "except Exception:\n"
+        "    pass\n",
+        encoding="utf-8",
+    )
+    current = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = str(shim_root) + (os.pathsep + current if current else "")
+
+
+def _write_lrasd_runner(tmp_dir: Path) -> Path:
+    """Run LR-ASD with in-process compatibility patches for old demos."""
+    runner = tmp_dir / "run_lrasd.py"
+    runner.write_text(
+        "import os\n"
+        "import runpy\n"
+        "import sys\n"
+        "try:\n"
+        "    import numpy as _np\n"
+        "    if not hasattr(_np, 'int'):\n"
+        "        _np.int = int\n"
+        "except Exception:\n"
+        "    pass\n"
+        "sys.path.insert(0, os.getcwd())\n"
+        "sys.argv = ['Columbia_test.py', *sys.argv[1:]]\n"
+        "runpy.run_path('Columbia_test.py', run_name='__main__')\n",
+        encoding="utf-8",
+    )
+    return runner
+
+
 def track_centers(src_path: str, start: float, end: float) -> list[tuple[float, float]] | None:
     """Return clip-relative ``(time, cx)`` centers for the active speaking face.
 
@@ -72,8 +117,9 @@ def track_centers(src_path: str, start: float, end: float) -> list[tuple[float, 
             log.warning("LR-ASD trim failed (%s); using fallback reframe", e)
             return None
 
+        runner = _write_lrasd_runner(tmp_dir)
         cmd = [
-            sys.executable, "Columbia_test.py",
+            sys.executable, str(runner),
             "--videoName", "clip",
             "--videoFolder", str(tmp_dir),
             "--pretrainModel", str(asd_dir / "weight" / "pretrain_AVA.model"),
@@ -82,6 +128,7 @@ def track_centers(src_path: str, start: float, end: float) -> list[tuple[float, 
         env = os.environ.copy()
         if get_settings().ffmpeg:
             env["PATH"] = str(Path(get_settings().ffmpeg).parent) + os.pathsep + env.get("PATH", "")
+        _add_numpy_int_compat(env, tmp_dir / "_pycompat")
 
         from .._util import run_subprocess
 
