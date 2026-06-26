@@ -291,6 +291,9 @@ def _whisperx_transcribe(audio_path, language, progress, batch_size: int) -> Tra
             start, end = w.get("start"), w.get("end")
             if not text or start is None or end is None:
                 continue
+            dur = float(end) - float(start)
+            if dur < 0.02:  # alignment glitch — sub-20ms word is not real
+                continue
             spk_label = w.get("speaker")
             # Reserve id 0 for unattributed words (no diarization label). Real
             # speakers start at 1, so the first diarized speaker never collides
@@ -348,6 +351,16 @@ def _whisper_transcribe(audio_path, language, progress, batch_size: int) -> Tran
         for w in (seg.words or []):
             text = w.word.strip()
             if not text:
+                continue
+            # faster-whisper returns a per-word probability (0-1).
+            # Hallucinated words ("thank you for watching", phantom
+            # repetitions) consistently score below 0.3, while real
+            # speech is typically >0.8. Dropping low-confidence words
+            # here prevents them from reaching the caption pipeline at
+            # all — VAD post-processing catches more, but filtering at
+            # the source is cheaper and never lets silences through.
+            prob = getattr(w, "probability", 1.0)
+            if prob < 0.3:
                 continue
             words.append(Word(t=float(w.start), d=max(float(w.end - w.start), 0.01),
                               text=text, speaker=0))

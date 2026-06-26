@@ -63,12 +63,14 @@ def speech_intervals(wav_path: str, *, sr: int = 16000) -> list[tuple[float, flo
 
 
 def refine_words(words: list[Word], speech: list[tuple[float, float]],
-                 *, pad: float = 0.06, min_overlap: float = 0.04) -> list[Word]:
+                 *, pad: float = 0.06, min_overlap: float = 0.10) -> list[Word]:
     """Clamp each word's span to the speech region it overlaps; drop silent ones.
 
     Pure (no model needed → unit-tested). ``pad`` keeps a hair of air so a clamp
     never clips the consonant; ``min_overlap`` is how much a word must intersect
-    speech to be kept at all.
+    speech (fraction of the word's own duration or absolute seconds, whichever is
+    smaller) to be kept. Default 0.10 (100 ms) is more aggressive than the old
+    0.04 — hallucinated whispers are short and barely overlap real speech.
     """
     if not speech:
         return words
