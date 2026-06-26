@@ -89,6 +89,35 @@ def build_srt(captions: CaptionSet) -> str:
     return "\n".join(out) + "\n"
 
 
+def build_vtt(captions: CaptionSet) -> str:
+    """WebVTT sidecar for browser-based previews (TikTok/YouTube uploads).
+
+    WebVTT is the standard caption format for the web: supported by every
+    video player, social media platform's upload API, and html ``<track>``
+    elements.  Times are clip-relative and use the ``HH:MM:SS.mmm`` format.
+    """
+    lines = _group_lines(captions.words, captions.max_words_per_line)
+    out: list[str] = ["WEBVTT\n"]
+    for line in lines:
+        if not line:
+            continue
+        start, end = line[0].t, line[-1].t + line[-1].d
+        text = " ".join(w.text for w in line).strip()
+        if not text:
+            continue
+        out.append(f"{_webvtt_ts(start)} --> {_webvtt_ts(end)}\n{text}\n")
+    return "\n".join(out)
+
+
+def _webvtt_ts(t: float) -> str:
+    """WebVTT timestamp: ``HH:MM:SS.mmm`` (millisecond precision)."""
+    h = int(t // 3600)
+    m = int((t % 3600) // 60)
+    s = int(t % 60)
+    ms = int(round((t - int(t)) * 1000))
+    return f"{h:02d}:{m:02d}:{s:02d}.{ms:03d}"
+
+
 def build_ass(captions: CaptionSet, style: StyleTemplate,
               out_w: int, out_h: int, *, ai_boost=None) -> str:
     """Return a complete ASS document for one clip.

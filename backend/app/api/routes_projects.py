@@ -21,7 +21,7 @@ from fastapi import (APIRouter, File, Form, HTTPException, UploadFile,
                      WebSocket, WebSocketDisconnect)
 from fastapi.concurrency import run_in_threadpool
 from fastapi.encoders import jsonable_encoder
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, PlainTextResponse
 from pydantic import BaseModel
 from starlette.background import BackgroundTask
 
@@ -31,7 +31,7 @@ from ..models import (ASPECTS, AiBoostSettings, ContentType, GameProfileConfig,
                       ImportSettings, Platform, PowerMode, Project,
                       ProjectStatus, ProjectSummary)
 from ..pipeline import ingest
-from ..pipeline.captions import build_srt
+from ..pipeline.captions import build_srt, build_vtt
 from ..pipeline.nle_export import build_cmx3600, ready_clips_for_edl
 from ..pipeline.orchestrator import engine
 from ..providers.detect_gameplay import KNOWN_PROFILES
@@ -741,9 +741,10 @@ def export_batch(project_id: str):
             if path.exists():
                 stem = f"{i:02d}_{c.score:02d}_{_safe_name(c.title)}"
                 z.write(path, f"{stem}.mp4")
-                # caption sidecar (.srt) for editing in a desktop NLE
+                # caption sidecars for editing / social upload
                 if c.captions.words:
                     z.writestr(f"{stem}.srt", build_srt(c.captions))
+                    z.writestr(f"{stem}.vtt", build_vtt(c.captions))
     fname = f"{_safe_name(p.name)}_clips.zip"
     return FileResponse(tmp_zip, media_type="application/zip", filename=fname,
                         background=BackgroundTask(lambda: tmp_zip.unlink(missing_ok=True)))
@@ -817,3 +818,65 @@ def mark_highlight(project_id: str, timestamp: float, duration: float = 30.0):
                      daemon=True).start()
     return {"ok": True, "clip_id": clip.id, "start": clip.start,
             "end": clip.end, "duration": round(clip.end - clip.start, 1)}
+
+
+@router.patch("/{project_id}/clips/{clip_id}")
+def update_clip_bounds(project_id: str, clip_id: str,
+                       start: float | None = None,
+                       end: float | None = None,
+                       title: str | None = None) -> dict:
+    """Update a clip's start/end times or title and trigger re-render.
+
+    Used by the editor trimmer: the frontend drags the clip boundary, then
+    calls PATCH with the new start/end.  The clip is re-rendered with the
+    updated bounds while every other clip keeps its existing render.
+    """
+    p = store.get(project_id)
+    if not p:
+        raise HTTPException(404, "project not found")
+    clip = p.clip(clip_id)
+    if not clip:
+        raise HTTPException(404, "clip not found")
+
+    with store.mutate(project_id) as p2:
+        for c in p2.clips:
+            if c.id == clip_id:
+                if start is not None:
+                    c.start = max(0.0, round(start, 3))
+                if end is not None:
+                    c.end = round(end, 3)
+                if title is not None:
+                    c.title = title
+                break
+
+    # Re-render the single clip in the background.
+    threading.Thread(target=engine.rerender_clip, args=(project_id, clip_id),
+                     daemon=True).start()
+    return {"ok": True, "clip_id": clip_id}
+
+
+@router.get("/{project_id}/clips/{clip_id}/captions")
+def download_captions(project_id: str, clip_id: str,
+                      format: str = "srt") -> FileResponse:
+    """Download caption sidecar for a single clip in SRT or WebVTT format."""
+    p = store.get(project_id)
+    if not p:
+        raise HTTPException(404, "project not found")
+    clip = p.clip(clip_id)
+    if not clip:
+        raise HTTPException(404, "clip not found")
+    if not clip.captions or not clip.captions.words:
+        raise HTTPException(409, "clip has no captions yet")
+
+    if format == "vtt":
+        body = build_vtt(clip.captions)
+        ext = ".vtt"
+        media = "text/vtt"
+    else:
+        body = build_srt(clip.captions)
+        ext = ".srt"
+        media = "text/plain"
+
+    stem = _safe_name(clip.title or clip_id).replace(" ", "_")
+    return PlainTextResponse(body, media_type=media,
+                             headers={"Content-Disposition": f'attachment; filename="{stem}{ext}"'})
