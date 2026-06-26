@@ -12,6 +12,7 @@ import logging
 import queue
 import re
 import threading
+import time
 import traceback
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from pathlib import Path
@@ -215,6 +216,9 @@ class Engine:
         self._queued_projects: set[str] = set()
         self._active_projects: set[str] = set()
         self._cancel_requested: set[str] = set()
+        # Wall-clock start of _process() per project — used to show elapsed
+        # time in the "Done - X clips ready (Y min)" message.
+        self._start_times: dict[str, float] = {}
 
     def _clip_lock(self, project_id: str, clip_id: str) -> threading.Lock:
         with self._clip_locks_guard:
@@ -339,10 +343,12 @@ class Engine:
                 log.error("pipeline failed for %s: %s\n%s", project_id, error_msg,
                           traceback.format_exc())
                 try:
+                    el = time.monotonic() - self._start_times.pop(project_id, 0.0)
+                    dur_s = f" ({int(el // 60)} min {int(el % 60)} s)" if el >= 60 else f" ({int(el)} s)" if el >= 1 else ""
                     with store.mutate(project_id) as p:
                         p.status = ProjectStatus.failed
                         p.error = error_msg
-                        p.progress.message = f"Failed: {error_msg[:200]}"
+                        p.progress.message = f"Failed{dur_s}: {error_msg[:200]}"
                     # Clean up the extracted WAV on failure to avoid disk leaks.
                     _wav = get_settings().media_dir / project_id / "audio16k.wav"
                     _wav.unlink(missing_ok=True)
@@ -476,6 +482,8 @@ class Engine:
             raise RuntimeError("project or source media missing")
         self._wait_if_paused(project_id)
         self._raise_if_cancelled(project_id)
+        # Record wall-clock start so the "done" message can show elapsed time.
+        self._start_times[project_id] = time.monotonic()
         settings = get_settings()
         src_path = str(settings.media_dir / project.source.path)
         info = ffmpeg.probe(src_path)
@@ -1117,9 +1125,11 @@ class Engine:
             if ready == 0:
                 p.status = ProjectStatus.failed
                 p.error = "Rendering failed for every clip."
+                elapsed = time.monotonic() - self._start_times.pop(project_id, 0.0)
+                dur_str = f" ({int(elapsed // 60)} min {int(elapsed % 60)} s)" if elapsed >= 60 else f" ({int(elapsed)} s)" if elapsed >= 1 else ""
                 p.progress = JobProgress(
                     stage="render", stage_index=5, total_stages=len(STAGES),
-                    message="Rendering failed for every clip",
+                    message=f"Rendering failed for every clip{dur_str}",
                     pct=100.0, stages=self._stage_view(5, 1.0))
                 return
             if failed:
@@ -1127,9 +1137,15 @@ class Engine:
                               severity="warn", code="render_failed")
             p.status = ProjectStatus.ready
             p.error = None
+            elapsed = time.monotonic() - self._start_times.pop(project_id, 0.0)
+            dur_str = ""
+            if elapsed >= 60:
+                dur_str = f" ({int(elapsed // 60)} min {int(elapsed % 60)} s)"
+            elif elapsed >= 1:
+                dur_str = f" ({int(elapsed)} s)"
             p.progress = JobProgress(
                 stage="done", stage_index=len(STAGES), total_stages=len(STAGES),
-                message=f"Done - {ready} clips ready", pct=100.0,
+                message=f"Done - {ready} clips ready{dur_str}", pct=100.0,
                 stages=self._stage_view(len(STAGES), 1.0))
 
     # -- single-clip re-render (editor edits) -----------------------------
