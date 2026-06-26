@@ -27,3 +27,4 @@ npm-debug.log*
 
 # Local agent/session config
 .claude/settings.local.json
+.shots/
