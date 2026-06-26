@@ -154,13 +154,17 @@ def _try_transcribe(engine, audio, **kwargs):
             return engine.transcribe(audio, **fallback)
         except TypeError as e:
             msg = str(e)
-            # Find which kwarg caused the issue by testing each one
+            # Find which specific kwarg caused the issue by matching its name
+            # in the error message. The OR catch-all was removed because it
+            # caused ALL kwargs to be dropped on the first iteration.
+            dropped = False
             for key in list(fallback.keys()):
-                if key in msg or "unexpected keyword" in msg.lower():
+                if key in msg:
                     log.warning("transcribe kwarg %r not supported by this engine; dropping", key)
                     del fallback[key]
+                    dropped = True
                     break
-            else:
+            if not dropped:
                 raise  # not a kwarg issue, re-raise
     return engine.transcribe(audio)  # bare-minimum fallback
 
