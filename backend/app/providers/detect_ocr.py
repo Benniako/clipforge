@@ -832,6 +832,11 @@ def find_text_events(src_path: str, info: MediaInfo,
     # globally for the scan so a repeat gets the cached OCR result, not a fresh
     # inference. Reset per source path.
     prev_crops: dict[str, tuple[str | None, str, float]] = {}
+    # Scoreboard change tracking (#10): when the same ROI produces different
+    # text on consecutive frames (e.g. "BbT 0,04" → "BbT 1,04" after a goal),
+    # emit a "scoreboard" event labelled with the content that changed, so even
+    # garbled OCR on a scoreboard HUD is caught as an event.
+    prev_roi_text: dict[str, str] = {}
     # ROI lifetime tracking (#3): if a user-calibrated ROI returns no text for
     # N consecutive frames, stop sampling it for the rest of the scan.
     roi_life: dict[str, int] = {}
@@ -892,6 +897,20 @@ def find_text_events(src_path: str, info: MediaInfo,
                         conf = 0.9 if roi != "full" else 0.8
                     matches = match_keywords(text, profile)
                     matches.extend(_manual_matches(text, manual_cues))
+                    # Scoreboard change detection: if the text in this ROI
+                    # changed since the last frame, it might be a goal / round
+                    # win / event worth tracking. Only fire when the new text
+                    # isn't trivially short (noise) and differs from the prev.
+                    prev = prev_roi_text.get(roi)
+                    if prev is not None and len(text) > 3 and text != prev:
+                        # Label with the first keyword that matches, or
+                        # "scoreboard" as a generic fallback.
+                        change_label = matches[0][0] if matches else "scoreboard"
+                        events.append(OcrEvent(
+                            t=round(t, 3), label=change_label,
+                            text=_ocr_evidence(f"changed: {prev} → {text}", text),
+                            confidence=min(1.0, conf * 0.9)))
+                    prev_roi_text[roi] = text
                     for label, matched in matches:
                         events.append(OcrEvent(t=round(t, 3), label=label,
                                                text=_ocr_evidence(matched, text),
