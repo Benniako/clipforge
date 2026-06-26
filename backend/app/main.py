@@ -60,7 +60,6 @@ async def lifespan(app: FastAPI):
     store.init_db()
     feedback.init_db()
     # Clean up stale temp files from crashed pipelines (files older than 1 hour).
-    from pathlib import Path
     _data = get_settings().data_dir
     for _p in _data.rglob("*.tmp"):
         try:

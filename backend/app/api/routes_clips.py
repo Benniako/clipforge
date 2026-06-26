@@ -189,14 +189,21 @@ def edit_clip(project_id: str, clip_id: str, edit: ClipEdit) -> Clip:
     if edit.caption_words is not None:
         clip.captions.words = edit.caption_words
 
-    if edit.reframe_cx is not None:
-        cx = max(0.0, min(1.0, edit.reframe_cx))
-        # A manual crop centre keeps the clip's facecam layout intact.
-        clip.reframe = Reframe(layout=clip.reframe.layout,
-                               keyframes=[ReframeKeyframe(t=0.0, cx=cx)],
-                               tracked=False, overridden=True,
-                               cx_overridden=True,
-                               facecam=clip.reframe.facecam)
+    if "reframe_cx" in edit.model_fields_set:
+        if edit.reframe_cx is not None:
+            cx = max(0.0, min(1.0, edit.reframe_cx))
+            # A manual crop centre keeps the clip's facecam layout intact.
+            clip.reframe = Reframe(layout=clip.reframe.layout,
+                                   keyframes=[ReframeKeyframe(t=0.0, cx=cx)],
+                                   tracked=False, overridden=True,
+                                   cx_overridden=True,
+                                   facecam=clip.reframe.facecam)
+        else:
+            # Explicit null = reset to automatic tracking.
+            clip.reframe = Reframe(layout=clip.reframe.layout, tracked=False,
+                                   keyframes=[], overridden=False,
+                                   cx_overridden=False,
+                                   facecam=clip.reframe.facecam)
     elif span_changed and project.source:
         if clip.kind == "gameplay":
             # Gameplay stays action-centered; face tracking is for talking clips.

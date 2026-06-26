@@ -262,6 +262,7 @@ export default function ClipEditor() {
       Math.abs(end - clip.end) > 0.01 ||
       styleId !== clip.captions.style_id ||
       (cx !== null && (!clip.reframe.cx_overridden || Math.abs(cx - (clip.reframe.keyframes[0]?.cx ?? 0.5)) > 0.01)) ||
+      (cx === null && clip.reframe.cx_overridden) ||
       layout !== clip.reframe.layout ||
       aspect !== (clip.aspect ?? "") ||
       JSON.stringify(capSpeakers) !== JSON.stringify(clip.caption_speakers ?? null) ||
@@ -282,7 +283,7 @@ export default function ClipEditor() {
         start: number;
         end: number;
         style_id: string;
-        reframe_cx: number;
+        reframe_cx: number | null;
         caption_words: { t: number; d: number; text: string }[];
         caption_speakers: number[] | null;
         layout: string;
@@ -295,7 +296,7 @@ export default function ClipEditor() {
         edit.end = end;
       }
       if (styleId !== clip.captions.style_id) edit.style_id = styleId;
-      if (cx !== null) edit.reframe_cx = cx;
+      edit.reframe_cx = cx;
       if (layout !== clip.reframe.layout) edit.layout = layout;
       if (aspect !== (clip.aspect ?? "")) edit.aspect = aspect;
       if (JSON.stringify(capSpeakers) !== JSON.stringify(clip.caption_speakers ?? null))

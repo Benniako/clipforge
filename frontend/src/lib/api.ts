@@ -100,7 +100,7 @@ export const api = {
 
   /** AI-generated publish-ready content for a clip (titles, description, hashtags). */
   publishContent: (projectId: string, clipId: string, platform?: string) =>
-    fetchWithTimeout(`/api/projects/${projectId}/clips/${clipId}/publish-content?platform=${platform ?? "generic"}`)
+    fetchWithTimeout(`/api/projects/${projectId}/clips/${clipId}/publish-content?platform=${encodeURIComponent(platform ?? "generic")}`)
       .then((r) => json<PublishContent>(r)),
 
   /** Grouped capability inventory for the diagnostics panel. */
@@ -332,7 +332,7 @@ export const api = {
       start: number;
       end: number;
       style_id: string;
-      reframe_cx: number;
+	      reframe_cx: number | null;
       caption_words: { t: number; d: number; text: string }[];
       caption_speakers: number[] | null;
       layout: string;
