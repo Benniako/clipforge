@@ -253,7 +253,17 @@ export const api = {
     }).then((r) => json<Project>(r)),
 
   downloadSrtUrl: (projectId: string, clipId: string) =>
-    `/api/projects/${projectId}/clips/${clipId}/captions.srt`,
+    `/api/projects/${projectId}/clips/${clipId}/captions?format=srt`,
+
+  downloadVttUrl: (projectId: string, clipId: string) =>
+    `/api/projects/${projectId}/clips/${clipId}/captions?format=vtt`,
+
+  trimClip: (projectId: string, clipId: string, bounds: { start?: number; end?: number; title?: string }) =>
+    fetch(url(`/projects/${projectId}/clips/${clipId}`), {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(bounds),
+    }).then((r) => { if (!r.ok) throw new Error(`trim failed (${r.status})`); }),
 
   // Uses XHR so we can report real upload progress for large files.
   createProject: (input: CreateProjectInput) =>

@@ -30,3 +30,6 @@ npm-debug.log*
 .claude/settings.local.json
 .shots/
 .cache/
+*.tmp
+*.ptsg32pc2s*
+*.ptsg32pc2s.tmp

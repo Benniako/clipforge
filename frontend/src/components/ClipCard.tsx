@@ -2,7 +2,7 @@
 import { useNavigate } from "react-router-dom";
 import { api } from "../lib/api";
 import type { Clip } from "../lib/types";
-import { fmtDuration } from "../lib/format";
+import { fmtClock, fmtDuration } from "../lib/format";
 import { useT } from "../lib/i18n";
 import ScoreBadge from "./ScoreBadge";
 
@@ -115,6 +115,37 @@ export default function ClipCard({ clip, projectId, rank, selected, onToggleSele
             </span>
           ))}
         </div>
+        {/* Quick trim: drag the two ends to nudge clip start/end before re-render. */}
+        {ready && (
+          <div className="clip-trim">
+            <div className="row" style={{ justifyContent: "space-between", fontSize: 11 }}>
+              <span className="muted tiny">{fmtClock(clip.start)}</span>
+              <span className="muted tiny">{fmtClock(clip.end)}</span>
+            </div>
+            <div className="row" style={{ gap: 4 }}>
+              <input
+                type="range"
+                min={Math.max(0, clip.start - 5)}
+                max={Math.max(clip.start + 1, clip.end - 3)}
+                step={0.1}
+                value={clip.start}
+                onChange={(e) => { void api.trimClip(projectId, clip.id, { start: Number(e.target.value) }); }}
+                style={{ flex: 1, height: 14 }}
+                title="Trim start"
+              />
+              <input
+                type="range"
+                min={Math.min(clip.start + 3, clip.end + 5)}
+                max={clip.end + 5}
+                step={0.1}
+                value={clip.end}
+                onChange={(e) => { void api.trimClip(projectId, clip.id, { end: Number(e.target.value) }); }}
+                style={{ flex: 1, height: 14 }}
+                title="Trim end"
+              />
+            </div>
+          </div>
+        )}
         <div className="card-actions">
           <button className="btn sm ghost" onClick={open}>
             {t("cc.edit")}
@@ -126,6 +157,28 @@ export default function ClipCard({ clip, projectId, rank, selected, onToggleSele
               download
             >
               {t("cc.download")}
+            </a>
+          )}
+          {ready && (
+            <a
+              className="btn sm ghost"
+              href={api.downloadSrtUrl(projectId, clip.id)}
+              download
+              title={t("cc.srtTitle")}
+              style={{ padding: "7px 9px", fontSize: 12 }}
+            >
+              .srt
+            </a>
+          )}
+          {ready && (
+            <a
+              className="btn sm ghost"
+              href={api.downloadVttUrl(projectId, clip.id)}
+              download
+              title="WebVTT for TikTok/YouTube upload"
+              style={{ padding: "7px 9px", fontSize: 12 }}
+            >
+              .vtt
             </a>
           )}
           <div className="spacer" style={{ flex: 1 }} />
