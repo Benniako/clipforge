@@ -88,8 +88,11 @@ async def lifespan(app: FastAPI):
     s = get_settings()
     logging.getLogger("clipforge").info("capabilities: %s", s.capability_report())
     yield
-    # Graceful shutdown: close thread-local SQLite connections so WAL is
-    # checkpointed cleanly and no ResourceWarning is raised on exit.
+    # Graceful shutdown: let active ffmpeg encodes finish, then close DB
+    # connections so WAL is checkpointed cleanly.
+    log.info("shutting down — waiting for active renders…")
+    from .pipeline.orchestrator import engine
+    engine.wait_for_renders(timeout=60.0)
     store.close_all()
 
 

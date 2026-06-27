@@ -243,6 +243,9 @@ class Engine:
         self._asr_queue: queue.Queue[_AsrJob] = queue.Queue()
         self._asr_worker_thread: threading.Thread | None = None
         self._asr_futures: dict[str, concurrent.futures.Future] = {}
+        # Tracks active render futures so shutdown can wait for encodes.
+        self._active_render_futs: set[concurrent.futures.Future] = set()
+        self._render_futs_lock = threading.Lock()
         # Track idle cycles to unload the GPU ASR model after a period of
         # inactivity — frees ~3.5 GB VRAM for Ollama during scoring.
         self._asr_idle_cycles = 0
@@ -417,10 +420,14 @@ class Engine:
             if summary.status not in (ProjectStatus.queued, ProjectStatus.processing):
                 continue
             try:
+                # Preserve already-rendered clips (have thumbnails/export_urls).
+                # Only clips that are still "queued" or "pending" need reprocessing.
                 with store.mutate(summary.id) as p:
-                    p.clips = []
+                    p.clips = [c for c in p.clips
+                               if not getattr(c, "thumb_url", None) or not getattr(c, "export_url", None)]
                     p.events = []
                     p.montages = []
+                    p.progress.stage = "created"
                 self.enqueue(summary.id)
                 resumed += 1
             except Exception:
@@ -1162,6 +1169,9 @@ class Engine:
                     return False
                 futs[ex.submit(self._render_one, project_id, clip, src_path, info,
                                out_w, out_h, burn_captions, motion, bgm, ai_boost)] = clip
+                # Track for graceful shutdown.
+                with self._render_futs_lock:
+                    self._active_render_futs.add(list(futs.keys())[-1])
                 return True
 
             for _ in range(n):
@@ -1170,6 +1180,8 @@ class Engine:
             while futs:
                 completed, _pending = wait(futs, return_when=FIRST_COMPLETED)
                 for fut in completed:
+                    with self._render_futs_lock:
+                        self._active_render_futs.discard(fut)
                     futs.pop(fut, None)
                     done += 1
                     fut.result()  # surface unexpected (non-per-clip) errors
