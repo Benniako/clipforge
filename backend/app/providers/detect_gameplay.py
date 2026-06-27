@@ -90,8 +90,17 @@ def auto_detect_profile(src_path: str, n_samples: int = 5) -> str:
         if dur <= 0:
             return "generic"
 
-        step = max(20, dur // (n_samples + 1))
-        ts = [int(dur * i / (n_samples + 1)) for i in range(1, n_samples + 1)]
+        # Sample across the whole VOD, with extra density in the first few
+        # minutes where game menus (most text-rich screens) usually appear.
+        # EA FC menus show "ULTIMATE TEAM", "KARRIERE", "CHAMPIONS" etc.
+        # which OCR reads well. In-match scoreboard text is sparser.
+        n_spread = max(4, n_samples - 4)
+        step = max(15, dur // (n_spread + 1))
+        ts = [int(dur * i / (n_spread + 1)) for i in range(1, n_spread + 1)]
+        # Dense sampling in the first 90 seconds (menus, pre-match screens).
+        for extra in [3, 8, 15, 25, 40, 55, 75]:
+            if extra < dur:
+                ts.append(extra)
         text_lower = ""
         with tempfile.TemporaryDirectory() as td:
             for t in ts:

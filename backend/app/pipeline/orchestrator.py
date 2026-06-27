@@ -243,6 +243,9 @@ class Engine:
         self._asr_queue: queue.Queue[_AsrJob] = queue.Queue()
         self._asr_worker_thread: threading.Thread | None = None
         self._asr_futures: dict[str, concurrent.futures.Future] = {}
+        # Track idle cycles to unload the GPU ASR model after a period of
+        # inactivity — frees ~3.5 GB VRAM for Ollama during scoring.
+        self._asr_idle_cycles = 0
 
     def _clip_lock(self, project_id: str, clip_id: str) -> threading.Lock:
         with self._clip_locks_guard:
@@ -317,7 +320,15 @@ class Engine:
         from ..providers import transcribe as transcribe_mod
 
         while True:
-            job = self._asr_queue.get()
+            try:
+                job = self._asr_queue.get(timeout=30)
+                self._asr_idle_cycles = 0
+            except queue.Empty:
+                self._asr_idle_cycles += 1
+                if self._asr_idle_cycles >= 2:
+                    transcribe_mod.unload_model()
+                    self._asr_idle_cycles = 0
+                continue
             pid = job.project_id
 
             if pid in self._cancel_requested:
@@ -1130,7 +1141,9 @@ class Engine:
                     burn_captions: bool = True, motion: str = "none",
                     power_mode: str | None = None,
                     ai_boost=None) -> None:
+        """Render clips in parallel, shortest-first so highlights appear faster."""
         settings = get_settings()
+        clips = sorted(clips, key=lambda c: c.end - c.start)
         done = 0
         total = len(clips)
         n = max(1, min(settings.render_workers_for(power_mode), total))

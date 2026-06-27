@@ -855,9 +855,51 @@ def update_clip_bounds(project_id: str, clip_id: str,
     return {"ok": True, "clip_id": clip_id}
 
 
+
 @router.get("/{project_id}/clips/{clip_id}/captions")
 def download_captions(project_id: str, clip_id: str,
                       format: str = "srt") -> FileResponse:
+    """Download caption sidecar for a single clip in SRT or WebVTT format."""
+    p = store.get(project_id)
+    if not p:
+        raise HTTPException(404, "project not found")
+    clip = p.clip(clip_id)
+    if not clip:
+        raise HTTPException(404, "clip not found")
+    if not clip.captions or not clip.captions.words:
+        raise HTTPException(409, "clip has no captions yet")
+
+    if format == "vtt":
+        body = build_vtt(clip.captions)
+        ext = ".vtt"
+        media = "text/vtt"
+    else:
+        body = build_srt(clip.captions)
+        ext = ".srt"
+        media = "text/plain"
+
+    stem = _safe_name(clip.title or clip_id).replace(" ", "_")
+    return PlainTextResponse(body, media_type=media,
+                             headers={"Content-Disposition": f'attachment; filename="{stem}{ext}"'})
+
+
+@router.get("/{project_id}/export/tiktok/{clip_id}")
+def export_tiktok(project_id: str, clip_id: str) -> FileResponse:
+    """Download a single clip pre-cropped to 9:16 TikTok/Shorts aspect ratio
+    with a WebVTT caption sidecar."""
+    p = store.get(project_id)
+    if not p or not p.source:
+        raise HTTPException(404)
+    clip = p.clip(clip_id)
+    if not clip:
+        raise HTTPException(404)
+    return FileResponse(clip.export_url, media_type="video/mp4")
+
+
+@router.get("/{project_id}/export/vtt/{clip_id}")
+def export_vtt(project_id: str, clip_id: str) -> PlainTextResponse:
+    """WebVTT caption sidecar for TikTok/YouTube uploads."""
+    return download_captions(project_id, clip_id, format="vtt")
     """Download caption sidecar for a single clip in SRT or WebVTT format."""
     p = store.get(project_id)
     if not p:

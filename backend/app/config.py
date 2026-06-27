@@ -445,6 +445,8 @@ class Settings:
     deno_path: str | None = None # explicit deno executable path passed to yt-dlp
     has_ollama: bool = False     # local LLM server — virality re-ranking (optional)
     ollama_models: str = ""      # installed model names (comma-separated)
+    ollama_text: str = "qwen3:8b"  # auto-selected based on VRAM (qwen3:14b on >14 GB)
+    ollama_vision: str = "qwen3-vl:8b"  # vision model, smaller when VRAM tight
     has_openmodel: bool = False  # OpenModel.ai API key — cloud LLM replacement
     has_torchaudio: bool = False # wav2vec2 forced alignment for tighter captions
     has_paddleocr: bool = False  # OCR engine (best accuracy overall)
@@ -785,6 +787,10 @@ def get_settings() -> Settings:
         deno_path=deno_path,
         has_ollama=_ollama_result[0],
         ollama_models=_ollama_result[1],
+        # Auto-select Ollama text model based on available VRAM.
+        # qwen3:14b (~10 GB) fits on 16 GB alongside ASR/Ocr with some margin.
+        ollama_text="qwen3:14b" if (vram_mb > 14000 and has_cuda) else "qwen3:8b",
+        ollama_vision="qwen3-vl:8b",
         has_torchaudio=_has_module("torchaudio"),
         has_paddleocr=_has_module("paddleocr"),
         has_easyocr=_has_module("easyocr"),

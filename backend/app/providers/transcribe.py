@@ -36,6 +36,22 @@ _wx_align: dict = {}  # language_code -> (align_model, metadata)
 _wx_diarize = None  # lazily-loaded diarization pipeline
 
 
+def unload_model() -> None:
+    """Free the GPU ASR model (~3.5 GB VRAM) for other pipeline stages.
+
+    Called from the ASR worker loop after ~60s of inactivity so models can
+    be reloaded on demand without OOM."""
+    global _model, _wx_model, _wx_align, _wx_diarize
+    _model = None
+    _wx_model = None
+    _wx_align.clear()
+    _wx_diarize = None
+    import gc, torch
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+
 def _ensure_ffmpeg_on_path() -> None:
     """whisperX shells out to a bare ``ffmpeg``; make our static binary findable."""
     ff = get_settings().ffmpeg
