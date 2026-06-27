@@ -212,8 +212,8 @@ def match_keywords(text: str, profile: str | None, *,
     return out
 
 
-def sample_frame_times(duration: float, *, every: float = 2.0,
-                       max_frames: int = 400) -> list[float]:
+def sample_frame_times(duration: float, *, every: float = 1.5,
+                       max_frames: int = 800) -> list[float]:
     """Evenly-spaced timestamps to OCR, capped so long VODs stay bounded."""
     if duration <= 0:
         return []
@@ -227,7 +227,7 @@ def sample_frame_times(duration: float, *, every: float = 2.0,
 
 
 def focused_frame_times(duration: float, focus_times: list[float] | None, *,
-                        every: float = 2.0, max_frames: int = 260) -> list[float]:
+                        every: float = 1.5, max_frames: int = 600) -> list[float]:
     """OCR around likely moments, with a light safety sweep across the VOD."""
     if not focus_times:
         return sample_frame_times(duration, every=every, max_frames=max_frames)
@@ -836,10 +836,13 @@ def find_text_events(src_path: str, info: MediaInfo,
     # more densely (cuts = visual context changes = new text opportunities).
     # Sparse-cuts talking heads need less frequent OCR.
     cut_density = min(len(scene_times) / max(info.duration, 1), 1.0)
-    adaptive_every = max(every - cut_density * 1.0, 0.8)  # 2s→0.8s for dense cuts
+    adaptive_every = max(every - cut_density * 1.4, 0.6)
     focused = list(focus_times or []) + scene_times
+    # Increase max_frames so brief banners (TOR, SIEG on EA FC, ~2-3s) are
+    # much more likely to be sampled. With EasyOCR GPU at ~0.4-0.6s/frame,
+    # 800 frames adds ~6-8 min; the shared frame cache cuts redundant decode.
     times = focused_frame_times(info.duration, focused or None,
-                                every=adaptive_every)
+                                every=adaptive_every, max_frames=800)
     if not times:
         return []
     lang = getattr(settings, "language", "en") or "en"
