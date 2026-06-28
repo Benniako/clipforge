@@ -171,15 +171,20 @@ def create_app() -> FastAPI:
             if src_mtime > dist_mtime:
                 import subprocess
                 print("[INFO] Frontend source is newer than dist/. Auto-building…")
-                ret = subprocess.run(
-                    ["npx", "vite", "build"],
-                    cwd=str(dist.parent), capture_output=True, text=True, timeout=120,
-                )
-                if ret.returncode == 0:
-                    print("[OK] Frontend rebuilt.")
-                else:
-                    print(f"[WARN] Auto-build failed (exit {ret.returncode}). "
-                          "Stale frontend may be served. Run `npx vite build` manually.")
+                try:
+                    ret = subprocess.run(
+                        ["npx", "vite", "build"],
+                        cwd=str(dist.parent), capture_output=True, text=True, timeout=120,
+                    )
+                    if ret.returncode == 0:
+                        print("[OK] Frontend rebuilt.")
+                    else:
+                        print(f"[WARN] Auto-build failed (exit {ret.returncode}). "
+                              "Stale frontend may be served. Run `npx vite build` manually.")
+                except FileNotFoundError:
+                    print("[WARN] npx not found — skip auto-build. Install Node.js or run `npx vite build` manually.")
+                except subprocess.TimeoutExpired:
+                    print("[WARN] Auto-build timed out after 120s — serving stale frontend.")
         app.mount("/", SPAStaticFiles(directory=str(dist), html=True), name="spa")
 
     return app
