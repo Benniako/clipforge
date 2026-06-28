@@ -340,6 +340,7 @@ class Engine:
                 # otherwise .result() on the pipeline worker would hang forever
                 # since the future hasn't been resolved yet.
                 job.future.set_exception(CancelledProject(pid))
+                self._asr_futures.pop(pid, None)
                 self._asr_queue.task_done()
                 continue
 

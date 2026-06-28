@@ -847,6 +847,11 @@ def update_clip_bounds(project_id: str, clip_id: str,
                     c.end = round(end, 3)
                 if title is not None:
                     c.title = title
+                # Validate bounds after applying both.
+                new_start = c.start if start is not None else clip.start
+                new_end = c.end if end is not None else clip.end
+                if new_end <= new_start:
+                    raise HTTPException(400, "clip end must be after start")
                 break
 
     # Re-render the single clip in the background.
@@ -869,10 +874,12 @@ def export_tiktok(project_id: str, clip_id: str) -> FileResponse:
     with a WebVTT caption sidecar."""
     p = store.get(project_id)
     if not p or not p.source:
-        raise HTTPException(404)
+        raise HTTPException(404, "project or source not found")
     clip = p.clip(clip_id)
     if not clip:
-        raise HTTPException(404)
+        raise HTTPException(404, "clip not found")
+    if not clip.export_url:
+        raise HTTPException(409, "clip has not been rendered yet")
     return FileResponse(clip.export_url, media_type="video/mp4")
 
 
