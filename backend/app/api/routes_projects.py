@@ -896,10 +896,8 @@ def export_tiktok(project_id: str, clip_id: str) -> FileResponse:
     return FileResponse(clip.export_url, media_type="video/mp4")
 
 
-@router.get("/{project_id}/export/vtt/{clip_id}")
-def export_vtt(project_id: str, clip_id: str) -> PlainTextResponse:
-    """WebVTT caption sidecar for TikTok/YouTube uploads."""
-    return download_captions(project_id, clip_id, format="vtt")
+def _download_captions(project_id: str, clip_id: str,
+                        format: str = "srt") -> PlainTextResponse:
     """Download caption sidecar for a single clip in SRT or WebVTT format."""
     p = store.get(project_id)
     if not p:
@@ -920,5 +918,14 @@ def export_vtt(project_id: str, clip_id: str) -> PlainTextResponse:
         media = "text/plain"
 
     stem = _safe_name(clip.title or clip_id).replace(" ", "_")
-    return PlainTextResponse(body, media_type=media,
-                             headers={"Content-Disposition": f'attachment; filename="{stem}{ext}"'})
+    return PlainTextResponse(
+        body,
+        media_type=media,
+        headers={"Content-Disposition": f'attachment; filename="{stem}{ext}"'},
+    )
+
+
+@router.get("/{project_id}/export/vtt/{clip_id}")
+def export_vtt(project_id: str, clip_id: str) -> PlainTextResponse:
+    """WebVTT caption sidecar for TikTok/YouTube uploads."""
+    return _download_captions(project_id, clip_id, format="vtt")

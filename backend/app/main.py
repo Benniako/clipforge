@@ -51,6 +51,7 @@ from .pipeline.orchestrator import engine
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(levelname)s %(name)s %(message)s")
+log = logging.getLogger("clipforge")
 
 __version__ = "0.1.0"
 
