@@ -858,29 +858,9 @@ def update_clip_bounds(project_id: str, clip_id: str,
 
 @router.get("/{project_id}/clips/{clip_id}/captions")
 def download_captions(project_id: str, clip_id: str,
-                      format: str = "srt") -> FileResponse:
+                      format: str = "srt") -> PlainTextResponse:
     """Download caption sidecar for a single clip in SRT or WebVTT format."""
-    p = store.get(project_id)
-    if not p:
-        raise HTTPException(404, "project not found")
-    clip = p.clip(clip_id)
-    if not clip:
-        raise HTTPException(404, "clip not found")
-    if not clip.captions or not clip.captions.words:
-        raise HTTPException(409, "clip has no captions yet")
-
-    if format == "vtt":
-        body = build_vtt(clip.captions)
-        ext = ".vtt"
-        media = "text/vtt"
-    else:
-        body = build_srt(clip.captions)
-        ext = ".srt"
-        media = "text/plain"
-
-    stem = _safe_name(clip.title or clip_id).replace(" ", "_")
-    return PlainTextResponse(body, media_type=media,
-                             headers={"Content-Disposition": f'attachment; filename="{stem}{ext}"'})
+    return _download_captions(project_id, clip_id, format=format)
 
 
 @router.get("/{project_id}/export/tiktok/{clip_id}")
