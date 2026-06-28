@@ -1084,7 +1084,7 @@ def test_forced_progress_update_bypasses_throttle():
     assert out.progress.pct > 0
 
 
-def test_delete_project_requests_engine_cancel(monkeypatch):
+def test_delete_project_requests_engine_cancel():
     from starlette.testclient import TestClient
     from app import store
     from app.config import get_settings
@@ -1109,7 +1109,7 @@ def test_delete_project_requests_engine_cancel(monkeypatch):
     (get_settings().media_dir / pid).mkdir(parents=True, exist_ok=True)
 
     fake = FakeEngine()
-    monkeypatch.setattr(routes_projects, "engine", fake)
+    routes_projects.engine = fake
     c = TestClient(create_app(), raise_server_exceptions=False)
 
     resp = c.delete(f"/api/projects/{pid}")
