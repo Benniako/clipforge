@@ -1055,9 +1055,7 @@ def test_pause_resume_project_endpoint():
     c = TestClient(create_app(), raise_server_exceptions=False)
 
     paused = c.post(f"/api/projects/{p.id}/pause")
-    if paused.status_code != 200:
-        print(f"\n[DEBUG] pause status={paused.status_code} body={paused.text[:500]}")
-    assert paused.status_code == 200, f"expected 200, got {paused.status_code}: {paused.text[:500]}"
+    assert paused.status_code == 200
     assert paused.json()["status"] == "paused"
     assert "Paused" in paused.json()["progress"]["message"]
 
@@ -3013,7 +3011,7 @@ def test_broll_pip_writes_complex_filtergraph():
     assert "filter_complex_script" in src  # switches from simple to complex
 
 
-def test_render_cpu_fallback_keeps_gpu_decode(monkeypatch):
+def test_render_cpu_fallback_keeps_gpu_decode():
     """If NVENC fails, the x264 fallback keeps CUDA decode (NVDEC offloads
     video decoding to the GPU regardless of encoder — the hwaccel is about
     decode, not encode)."""
@@ -3043,22 +3041,30 @@ def test_render_cpu_fallback_keeps_gpu_decode(monkeypatch):
         assert "-hwaccel" in args
         return ""
 
-    monkeypatch.setattr(R, "get_settings", lambda: FakeSettings())
-    monkeypatch.setattr(ffmpeg, "run", fake_run)
-    monkeypatch.setattr(R, "_make_thumbnail", lambda *a, **k: None)
+    orig_get_settings = R.get_settings
+    orig_run = ffmpeg.run
+    orig_make_thumbnail = R._make_thumbnail
+    try:
+        R.get_settings = lambda: FakeSettings()  # type: ignore[method-assign]
+        ffmpeg.run = fake_run
+        R._make_thumbnail = lambda *a, **k: None  # type: ignore[method-assign]
 
-    clip = Clip(start=0.0, end=4.0, title="fallback")
-    info = MediaInfo(duration=6.0, width=640, height=360, fps=30.0,
-                     has_audio=False, has_video=True, codec="h264")
-    with tempfile.TemporaryDirectory() as td:
-        out = Path(td) / "out.mp4"
-        thumb = Path(td) / "out.jpg"
-        R.render_clip(clip, "source.mp4", info, get_style("bold-pop"), out, thumb,
-                      out_w=1080, out_h=1920, burn_captions=False)
+        clip = Clip(start=0.0, end=4.0, title="fallback")
+        info = MediaInfo(duration=6.0, width=640, height=360, fps=30.0,
+                         has_audio=False, has_video=True, codec="h264")
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "out.mp4"
+            thumb = Path(td) / "out.jpg"
+            R.render_clip(clip, "source.mp4", info, get_style("bold-pop"), out, thumb,
+                          out_w=1080, out_h=1920, burn_captions=False)
 
-    assert len(calls) == 2
-    assert "-hwaccel" in calls[0]
-    assert "-hwaccel" in calls[1]
+        assert len(calls) == 2
+        assert "-hwaccel" in calls[0]
+        assert "-hwaccel" in calls[1]
+    finally:
+        R.get_settings = orig_get_settings
+        ffmpeg.run = orig_run
+        R._make_thumbnail = orig_make_thumbnail
 
 
 # --------------------------------------------------------------------------- #
