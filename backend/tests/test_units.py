@@ -1121,6 +1121,63 @@ def test_delete_project_requests_engine_cancel():
         routes_projects.engine = orig
 
 
+def test_wait_for_renders_blocks_until_complete():
+    """Graceful-shutdown helper waits for active render futures."""
+    from concurrent.futures import Future
+    from app.pipeline.orchestrator import Engine
+
+    eng = Engine()
+    f1, f2 = Future(), Future()
+
+    with eng._render_futs_lock:
+        eng._active_render_futs.add(f1)
+        eng._active_render_futs.add(f2)
+
+    # Both futures unresolved — wait_for_renders blocks.
+    import threading
+    results = []
+    def waiter():
+        eng.wait_for_renders(timeout=5.0)
+        results.append("done")
+
+    t = threading.Thread(target=waiter, daemon=True)
+    t.start()
+    # Give the waiter a moment to block.
+    import time
+    time.sleep(0.1)
+    assert len(results) == 0  # still blocked
+
+    f1.set_result(None)
+    time.sleep(0.1)
+    assert len(results) == 0  # f2 still pending
+
+    f2.set_result(None)
+    t.join(timeout=2.0)
+    assert results == ["done"]
+    assert eng._active_render_futs == set()
+
+
+def test_wait_for_renders_returns_immediately_when_idle():
+    """No active renders = no waiting."""
+    from app.pipeline.orchestrator import Engine
+    eng = Engine()
+    eng.wait_for_renders(timeout=5.0)  # should return instantly
+
+
+def test_wait_for_renders_cancels_on_timeout():
+    """Futures that don't finish within the timeout are cancelled."""
+    from concurrent.futures import Future
+    from app.pipeline.orchestrator import Engine
+
+    eng = Engine()
+    f = Future()
+    with eng._render_futs_lock:
+        eng._active_render_futs.add(f)
+
+    eng.wait_for_renders(timeout=0.01)  # very short timeout
+    assert f.cancelled() or f.done()
+
+
 def test_render_finish_fails_project_when_no_clips_ready():
     from app import store
     from app.pipeline.orchestrator import Engine

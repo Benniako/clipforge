@@ -435,6 +435,30 @@ class Engine:
             log.info("requeued %d incomplete project(s)", resumed)
         return resumed
 
+    def wait_for_renders(self, timeout: float = 60.0) -> None:
+        """Block until all active render futures finish, up to *timeout* seconds.
+
+        Called during graceful shutdown so in-flight ffmpeg encodes complete
+        instead of being killed mid-write.  Futures that haven't finished within
+        the timeout are cancelled and the method returns.
+        """
+        deadline = time.monotonic() + timeout
+        while True:
+            with self._render_futs_lock:
+                pending = set(self._active_render_futs)
+            if not pending:
+                return
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                for fut in pending:
+                    fut.cancel()
+                return
+            done, not_done = wait(pending, timeout=min(remaining, 5.0),
+                                  return_when=FIRST_COMPLETED)
+            with self._render_futs_lock:
+                for fut in done:
+                    self._active_render_futs.discard(fut)
+
     # -- worker loop ------------------------------------------------------
     def _loop(self) -> None:
         while True:
