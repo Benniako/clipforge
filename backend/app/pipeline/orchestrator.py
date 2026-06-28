@@ -28,7 +28,6 @@ from ..models import (ASPECTS, Clip, ClipStatus, ContentType, JobProgress,
                       LayoutType, ProjectStatus, Reframe, ReframeKeyframe,
                       Transcript, now)
 from ..providers import detect as detect_mod
-from ..providers import detect_gameplay as gameplay_mod
 from ..providers import hashtags as hashtags_mod
 from ..providers import llm as llm_mod
 from ..providers import scenes as scenes_mod

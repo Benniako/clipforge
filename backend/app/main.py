@@ -92,7 +92,6 @@ async def lifespan(app: FastAPI):
     # Graceful shutdown: let active ffmpeg encodes finish, then close DB
     # connections so WAL is checkpointed cleanly.
     log.info("shutting down — waiting for active renders…")
-    from .pipeline.orchestrator import engine
     engine.wait_for_renders(timeout=60.0)
     store.close_all()
 

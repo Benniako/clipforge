@@ -258,8 +258,8 @@ export const api = {
   downloadVttUrl: (projectId: string, clipId: string) =>
     `/api/projects/${projectId}/clips/${clipId}/captions?format=vtt`,
 
-  trimClip: (projectId: string, clipId: string, bounds: { start?: number; end?: number; title?: string }) =>
-    fetch(url(`/projects/${projectId}/clips/${clipId}`), {
+	  trimClip: (projectId: string, clipId: string, bounds: { start?: number; end?: number; title?: string }) =>
+	    fetchWithTimeout(`/api/projects/${projectId}/clips/${clipId}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(bounds),

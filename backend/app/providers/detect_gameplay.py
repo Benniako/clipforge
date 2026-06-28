@@ -95,7 +95,6 @@ def auto_detect_profile(src_path: str, n_samples: int = 5) -> str:
         # EA FC menus show "ULTIMATE TEAM", "KARRIERE", "CHAMPIONS" etc.
         # which OCR reads well. In-match scoreboard text is sparser.
         n_spread = max(4, n_samples - 4)
-        step = max(15, dur // (n_spread + 1))
         ts = [int(dur * i / (n_spread + 1)) for i in range(1, n_spread + 1)]
         # Dense sampling in the first 90 seconds (menus, pre-match screens).
         for extra in [3, 8, 15, 25, 40, 55, 75]:
