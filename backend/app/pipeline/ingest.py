@@ -119,9 +119,13 @@ def _download_ytdlp(url: str, dest_stem: Path) -> Path:
         msg = str(cause).strip() or str(e)
         raise RuntimeError(f"YouTube/import failed: {msg}") from e
     if not path.exists():  # merged file may carry a different ext than prepare_filename guessed
+        import time as _time
+        _now = _time.time()
         cands = sorted(
             (p for p in dest_stem.parent.glob(dest_stem.name + ".*")
-             if p.suffix.lower() in VIDEO_EXTS and not p.name.endswith(".part")),
+             if p.suffix.lower() in VIDEO_EXTS
+             and not p.name.endswith(".part")
+             and abs(p.stat().st_mtime - _now) < 300),  # only files from this session
             key=lambda p: p.stat().st_size, reverse=True,
         )
         if not cands:

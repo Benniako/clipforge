@@ -307,8 +307,8 @@ class Engine:
             progress=progress,
             future=future,
         )
-        self._asr_queue.put(job)
         self._asr_futures[project_id] = future
+        self._asr_queue.put(job)
         return future
 
     def _asr_loop(self) -> None:
@@ -590,7 +590,7 @@ class Engine:
                 p.progress.stages = self._paused_stage_view(p)
                 p.progress.updated_at = now()
         except Exception:
-            pass
+            log.warning("failed to mark project %s paused", project_id, exc_info=True)
 
     def _wait_if_paused(self, project_id: str) -> None:
         announced = False
@@ -1192,11 +1192,12 @@ class Engine:
                     clip = next(clip_iter)
                 except StopIteration:
                     return False
-                futs[ex.submit(self._render_one, project_id, clip, src_path, info,
-                               out_w, out_h, burn_captions, motion, bgm, ai_boost)] = clip
+                fut = ex.submit(self._render_one, project_id, clip, src_path, info,
+                               out_w, out_h, burn_captions, motion, bgm, ai_boost)
+                futs[fut] = clip
                 # Track for graceful shutdown.
                 with self._render_futs_lock:
-                    self._active_render_futs.add(list(futs.keys())[-1])
+                    self._active_render_futs.add(fut)
                 return True
 
             for _ in range(n):
