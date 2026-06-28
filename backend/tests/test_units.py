@@ -131,7 +131,7 @@ def test_premiere_edl_record_and_source_durations_match_to_the_frame():
             prev_rec_out = ro
 
 
-def test_spa_fallback_serves_index_for_client_routes(tmp_path=None):
+def test_spa_fallback_serves_index_for_client_routes():
     import tempfile
     from pathlib import Path
     from starlette.applications import Starlette
@@ -1337,7 +1337,7 @@ def test_dedupe_events_keeps_highest_confidence_on_ties():
     assert out[0].confidence == 0.9 and out[0].text == "roi"
 
 
-def test_reference_audio_files_resolve_to_existing_cue_templates(tmp_path=None):
+def test_reference_audio_files_resolve_to_existing_cue_templates():
     """game_config.reference_audio_files must resolve to on-disk templates
     (so the field is actually consumed), and silently skip missing ones."""
     import tempfile
@@ -2954,7 +2954,7 @@ def test_ocr_batch_falls_back_to_sequential_on_error():
     assert len(out) == 1 and out[0] == ("", 0.0)  # read fails gracefully
 
 
-def test_ocr_crop_hash_is_stable_for_identical_images(tmp_path=None):
+def test_ocr_crop_hash_is_stable_for_identical_images():
     """_crop_hash returns the same fingerprint for the same image twice,
     and a different fingerprint for a genuinely different image."""
     import tempfile, os
