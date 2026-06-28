@@ -1055,7 +1055,9 @@ def test_pause_resume_project_endpoint():
     c = TestClient(create_app(), raise_server_exceptions=False)
 
     paused = c.post(f"/api/projects/{p.id}/pause")
-    assert paused.status_code == 200
+    if paused.status_code != 200:
+        print(f"\n[DEBUG] pause status={paused.status_code} body={paused.text[:500]}")
+    assert paused.status_code == 200, f"expected 200, got {paused.status_code}: {paused.text[:500]}"
     assert paused.json()["status"] == "paused"
     assert "Paused" in paused.json()["progress"]["message"]
 
