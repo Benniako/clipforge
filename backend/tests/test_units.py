@@ -1109,13 +1109,16 @@ def test_delete_project_requests_engine_cancel():
     (get_settings().media_dir / pid).mkdir(parents=True, exist_ok=True)
 
     fake = FakeEngine()
+    orig = routes_projects.engine
     routes_projects.engine = fake
-    c = TestClient(create_app(), raise_server_exceptions=False)
-
-    resp = c.delete(f"/api/projects/{pid}")
-    assert resp.status_code == 200
-    assert fake.cancelled == [pid]
-    assert store.get(pid) is None
+    try:
+        c = TestClient(create_app(), raise_server_exceptions=False)
+        resp = c.delete(f"/api/projects/{pid}")
+        assert resp.status_code == 200
+        assert fake.cancelled == [pid]
+        assert store.get(pid) is None
+    finally:
+        routes_projects.engine = orig
 
 
 def test_render_finish_fails_project_when_no_clips_ready():
