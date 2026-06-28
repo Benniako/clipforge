@@ -333,7 +333,9 @@ class Engine:
                 continue
             pid = job.project_id
 
-            if pid in self._cancel_requested:
+            with self._pause_condition:
+                cancelled = pid in self._cancel_requested
+            if cancelled:
                 # Set CancelledProject exception rather than just cancelling —
                 # otherwise .result() on the pipeline worker would hang forever
                 # since the future hasn't been resolved yet.

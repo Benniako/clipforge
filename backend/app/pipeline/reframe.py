@@ -15,6 +15,7 @@ from __future__ import annotations
 import logging
 import tempfile
 import threading
+from collections import OrderedDict
 from pathlib import Path
 
 from ..config import get_settings
@@ -26,8 +27,10 @@ log = logging.getLogger("clipforge.reframe")
 # Global pre-computed face tracks: src_path -> [(time_abs, cx_fraction)] or None.
 # Populated once by precompute_face_tracks() and reused by all clips on that source.
 _PRECOMPUTED_TRACKS: dict[str, list[tuple[float, float]] | None] = {}
+_PRECOMPUTED_TRACKS_LOCK = threading.Lock()
 
 # Frame cache: face detection results keyed by (source_path, start_bucket, end_bucket).
+_FACE_CACHE: OrderedDict[tuple[str, int, int], list[tuple[float, float]] | None] = OrderedDict()
 # Multiple overlapping clips on the same source (e.g. 20 candidate clips on a
 # podcast) would otherwise extract + detect faces on the same frames 20 times.
 # The cache avoids redundant ffmpeg calls and YOLO/SCRFD/YuNet inference.
@@ -72,16 +75,19 @@ def precompute_face_tracks(src: str, duration: float) -> None:
     Call this once per source before processing any clips on it. Idempotent:
     subsequent calls are no-ops.
     """
-    if src in _PRECOMPUTED_TRACKS:
-        return  # already pre-computed
+    with _PRECOMPUTED_TRACKS_LOCK:
+        if src in _PRECOMPUTED_TRACKS:
+            return  # already pre-computed
     try:
         import cv2  # noqa: F401
     except Exception:
-        _PRECOMPUTED_TRACKS[src] = None
+        with _PRECOMPUTED_TRACKS_LOCK:
+            _PRECOMPUTED_TRACKS[src] = None
         return
 
     if duration <= 0 or not get_settings().has_opencv:
-        _PRECOMPUTED_TRACKS[src] = None
+        with _PRECOMPUTED_TRACKS_LOCK:
+            _PRECOMPUTED_TRACKS[src] = None
         return
 
     log.info("pre-computing face tracks for %s (%.1fs)", src, duration)
@@ -95,12 +101,14 @@ def precompute_face_tracks(src: str, duration: float) -> None:
             ], timeout=min(duration * 2, 600))
         except Exception as e:
             log.warning("pre-compute frame sampling failed: %s", e)
-            _PRECOMPUTED_TRACKS[src] = None
+            with _PRECOMPUTED_TRACKS_LOCK:
+                _PRECOMPUTED_TRACKS[src] = None
             return
 
         frames = sorted(Path(tmp).glob("pf_*.jpg"))
         if not frames:
-            _PRECOMPUTED_TRACKS[src] = None
+            with _PRECOMPUTED_TRACKS_LOCK:
+                _PRECOMPUTED_TRACKS[src] = None
             return
 
         from ..media import faces as faces_mod
@@ -125,9 +133,11 @@ def precompute_face_tracks(src: str, duration: float) -> None:
                     centers.append((t_abs, centers[-1][1]))
         if len(centers) < max(2, total * 0.15):
             log.warning("pre-compute: too few faces found (%d/%d)", len(centers), total)
-            _PRECOMPUTED_TRACKS[src] = None
+            with _PRECOMPUTED_TRACKS_LOCK:
+                _PRECOMPUTED_TRACKS[src] = None
             return
-        _PRECOMPUTED_TRACKS[src] = centers
+        with _PRECOMPUTED_TRACKS_LOCK:
+            _PRECOMPUTED_TRACKS[src] = centers
         log.info("pre-computed %d face positions for %s", len(centers), src)
 
 
@@ -193,7 +203,8 @@ def compute_reframe(src: str, start: float, end: float, src_aspect: float,
     if s.has_opencv:
         # Use pre-computed face tracks (whole-source single ffmpeg pass) if
         # available — this is 3-10x faster than per-clip ffmpeg decoding.
-        precomputed = _PRECOMPUTED_TRACKS.get(src)
+        with _PRECOMPUTED_TRACKS_LOCK:
+            precomputed = _PRECOMPUTED_TRACKS.get(src)
         if precomputed is not None:
             # Filter to the clip's time range and rebase.
             centers = [(t - start, cx) for t, cx in precomputed
@@ -204,16 +215,19 @@ def compute_reframe(src: str, start: float, end: float, src_aspect: float,
             # Fall back to per-clip ffmpeg + face detection with the frame cache.
             cache_key = (src, round(start * _FACE_CACHE_BUCKET),
                          round(end * _FACE_CACHE_BUCKET))
-            cached = _FACE_CACHE.get(cache_key)
+            with _FACE_CACHE_LOCK:
+                cached = _FACE_CACHE.get(cache_key)
+                if cached is not None:
+                    _FACE_CACHE.move_to_end(cache_key)
             if cached is not None:
                 centers = cached
             else:
                 centers = _track_faces(src, start, end, speech)
                 with _FACE_CACHE_LOCK:
-                    if len(_FACE_CACHE) >= _FACE_CACHE_MAX:
-                        log.debug("face cache evicted (%d entries)", len(_FACE_CACHE))
-                        _FACE_CACHE.clear()  # bounded: evict all when hit cap
                     _FACE_CACHE[cache_key] = centers
+                    _FACE_CACHE.move_to_end(cache_key)
+                    if len(_FACE_CACHE) > _FACE_CACHE_MAX:
+                        _FACE_CACHE.popitem(last=False)  # LRU evict oldest
     if not centers:
         return Reframe(layout=LayoutType.center,
                        keyframes=[ReframeKeyframe(t=0.0, cx=0.5)], tracked=False)

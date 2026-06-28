@@ -15,12 +15,16 @@ from __future__ import annotations
 import json
 import logging
 import re
+import threading
+from collections import OrderedDict
 
 from ..models import Transcript
 
 log = logging.getLogger(__name__)
 
-_CORRECTION_CACHE: dict[str, dict[str, str]] = {}
+_CORRECTION_CACHE: OrderedDict[str, dict[str, str]] = OrderedDict()
+_CORRECTION_CACHE_LOCK = threading.Lock()
+_CORRECTION_CACHE_MAX = 50
 
 
 def _build_prompt(text: str, lang: str = "de") -> str:
@@ -96,8 +100,11 @@ def correct_transcript(transcript: Transcript, lang: str = "de") -> int:
         model = "qwen3:8b"
 
     # Check cache
-    cache_key = f"{model}:{hash(full_text)}"
-    cached = _CORRECTION_CACHE.get(cache_key)
+    cache_key = f"{model}:{full_text}"  # deterministic, not hash() which varies per process
+    with _CORRECTION_CACHE_LOCK:
+        cached = _CORRECTION_CACHE.get(cache_key)
+        if cached is not None:
+            _CORRECTION_CACHE.move_to_end(cache_key)  # LRU refresh
     if cached is None:
         prompt = _build_prompt(full_text, lang=lang)
         try:
@@ -106,10 +113,11 @@ def correct_transcript(transcript: Transcript, lang: str = "de") -> int:
             log.warning("correction LLM call failed: %s", e)
             return 0
         corrections = _parse_corrections(raw)
-        _CORRECTION_CACHE[cache_key] = corrections
-        # Keep cache bounded
-        if len(_CORRECTION_CACHE) > 50:
-            _CORRECTION_CACHE.clear()
+        with _CORRECTION_CACHE_LOCK:
+            _CORRECTION_CACHE[cache_key] = corrections
+            _CORRECTION_CACHE.move_to_end(cache_key)
+            if len(_CORRECTION_CACHE) > _CORRECTION_CACHE_MAX:
+                _CORRECTION_CACHE.popitem(last=False)  # LRU evict oldest
     else:
         corrections = cached
 
