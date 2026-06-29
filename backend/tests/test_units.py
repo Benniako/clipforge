@@ -271,6 +271,31 @@ def test_reframe_skips_already_vertical_source():
     assert rf.keyframes[0].cx == 0.5
 
 
+def test_face_tracker_does_not_mark_matched_fractional_box_missed():
+    from app.providers.tracker import FaceTracker
+
+    tr = FaceTracker()
+    b1 = (0.10000001, 0.2, 0.3, 0.4)
+    b2 = (0.10000002, 0.2, 0.3, 0.4)
+    assert tr.update([b1])[b1] == 1
+    assert tr._tracks[1].missed == 0
+    assert tr.update([b2])[b2] == 1
+    assert tr._tracks[1].missed == 0
+
+
+def test_face_tracker_does_not_assign_one_track_to_two_faces():
+    from app.providers.tracker import FaceTracker
+
+    tr = FaceTracker()
+    first = (0.1, 0.1, 0.3, 0.3)
+    same = (0.11, 0.1, 0.3, 0.3)
+    other = (0.12, 0.1, 0.3, 0.3)
+    assert tr.update([first])[first] == 1
+    ids = tr.update([same, other])
+    assert ids[same] == 1
+    assert ids[other] == 2
+
+
 # --------------------------------------------------------------------------- #
 # Facecam — clustering + layout geometry (no cv2/ffmpeg needed)
 # --------------------------------------------------------------------------- #
@@ -393,6 +418,18 @@ def test_diarization_capability_requires_token():
     assert _settings(has_whisperx=False, hf_token="tok").capability_report()["diarization"] is False
     assert _settings(has_whisperx=True, hf_token="tok").capability_report()["diarization_model"] == "pyannote/speaker-diarization-community-1"
     assert _settings(has_whisperx=True, hf_token=None).capability_report()["diarization_model"] is None
+
+
+def test_asr_benchmark_candidate_matrix_is_dependency_safe():
+    from app.providers import asr_benchmark as AB
+
+    s = _settings(whisper_model="base")
+    cands = AB.candidate_matrix(s, models=["base", "large-v3-turbo", "base"])
+    labels = [c.label for c in cands]
+    assert labels[:2] == ["faster-whisper/base", "faster-whisper/large-v3-turbo"]
+    assert sum(1 for c in cands if c.engine == "faster-whisper" and c.model == "base") == 1
+    assert any(c.engine == "whisperx" for c in cands)
+    assert any(c.engine == "nemo-parakeet" and "Parakeet" in c.label for c in cands)
 
 
 def test_whisperx_diarization_constructor_supports_new_and_old_token_api():
@@ -655,6 +692,46 @@ def test_detector_failures_surface_warnings():
         G.audio_events_mod.find_events = orig
 
 
+def test_ocr_unavailable_and_custom_miss_surface_warnings():
+    from app.providers import detect_gameplay as G
+    from app.models import ImportSettings, GameProfileConfig
+
+    info = types.SimpleNamespace(has_video=True, duration=30.0)
+    warnings: list[str] = []
+    old_get = G.get_settings
+    old_find = G.detect_ocr.find_text_events
+    try:
+        G.get_settings = lambda: types.SimpleNamespace(has_ocr=False, ocr_engine="")
+        report: dict = {}
+        assert G._find_ocr_events("v.mp4", info, ImportSettings(),
+                                  warnings_out=warnings,
+                                  ocr_report=report) == []
+        assert any("no OCR engine" in w for w in warnings)
+        assert report["status"] == "unavailable"
+        assert any("no OCR engine" in w for w in report["warnings"])
+
+        warnings.clear()
+        report.clear()
+        G.get_settings = lambda: types.SimpleNamespace(has_ocr=True, ocr_engine="easyocr")
+
+        def _fake_find(*_a, **kw):
+            G.detect_ocr.init_report(kw.get("report"), enabled=True,
+                                     engine="easyocr", status="ran")
+            return []
+
+        G.detect_ocr.find_text_events = _fake_find
+        st = ImportSettings(game_config=GameProfileConfig(
+            visual_text_cues=["round won"]))
+        assert G._find_ocr_events("v.mp4", info, st, warnings_out=warnings,
+                                  ocr_report=report) == []
+        assert any("custom visual cues" in w for w in warnings)
+        assert report["status"] == "ran"
+        assert any("custom visual cues" in w for w in report["warnings"])
+    finally:
+        G.get_settings = old_get
+        G.detect_ocr.find_text_events = old_find
+
+
 def test_project_warnings_are_structured_and_back_compatible():
     """Notices carry a severity for the UI; legacy/raw strings (stored JSON,
     older code) are coerced to warn-level so nothing breaks."""
@@ -667,12 +744,14 @@ def test_project_warnings_are_structured_and_back_compatible():
     assert [n.message for n in p.warnings] == ["render failed", "no speech"]
     assert p.warnings[0].severity == "warn" and p.warnings[1].severity == "error"
     assert all(isinstance(n, Notice) for n in p.warnings)
+    assert p.ocr_report.status == "skipped"
 
     # Legacy plain-string list (e.g. an old stored project) is coerced.
     legacy = Project.model_validate({"name": "L", "warnings": ["old string warning"]})
     assert isinstance(legacy.warnings[0], Notice)
     assert legacy.warnings[0].message == "old string warning"
     assert legacy.warnings[0].severity == "warn"
+    assert legacy.ocr_report.status == "skipped"
 
 
 def test_hashtags_talking_vs_gameplay():
@@ -868,6 +947,7 @@ def test_map_to_tight_and_caption_retime():
     tr = _tight_transcript()
     end = tr.words[-1].end + 0.2
     segs = compute_tight_segments(tr, 0.0, end)
+    tr.speech = [[round(a + 0.02, 3), round(b - 0.02, 3)] for a, b in segs]
     (a1, b1), (a2, b2) = segs
     assert map_to_tight(a1, segs) == 0.0
     assert abs(map_to_tight(a2, segs) - (b1 - a1)) < 1e-6   # 2nd seg starts where 1st ends
@@ -875,6 +955,8 @@ def test_map_to_tight_and_caption_retime():
     total = sum(b - a for a, b in segs)
     assert all(w.t < total + 0.01 for w in cs.words)        # all words inside tight timeline
     assert len(cs.words) == len(tr.words)
+    assert cs.speech[0][0] == 0.02
+    assert abs(cs.speech[1][0] - ((b1 - a1) + 0.02)) < 0.01
 
 
 def test_logistic_learner_kicks_in_with_data():
@@ -926,6 +1008,7 @@ def test_gameplay_detection_from_prepared_wav():
 
 
 def test_speech_aware_reframe_helpers():
+    from app.pipeline import orchestrator as ORCH
     from app.pipeline.orchestrator import _speech_intervals
     from app.pipeline.reframe import _speech_active
 
@@ -942,6 +1025,42 @@ def test_speech_aware_reframe_helpers():
     iv = _speech_intervals(tr, 0.0, tr.words[-1].end + 0.2)
     assert iv and len(iv) == 2
     assert iv[0][0] >= 0.0 and iv[1][0] > iv[0][1]   # clip-relative, disjoint
+    cached = ORCH._speech_interval_cache[id(tr)][1]
+    assert cached and all(isinstance(a, float) and isinstance(b, float)
+                          for a, b in cached)
+    # A sub-clip that no longer has a meaningful silence gap stays whole.
+    assert _speech_intervals(tr, 0.0, tr.words[4].end + 0.1) == [
+        (0.0, tr.words[4].end + 0.1)]
+
+    vad_tr = Transcript(words=[], provider="whisper",
+                        speech=[[0.0, 0.2], [3.0, 3.2]])
+    assert _speech_intervals(vad_tr, 0.0, 4.0) == [(0.0, 0.2), (3.0, 3.2)]
+
+
+def test_compute_reframe_uses_precomputed_tracks_without_cache_fallback():
+    from app.pipeline import reframe as RF
+
+    old_settings = RF.get_settings
+    old_tracks = dict(RF._PRECOMPUTED_TRACKS)
+    old_cache = dict(RF._FACE_CACHE)
+    old_track_faces = RF._track_faces
+    try:
+        RF.get_settings = lambda: _settings(has_opencv=True, has_asd=False)
+        RF._PRECOMPUTED_TRACKS.clear()
+        RF._FACE_CACHE.clear()
+        RF._PRECOMPUTED_TRACKS["video.mp4"] = [(10.0, 0.4), (10.5, 0.42), (11.0, 0.44)]
+        RF._track_faces = lambda *_a, **_kw: (_ for _ in ()).throw(
+            AssertionError("precomputed tracks should avoid per-clip sampling"))
+        rf = RF.compute_reframe("video.mp4", 10.0, 11.0, 16 / 9)
+        assert rf.tracked is True
+        assert rf.keyframes[0].t == 0.0
+    finally:
+        RF.get_settings = old_settings
+        RF._PRECOMPUTED_TRACKS.clear()
+        RF._PRECOMPUTED_TRACKS.update(old_tracks)
+        RF._FACE_CACHE.clear()
+        RF._FACE_CACHE.update(old_cache)
+        RF._track_faces = old_track_faces
 
 
 def test_scene_showinfo_parse_and_snap():
@@ -1374,6 +1493,87 @@ def test_ready_endpoint_is_lightweight():
     assert r.json()["ok"] is True
 
 
+def test_raw_upload_endpoint_streams_without_multipart():
+    import json
+    from urllib.parse import quote
+    from starlette.testclient import TestClient
+    from app import store
+    from app.api import routes_projects as RP
+    from app.main import create_app
+
+    store.init_db()
+    seen: dict = {}
+    old_attach = RP.ingest.attach_source_file
+    old_enqueue = RP.engine.enqueue
+
+    def _fake_attach(project, tmp, filename):
+        data = Path(tmp).read_bytes()
+        seen["data"] = data
+        seen["filename"] = filename
+        Path(tmp).unlink(missing_ok=True)
+        return SourceMedia(
+            filename=filename,
+            path=f"{project.id}/source.mp4",
+            duration=1.0,
+            width=1280,
+            height=720,
+            size_bytes=len(data),
+        )
+
+    try:
+        RP.ingest.attach_source_file = _fake_attach
+        RP.engine.enqueue = lambda pid: seen.setdefault("queued", pid)
+        meta = {
+            "name": "Raw Upload",
+            "platform": "tiktok",
+            "power_mode": "max_gpu",
+            "content_type": "gameplay",
+            "game_profile": "valorant",
+            "target_clips": 7,
+            "game_config": {
+                "detection_mode": "hybrid",
+                "visual_text_cues": ["QUEST COMPLETE"],
+            },
+        }
+        meta_bytes = json.dumps(meta).encode("utf-8")
+        raw_body = b"CFMETA " + str(len(meta_bytes)).encode("ascii") + b"\n"
+        raw_body += meta_bytes + b"video-bytes"
+        c = TestClient(create_app(), raise_server_exceptions=False)
+        r = c.post(
+            "/api/projects/raw-upload?filename=big%20video.mp4",
+            content=raw_body,
+            headers={"content-type": "application/octet-stream"},
+        )
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["name"] == "Raw Upload"
+        assert body["source"]["filename"] == "big video.mp4"
+        assert body["settings"]["content_type"] == "gameplay"
+        assert body["settings"]["game_profile"] == "valorant"
+        assert body["settings"]["target_clips"] == 7
+        assert body["settings"]["game_config"]["detection_mode"] == "hybrid"
+        assert body["settings"]["game_config"]["visual_text_cues"] == ["QUEST COMPLETE"]
+        assert seen["data"] == b"video-bytes"
+        assert seen["filename"] == "big video.mp4"
+        assert seen["queued"] == body["id"]
+
+        bad = c.post(
+            "/api/projects/raw-upload?filename=bad.mp4",
+            content=b"video-bytes",
+            headers={
+                "content-type": "video/mp4",
+                "x-clipforge-settings": quote(json.dumps({
+                    "game_config": {"visual_rois": ["not a roi"]},
+                }), safe=""),
+            },
+        )
+        assert bad.status_code == 400
+        assert "upload settings were invalid" in bad.json()["detail"]
+    finally:
+        RP.ingest.attach_source_file = old_attach
+        RP.engine.enqueue = old_enqueue
+
+
 def test_clip_aspect_override_falls_back_to_project_dims():
     from app.models import ASPECTS
     st = ImportSettings(aspect="9:16")
@@ -1400,6 +1600,9 @@ def test_ocr_keyword_matching_finds_viral_markers():
     from app.providers import detect_ocr as O
     # noisy OCR text still matches the marker as a normalized substring
     assert ("victory", "victory") in O.match_keywords("|| VICT0RY ||".replace("0", "o"), "valorant")
+    assert any(l == "victory" for l, _ in O.match_keywords("|| V1CT0RY ||", "valorant"))
+    assert any(l == "kill" for l, _ in O.match_keywords("HEADSH0T", "cs2", fuzzy=False))
+    assert any(l == "clutch" for l, _ in O.match_keywords("1v5 CLUTCH", "valorant", fuzzy=False))
     assert any(l == "victory" for l, _ in O.match_keywords("SIEG - RUNDE GEWONNEN", "generic"))
     assert any(l == "kill" for l, _ in O.match_keywords("KRASSER KOPFSCHUSS", "generic"))
     assert any(l == "kill" for l, _ in O.match_keywords("ENEMY DOUBLE KILL", "cs2"))
@@ -1410,6 +1613,14 @@ def test_ocr_keyword_matching_finds_viral_markers():
     assert O.match_keywords("loading please wait", "generic") == []
     # exact matching must never fire on clean unrelated text (fuzzy off here)
     assert O.match_keywords("the quick brown fox", "generic", fuzzy=False) == []
+
+
+def test_manual_visual_cues_use_ocr_normalization_and_fuzzy_matching():
+    from app.providers import detect_ocr as O
+
+    assert ("manual_visual", "victory") in O._manual_matches("V1CT0RY", ["victory"])
+    assert ("manual_visual", "one enemy remaining") in O._manual_matches(
+        "0NE ENEMY REMA1NING", ["one enemy remaining"])
 
 
 def test_ocr_menu_context_is_detected_but_not_highlighted():
@@ -1704,6 +1915,43 @@ def test_caption_does_not_linger_through_silence():
     assert end_ts < "0:00:01.50", f"caption lingered through silence: {end_ts}"
 
 
+def test_caption_caps_overlong_asr_word_duration():
+    from app.models import CaptionSet, CaptionWord
+    # Whisper can stretch a final word through trailing silence. Burned captions
+    # should clear on a display cap instead of trusting that whole raw duration.
+    cs = CaptionSet(words=[CaptionWord(t=0.0, d=3.0, text="okay")],
+                    max_words_per_line=3)
+    ass = C.build_ass(cs, get_style("bold-pop"), 1080, 1920)
+    line = next(l for l in ass.splitlines() if l.startswith("Dialogue:"))
+    end_ts = line.split(",", 3)[2]
+    assert end_ts <= "0:00:00.80", f"caption over-held raw ASR duration: {end_ts}"
+
+
+def test_caption_uses_speech_windows_to_clear_sooner():
+    from app.models import CaptionSet, CaptionWord
+    cs = CaptionSet(words=[CaptionWord(t=0.0, d=3.0, text="okay")],
+                    speech=[[0.0, 0.42]], max_words_per_line=3)
+    ass = C.build_ass(cs, get_style("bold-pop"), 1080, 1920)
+    line = next(l for l in ass.splitlines() if l.startswith("Dialogue:"))
+    end_ts = line.split(",", 3)[2]
+    assert end_ts <= "0:00:00.50", f"caption ignored VAD speech end: {end_ts}"
+
+
+def test_srt_caps_overlong_asr_word_duration():
+    from app.models import CaptionSet, CaptionWord
+    cs = CaptionSet(words=[CaptionWord(t=0.0, d=3.0, text="okay")],
+                    max_words_per_line=3)
+    srt = C.build_srt(cs)
+    assert "--> 00:00:00,650" in srt
+
+
+def test_caption_set_carries_clip_relative_speech_windows():
+    tr = Transcript(words=[Word(t=10.0, d=3.0, text="okay")],
+                    provider="whisper", speech=[[9.7, 10.42], [12.0, 12.4]])
+    cs = captionize.build_caption_set(tr, 9.5, 11.0, "bold-pop")
+    assert cs.speech == [[0.2, 0.92]]
+
+
 def test_common_cue_pack_is_available_for_all_games():
     from app import game_packs
     status = game_packs.pack_status()
@@ -1725,6 +1973,11 @@ def test_caption_line_breaks_on_speech_pause():
     # tight speech (no gaps) stays one line up to the count cap
     ws2 = [CaptionWord(t=i * 0.4, d=0.3, text=str(i)) for i in range(3)]
     assert len(_group_lines(ws2, 5)) == 1
+    # a social-caption pause should also clear the current line instead of
+    # preloading the next word across silence
+    ws3 = [CaptionWord(t=0.0, d=0.25, text="wait"),
+           CaptionWord(t=1.05, d=0.25, text="now")]
+    assert [len(l) for l in _group_lines(ws3, 5)] == [1, 1]
 
 
 def test_hook_rewards_front_loaded_curiosity():
@@ -1857,6 +2110,56 @@ def test_subject_center_prefers_people_then_largest():
     boxes2 = [(False, 0, 100, 1000), (False, 800, 1000, 9000)]
     assert abs(_center_from_boxes(boxes2, 1000) - 0.9) < 1e-6
     assert _center_from_boxes([], 1000) is None
+
+
+def test_subject_tracker_mode_aliases():
+    import os
+    from app.providers import subject
+
+    old = os.environ.get("CLIPFORGE_YOLO_TRACKER")
+    try:
+        os.environ["CLIPFORGE_YOLO_TRACKER"] = "bytetrack"
+        assert subject.tracker_yaml() == "bytetrack.yaml"
+        os.environ["CLIPFORGE_YOLO_TRACKER"] = "bot-sort"
+        assert subject.tracker_yaml() == "botsort.yaml"
+        os.environ["CLIPFORGE_YOLO_TRACKER"] = "off"
+        assert subject.tracker_yaml() is None
+    finally:
+        if old is None:
+            os.environ.pop("CLIPFORGE_YOLO_TRACKER", None)
+        else:
+            os.environ["CLIPFORGE_YOLO_TRACKER"] = old
+
+
+def test_subject_tracker_falls_back_to_predict():
+    import os
+    from app.providers import subject
+
+    class Result:
+        boxes = []
+
+    class Model:
+        def __init__(self):
+            self.used_predict = False
+
+        def track(self, *_a, **_kw):
+            raise RuntimeError("tracker unavailable")
+
+        def predict(self, *_a, **_kw):
+            self.used_predict = True
+            return [Result()]
+
+    old = os.environ.get("CLIPFORGE_YOLO_TRACKER")
+    try:
+        os.environ["CLIPFORGE_YOLO_TRACKER"] = "bytetrack"
+        m = Model()
+        assert subject._yolo_result(m, object()).boxes == []
+        assert m.used_predict is True
+    finally:
+        if old is None:
+            os.environ.pop("CLIPFORGE_YOLO_TRACKER", None)
+        else:
+            os.environ["CLIPFORGE_YOLO_TRACKER"] = old
 
 
 def test_optional_powerups_off_by_default_in_ci():
@@ -2842,11 +3145,86 @@ def test_ocr_batch_falls_back_to_sequential_on_error():
     assert len(out) == 1 and out[0] == ("", 0.0)  # read fails gracefully
 
 
+def test_ocr_batch_fallback_preserves_language():
+    from app.providers import detect_ocr as OCR
+
+    langs: list[str] = []
+    old_get = OCR._get_reader
+    old_read = OCR._ocr_image_conf
+    try:
+        OCR._get_reader = lambda engine, lang="en": ("paddleocr", object())
+
+        def _fake_read(path, engine, lang="en"):
+            langs.append(lang)
+            return ("", 0.0)
+
+        OCR._ocr_image_conf = _fake_read
+        assert OCR._ocr_batch(["a.png", "b.png"], "paddleocr", "de") == [
+            ("", 0.0), ("", 0.0)]
+        assert langs == ["de", "de"]
+    finally:
+        OCR._get_reader = old_get
+        OCR._ocr_image_conf = old_read
+
+
+def test_ocr_scan_batches_uncached_frame_crops():
+    from app.providers import detect_ocr as OCR
+    from app.models import ImportSettings
+
+    info = types.SimpleNamespace(has_video=True, duration=1.2)
+    settings = ImportSettings(game_profile="generic", language="en")
+    batches: list[list[str]] = []
+    old_get = OCR.get_settings
+    old_grab = OCR.ffmpeg.grab_frame
+    old_images = OCR._ocr_frame_images
+    old_hash = OCR._crop_hash
+    old_batch = OCR._ocr_batch
+    old_scene = OCR.scene_frame_times
+    try:
+        OCR.get_settings = lambda: types.SimpleNamespace(
+            has_ocr=True, ocr_engine="easyocr", has_scenedetect=False)
+        OCR.ffmpeg.grab_frame = lambda _src, frame, **_kw: Path(frame).write_text("x")
+        OCR._ocr_frame_images = lambda _frame, tmpd, idx, _profile, extra_regions=None: [
+            ("full", Path(tmpd) / f"{idx}_full.png"),
+            ("banner", Path(tmpd) / f"{idx}_banner.png"),
+        ]
+        OCR._crop_hash = lambda path: path
+
+        def _batch(paths, engine, lang="en"):
+            batches.append(list(paths))
+            return [("VICTORY", 0.9) for _ in paths]
+
+        OCR._ocr_batch = _batch
+        OCR.scene_frame_times = lambda *_a, **_kw: []
+        report: dict = {}
+        events = OCR.find_text_events("video.mp4", info, settings, every=1.0,
+                                      report=report)
+        assert any(e.label == "victory" for e in events)
+        assert any(len(batch) == 2 for batch in batches)
+        assert report["status"] == "ran"
+        assert report["engine"] == "easyocr"
+        assert report["frames_sampled"] > 0
+        assert report["crops_read"] >= 2
+        assert report["texts_found"] >= 2
+        assert report["matches"] == len(events)
+        assert any("victory" in ",".join(r["matched"]) for r in report["reads"])
+    finally:
+        OCR.get_settings = old_get
+        OCR.ffmpeg.grab_frame = old_grab
+        OCR._ocr_frame_images = old_images
+        OCR._crop_hash = old_hash
+        OCR._ocr_batch = old_batch
+        OCR.scene_frame_times = old_scene
+
+
 def test_ocr_crop_hash_is_stable_for_identical_images(tmp_path=None):
     """_crop_hash returns the same fingerprint for the same image twice,
     and a different fingerprint for a genuinely different image."""
     import tempfile, os
-    from PIL import Image, ImageDraw
+    try:
+        from PIL import Image, ImageDraw
+    except ImportError:
+        return  # Pillow is optional (OCR ROI cropping); skip when absent in CI.
     from app.providers import detect_ocr as OCR
     tmp = tempfile.mkdtemp()
     # A textured image (not uniform) so the d-hash has real structure.

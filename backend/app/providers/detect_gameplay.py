@@ -236,18 +236,48 @@ def _timing_window(settings: ImportSettings, profile: dict) -> tuple[float, floa
 
 def _find_ocr_events(src_path: str, info: MediaInfo, settings: ImportSettings,
                      *, focus_times: list[float] | None = None,
-                     warnings_out: list | None = None) -> list:
+                     warnings_out: list | None = None,
+                     ocr_report: dict | None = None) -> list:
+    s = get_settings()
     if not settings.use_ocr:
+        detect_ocr.init_report(ocr_report, enabled=False,
+                               engine=getattr(s, "ocr_engine", ""),
+                               status="skipped")
+        return []
+    if not s.has_ocr:
+        msg = ("OCR is enabled, but no OCR engine is installed. Install "
+               "backend/requirements-ocr.txt or turn OCR off for this project.")
+        detect_ocr.init_report(ocr_report, enabled=True,
+                               engine=getattr(s, "ocr_engine", ""),
+                               status="unavailable")
+        detect_ocr.add_report_warning(ocr_report, msg)
+        _add_warning(warnings_out, msg)
         return []
     try:
-        return detect_ocr.find_text_events(
-            src_path, info, settings, focus_times=focus_times)
+        events = detect_ocr.find_text_events(
+            src_path, info, settings, focus_times=focus_times,
+            report=ocr_report)
+        if not events and _has_custom_visual_cues(settings):
+            msg = ("OCR ran but did not match your custom visual cues. Check the "
+                   "Cue Lab crop region, phrase spelling, and selected game profile.")
+            detect_ocr.add_report_warning(ocr_report, msg)
+            _add_warning(warnings_out, msg)
+        return events
     except Exception as e:
         log.warning("ocr detection failed: %s", e)
-        _add_warning(warnings_out,
-                     "On-screen text detection (OCR) crashed, so no on-screen "
-                     "events were found. Check the OCR backend install.")
+        msg = ("On-screen text detection (OCR) crashed, so no on-screen "
+               "events were found. Check the OCR backend install.")
+        detect_ocr.add_report_warning(ocr_report, msg)
+        _add_warning(warnings_out, msg)
         return []
+
+
+def _has_custom_visual_cues(settings: ImportSettings) -> bool:
+    cfg = getattr(settings, "game_config", None)
+    return bool(
+        getattr(cfg, "visual_text_cues", None)
+        or getattr(cfg, "visual_rois", None)
+    )
 
 
 def _add_warning(warnings_out: list | None, msg: str) -> None:
@@ -260,7 +290,8 @@ def detect_gameplay(src_path: str, info: MediaInfo, settings: ImportSettings,
                     *, weights: dict[str, float] | None = None,
                     wav_path: str | None = None,
                     events_out: list | None = None,
-                    warnings_out: list | None = None) -> list[GameplayClip]:
+                    warnings_out: list | None = None,
+                    ocr_report: dict | None = None) -> list[GameplayClip]:
     """Return intensity-ranked highlight clips for gameplay footage.
 
     ``weights`` lets the caller pass personalised audio-feature weights (from the
@@ -274,6 +305,10 @@ def detect_gameplay(src_path: str, info: MediaInfo, settings: ImportSettings,
     from pathlib import Path
 
     aw = weights or audio_weights(settings.game_profile)
+    s = get_settings()
+    detect_ocr.init_report(ocr_report, enabled=bool(settings.use_ocr),
+                           engine=getattr(s, "ocr_engine", ""),
+                           status="skipped")
 
     # On-screen text markers (VICTORY / ELIMINATED / GOAL / kill-feed).
     # For footage with audio we run OCR after finding likely moments, so it reads
@@ -282,7 +317,8 @@ def detect_gameplay(src_path: str, info: MediaInfo, settings: ImportSettings,
     defer_ocr = bool(settings.use_ocr and info.has_audio)
     if settings.use_ocr and not defer_ocr:
         ocr_events = _find_ocr_events(src_path, info, settings,
-                                      warnings_out=warnings_out)
+                                      warnings_out=warnings_out,
+                                      ocr_report=ocr_report)
 
     if not info.has_audio:
         clips = _uniform_fallback(info, settings)
@@ -323,7 +359,8 @@ def detect_gameplay(src_path: str, info: MediaInfo, settings: ImportSettings,
                 log.warning("ocr focus peaks failed: %s", e)
         ocr_events = _find_ocr_events(src_path, info, settings,
                                       focus_times=focus_times,
-                                      warnings_out=warnings_out)
+                                      warnings_out=warnings_out,
+                                      ocr_report=ocr_report)
 
     audio_window_events = _suppress_audio_events_near_menu(
         audio_window_events, ocr_events)

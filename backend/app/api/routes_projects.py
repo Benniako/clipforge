@@ -17,13 +17,14 @@ import asyncio
 import json
 import threading
 
-from fastapi import (APIRouter, File, Form, HTTPException, UploadFile,
-                     WebSocket, WebSocketDisconnect)
+from fastapi import (APIRouter, File, Form, Header, HTTPException, Query,
+                     Request, UploadFile, WebSocket, WebSocketDisconnect)
 from fastapi.concurrency import run_in_threadpool
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from starlette.background import BackgroundTask
+from urllib.parse import unquote
 
 from .. import store
 from ..config import get_settings
@@ -174,6 +175,236 @@ def _game_config_from_form(*, detection_mode: str, visual_rois_json: str,
     return cfg
 
 
+def _bool_value(value, default: bool) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _float_value(value, default: float | None) -> float | None:
+    if value is None or value == "":
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _int_value(value, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _str_value(value, default: str) -> str:
+    return str(value) if value is not None else default
+
+
+def _game_config_from_meta(value) -> GameProfileConfig:
+    if not isinstance(value, dict):
+        return _game_config_from_form(
+            detection_mode="zero_shot",
+            visual_rois_json="",
+            visual_text_cues="",
+            reference_audio_files="",
+            vlm_visual_prompts="",
+            audio_prompts="",
+            audio_negative_prompts="",
+        )
+    data = dict(value)
+    data["detection_mode"] = data.get("detection_mode", "zero_shot")
+    data["visual_rois"] = data.get("visual_rois") or []
+    data["visual_text_cues"] = data.get("visual_text_cues") or []
+    data["reference_audio_files"] = data.get("reference_audio_files") or []
+    data["vlm_visual_prompts"] = (
+        data.get("vlm_visual_prompts")
+        or GameProfileConfig().vlm_visual_prompts
+    )
+    data["audio_prompts"] = data.get("audio_prompts") or []
+    data["audio_negative_prompts"] = (
+        data.get("audio_negative_prompts")
+        or GameProfileConfig().audio_negative_prompts
+    )
+    cfg = GameProfileConfig.model_validate(data)
+    cfg.visual_rois = [r.clamped() for r in cfg.visual_rois]
+    return cfg
+
+
+def _build_import_settings(*, platform: str = "generic",
+                           power_mode: str = "balanced",
+                           min_len: float = 15.0,
+                           max_len: float = 60.0,
+                           target_clips: int = 10,
+                           style_id: str = "bold-pop",
+                           language: str = "de",
+                           content_type: str = "auto",
+                           aspect: str = "9:16",
+                           burn_captions: bool = True,
+                           game_profile: str = "auto",
+                           tighten: bool = False,
+                           denoise: bool = False,
+                           motion: str = "none",
+                           facecam_layout: str = "auto",
+                           use_ocr: bool = True,
+                           use_vlm: bool = True,
+                           use_cues: bool = True,
+                           use_audio_events: bool = True,
+                           cue_learning: bool = True,
+                           auto_length: bool = False,
+                           lead_seconds: float | None = None,
+                           tail_seconds: float | None = None,
+                           ai_boost: AiBoostSettings | None = None,
+                           game_config: GameProfileConfig | None = None
+                           ) -> ImportSettings:
+    try:
+        plat = Platform(platform)
+    except ValueError:
+        plat = Platform.generic
+    try:
+        pmode = PowerMode(power_mode)
+    except ValueError:
+        pmode = PowerMode.balanced
+    try:
+        ctype = ContentType(content_type)
+    except ValueError:
+        ctype = ContentType.auto
+    clean_min, clean_max = (_auto_length_range(plat, ctype) if auto_length
+                            else _clamp_lengths(min_len, max_len))
+    return ImportSettings(
+        platform=plat,
+        power_mode=pmode,
+        min_len=clean_min,
+        max_len=clean_max,
+        target_clips=max(1, min(target_clips, 30)),
+        default_style_id=style_id,
+        language=language if language in ("auto", "en", "de") else "de",
+        content_type=ctype,
+        aspect=aspect if aspect in ASPECTS else "9:16",
+        burn_captions=burn_captions,
+        game_profile=game_profile if game_profile in KNOWN_PROFILES else "auto",
+        tighten=tighten,
+        denoise=denoise,
+        motion=motion if motion in ("none", "push") else "none",
+        facecam_layout=(facecam_layout
+                        if facecam_layout in ("auto", "off", "split", "framed")
+                        else "auto"),
+        use_ocr=use_ocr,
+        use_vlm=use_vlm,
+        use_cues=use_cues,
+        use_audio_events=use_audio_events,
+        cue_learning=cue_learning,
+        auto_length=auto_length,
+        ai_boost=ai_boost or AiBoostSettings(),
+        lead_seconds=_clamp_pad(lead_seconds),
+        tail_seconds=_clamp_pad(tail_seconds),
+        game_config=game_config or _game_config_from_meta(None),
+    )
+
+
+def _settings_from_meta(data: dict) -> ImportSettings:
+    boost = data.get("ai_boost") if isinstance(data.get("ai_boost"), dict) else {}
+    return _build_import_settings(
+        platform=_str_value(data.get("platform"), "generic"),
+        power_mode=_str_value(data.get("power_mode"), "balanced"),
+        min_len=_float_value(data.get("min_len"), 15.0) or 15.0,
+        max_len=_float_value(data.get("max_len"), 60.0) or 60.0,
+        target_clips=_int_value(data.get("target_clips"), 10),
+        style_id=_str_value(data.get("style_id"), "bold-pop"),
+        language=_str_value(data.get("language"), "de"),
+        content_type=_str_value(data.get("content_type"), "auto"),
+        aspect=_str_value(data.get("aspect"), "9:16"),
+        burn_captions=_bool_value(data.get("burn_captions"), True),
+        game_profile=_str_value(data.get("game_profile"), "auto"),
+        tighten=_bool_value(data.get("tighten"), False),
+        denoise=_bool_value(data.get("denoise"), False),
+        motion=_str_value(data.get("motion"), "none"),
+        facecam_layout=_str_value(data.get("facecam_layout"), "auto"),
+        use_ocr=_bool_value(data.get("use_ocr"), True),
+        use_vlm=_bool_value(data.get("use_vlm"), True),
+        use_cues=_bool_value(data.get("use_cues"), True),
+        use_audio_events=_bool_value(data.get("use_audio_events"), True),
+        cue_learning=_bool_value(data.get("cue_learning"), True),
+        auto_length=_bool_value(data.get("auto_length"), False),
+        lead_seconds=_float_value(data.get("lead_seconds"), None),
+        tail_seconds=_float_value(data.get("tail_seconds"), None),
+        ai_boost=AiBoostSettings(
+            emphasis=_bool_value(boost.get("emphasis"), True),
+            emoji=_bool_value(boost.get("emoji"), True),
+            speakerColors=_bool_value(boost.get("speakerColors"), True),
+            autoZoom=_bool_value(boost.get("autoZoom"), True),
+            broll=_bool_value(boost.get("broll"), False),
+            hookCheck=_bool_value(boost.get("hookCheck"), True),
+        ),
+        game_config=_game_config_from_meta(data.get("game_config")),
+    )
+
+
+def _parse_upload_settings(raw: str) -> dict:
+    try:
+        data = json.loads(unquote(raw))
+    except Exception:
+        raise HTTPException(400, "upload settings were invalid JSON")
+    if not isinstance(data, dict):
+        raise HTTPException(400, "upload settings must be a JSON object")
+    return data
+
+
+async def _raw_upload_stream_parts(request: Request, settings_header: str | None
+                                   ) -> tuple[dict, object, bytes]:
+    """Return settings metadata, remaining body stream, and first file bytes.
+
+    New clients send ``CFMETA <json-byte-count>\n<json><file-bytes>`` as one raw
+    octet stream. Header metadata is still accepted for older dev builds.
+    """
+    stream = request.stream()
+    if settings_header:
+        return _parse_upload_settings(settings_header), stream, b""
+
+    buf = b""
+    async for chunk in stream:
+        if chunk:
+            buf += chunk
+            break
+    if not buf:
+        return {}, stream, b""
+    if not buf.startswith(b"CFMETA "):
+        return {}, stream, buf
+
+    while b"\n" not in buf:
+        if len(buf) > 4096:
+            raise HTTPException(400, "upload settings prefix is too large")
+        try:
+            chunk = await anext(stream)
+        except StopAsyncIteration:
+            raise HTTPException(400, "upload settings prefix was incomplete")
+        buf += chunk
+    line, rest = buf.split(b"\n", 1)
+    try:
+        meta_len = int(line[len(b"CFMETA "):].strip())
+    except ValueError:
+        raise HTTPException(400, "upload settings prefix was invalid")
+    if meta_len < 0 or meta_len > 1_000_000:
+        raise HTTPException(400, "upload settings metadata is too large")
+    while len(rest) < meta_len:
+        try:
+            chunk = await anext(stream)
+        except StopAsyncIteration:
+            raise HTTPException(400, "upload settings metadata was incomplete")
+        rest += chunk
+    raw_meta = rest[:meta_len]
+    first_file_bytes = rest[meta_len:]
+    try:
+        data = json.loads(raw_meta.decode("utf-8"))
+    except Exception:
+        raise HTTPException(400, "upload settings were invalid JSON")
+    if not isinstance(data, dict):
+        raise HTTPException(400, "upload settings must be a JSON object")
+    return data, stream, first_file_bytes
+
+
 def _system_usage() -> dict:
     """Best-effort CPU/GPU use for the live processing UI.
 
@@ -265,45 +496,30 @@ async def create_project(
 ) -> Project:
     if not file and not url:
         raise HTTPException(400, "provide either a file upload or a url")
-    try:
-        plat = Platform(platform)
-    except ValueError:
-        plat = Platform.generic
-    try:
-        pmode = PowerMode(power_mode)
-    except ValueError:
-        pmode = PowerMode.balanced
-
-    try:
-        ctype = ContentType(content_type)
-    except ValueError:
-        ctype = ContentType.auto
-    clean_min, clean_max = (_auto_length_range(plat, ctype) if auto_length
-                            else _clamp_lengths(min_len, max_len))
-    settings = ImportSettings(
-        platform=plat,
-        power_mode=pmode,
-        min_len=clean_min,
-        max_len=clean_max,
-        target_clips=max(1, min(target_clips, 30)),
-        default_style_id=style_id,
-        language=language if language in ("auto", "en", "de") else "de",
-        content_type=ctype,
-        aspect=aspect if aspect in ASPECTS else "9:16",
+    settings = _build_import_settings(
+        platform=platform,
+        power_mode=power_mode,
+        min_len=min_len,
+        max_len=max_len,
+        target_clips=target_clips,
+        style_id=style_id,
+        language=language,
+        content_type=content_type,
+        aspect=aspect,
         burn_captions=burn_captions,
-        game_profile=game_profile if game_profile in KNOWN_PROFILES else "auto",
+        game_profile=game_profile,
         tighten=tighten,
         denoise=denoise,
-        motion=motion if motion in ("none", "push") else "none",
-        facecam_layout=(facecam_layout
-                        if facecam_layout in ("auto", "off", "split", "framed")
-                        else "auto"),
+        motion=motion,
+        facecam_layout=facecam_layout,
         use_ocr=use_ocr,
         use_vlm=use_vlm,
         use_cues=use_cues,
         use_audio_events=use_audio_events,
         cue_learning=cue_learning,
         auto_length=auto_length,
+        lead_seconds=lead_seconds,
+        tail_seconds=tail_seconds,
         ai_boost=AiBoostSettings(
             emphasis=ai_boost_emphasis,
             emoji=ai_boost_emoji,
@@ -312,8 +528,6 @@ async def create_project(
             broll=ai_boost_broll,
             hookCheck=ai_boost_hook_check,
         ),
-        lead_seconds=_clamp_pad(lead_seconds),
-        tail_seconds=_clamp_pad(tail_seconds),
         game_config=_game_config_from_form(
             detection_mode=detection_mode,
             visual_rois_json=visual_rois_json,
@@ -371,6 +585,86 @@ async def create_project(
         with store.mutate(project.id) as p:
             p.source = src
             if not name or name == "Untitled":
+                p.name = Path(src.filename).stem[:60] or "Untitled"
+        engine.enqueue(project.id)
+    except Exception as e:
+        _discard()
+        raise HTTPException(500, f"could not start processing: {e}")
+    return store.get(project.id)
+
+
+@router.post("/raw-upload")
+async def create_project_raw_upload(
+    request: Request,
+    filename: str = Query("upload.mp4"),
+    x_clipforge_settings: str | None = Header(None, alias="X-ClipForge-Settings"),
+) -> Project:
+    """Create a project from a raw file body.
+
+    Large videos should not go through multipart parsing: Starlette may spool the
+    whole body before our handler runs, and parser/temp-disk failures surface as
+    the unhelpful "error parsing the body". This route streams bytes directly to
+    our temp file and uses a small JSON settings header for project options.
+    """
+    data, body_stream, first_file_bytes = await _raw_upload_stream_parts(
+        request, x_clipforge_settings)
+    upload_name = Path(filename or "upload.mp4").name or "upload.mp4"
+    try:
+        settings = _settings_from_meta(data)
+    except Exception as e:
+        raise HTTPException(400, f"upload settings were invalid: {e}")
+    project = Project(name=_str_value(data.get("name"), "Untitled") or "Untitled",
+                      settings=settings, status=ProjectStatus.created)
+    store.save(project)
+
+    tmp: Path | None = None
+
+    def _discard() -> None:
+        store.delete(project.id)
+        shutil.rmtree(get_settings().media_dir / project.id, ignore_errors=True)
+        if tmp is not None:
+            tmp.unlink(missing_ok=True)
+
+    try:
+        cap = get_settings().upload_cap_bytes
+        fd, tmp_name = tempfile.mkstemp(suffix=Path(upload_name).suffix or ".mp4")
+        os.close(fd)
+        tmp = Path(tmp_name)
+        size = 0
+        with open(tmp, "wb") as out:
+            if first_file_bytes:
+                size += len(first_file_bytes)
+                if cap is not None and size > cap:
+                    raise HTTPException(
+                        413, f"file exceeds the {get_settings().max_upload_mb} MB "
+                             "upload limit (CLIPFORGE_MAX_UPLOAD_MB; 0 = unlimited)")
+                out.write(first_file_bytes)
+            async for chunk in body_stream:
+                if not chunk:
+                    continue
+                size += len(chunk)
+                if cap is not None and size > cap:
+                    raise HTTPException(
+                        413, f"file exceeds the {get_settings().max_upload_mb} MB "
+                             "upload limit (CLIPFORGE_MAX_UPLOAD_MB; 0 = unlimited)")
+                out.write(chunk)
+        if size <= 0:
+            raise HTTPException(400, "uploaded file was empty")
+        src = await run_in_threadpool(ingest.attach_source_file, project,
+                                      tmp, upload_name)
+        tmp = None
+    except HTTPException:
+        _discard()
+        raise
+    except Exception as e:
+        _discard()
+        error_msg = _friendly_import_error(e)
+        raise HTTPException(400, error_msg)
+
+    try:
+        with store.mutate(project.id) as p:
+            p.source = src
+            if not data.get("name") or data.get("name") == "Untitled":
                 p.name = Path(src.filename).stem[:60] or "Untitled"
         engine.enqueue(project.id)
     except Exception as e:

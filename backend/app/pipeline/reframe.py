@@ -201,15 +201,15 @@ def compute_reframe(src: str, start: float, end: float, src_aspect: float,
             cache_key = (src, round(start * _FACE_CACHE_BUCKET),
                          round(end * _FACE_CACHE_BUCKET))
             cached = _FACE_CACHE.get(cache_key)
-        if cached is not None:
-            centers = cached
-        else:
-            centers = _track_faces(src, start, end, speech)
-            with _FACE_CACHE_LOCK:
-                if len(_FACE_CACHE) >= _FACE_CACHE_MAX:
-                    log.debug("face cache evicted (%d entries)", len(_FACE_CACHE))
-                    _FACE_CACHE.clear()  # bounded: evict all when hit cap
-                _FACE_CACHE[cache_key] = centers
+            if cached is not None:
+                centers = cached
+            else:
+                centers = _track_faces(src, start, end, speech)
+                with _FACE_CACHE_LOCK:
+                    if len(_FACE_CACHE) >= _FACE_CACHE_MAX:
+                        log.debug("face cache evicted (%d entries)", len(_FACE_CACHE))
+                        _FACE_CACHE.clear()  # bounded: evict all when hit cap
+                    _FACE_CACHE[cache_key] = centers
     if not centers:
         return Reframe(layout=LayoutType.center,
                        keyframes=[ReframeKeyframe(t=0.0, cx=0.5)], tracked=False)

@@ -175,6 +175,14 @@ def _detect_reframe_engine() -> str:
     return "haar"
 
 
+def _yolo_tracker_mode() -> str:
+    raw = os.environ.get("CLIPFORGE_YOLO_TRACKER", "").strip().lower()
+    if raw in ("", "0", "false", "off", "none", "predict"):
+        return ""
+    aliases = {"byte": "bytetrack", "bot-sort": "botsort"}
+    return aliases.get(raw, raw)
+
+
 def _detect_asd_adapter() -> bool:
     """True only when active-speaker detection can actually relabel words.
 
@@ -394,6 +402,7 @@ class Settings:
     has_audio_events: bool = False  # PANNs — cheering/laughter/explosion detection
     has_clap: bool = False       # CLAP zero-shot audio cue detection
     reframe_engine: str = "haar"  # "yolo" | "mediapipe" | "haar"
+    yolo_tracker: str = ""        # optional Ultralytics tracker: bytetrack|botsort
     has_asd: bool = False        # LR-ASD active-speaker detection wired in
     vram_mb: int = 0        # total VRAM of the first GPU (MB)
     auto_model: bool = True  # whisper model was auto-selected for this hardware
@@ -521,6 +530,9 @@ class Settings:
                 item("reframe_engine", True,
                      f"Reframe backend: {self.reframe_engine}",
                      "yolo (best) > mediapipe > haar/YuNet (always available)."),
+                item("yolo_tracker", bool(self.yolo_tracker),
+                     f"YOLO tracker: {self.yolo_tracker or 'predict'}",
+                     "Optional ByteTrack/BoT-SORT temporal tracking for YOLO subject reframe."),
                 item("asd", self.has_asd,
                      "LR-ASD active speaker",
                      "Ties transcript words to the on-screen speaker for multi-person content."),
@@ -681,6 +693,7 @@ class Settings:
             "panns_audio": self.has_audio_events,
             "clap_audio": self.has_clap,
             "reframe_engine": self.reframe_engine,
+            "yolo_tracker": self.yolo_tracker or False,
             "active_speaker": self.has_asd,
             "face_tracking": self.has_opencv,
             "url_import": self.has_ytdlp,
@@ -749,6 +762,7 @@ def get_settings() -> Settings:
         has_audio_events=_has_module("panns_inference"),
         has_clap=_has_module("laion_clap"),
         reframe_engine=_detect_reframe_engine(),
+        yolo_tracker=_yolo_tracker_mode(),
         has_asd=_detect_asd_adapter(),
         has_cuda=has_cuda,
         has_nvenc=has_nvenc,

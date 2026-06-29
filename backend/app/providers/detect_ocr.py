@@ -42,6 +42,59 @@ class OcrEvent:
     confidence: float  # 0..1
 
 
+_REPORT_READ_LIMIT = 80
+
+
+def init_report(report: dict | None, *, enabled: bool, engine: str = "",
+                status: str = "skipped") -> None:
+    """Reset a mutable OCR report dict to the shape persisted on Project."""
+    if report is None:
+        return
+    report.clear()
+    report.update({
+        "enabled": bool(enabled),
+        "engine": engine or "",
+        "status": status,
+        "frames_sampled": 0,
+        "crops_read": 0,
+        "cache_hits": 0,
+        "texts_found": 0,
+        "matches": 0,
+        "warnings": [],
+        "reads": [],
+    })
+
+
+def add_report_warning(report: dict | None, message: str) -> None:
+    if report is None:
+        return
+    warnings = report.setdefault("warnings", [])
+    if message not in warnings:
+        warnings.append(message)
+
+
+def _report_inc(report: dict | None, key: str, amount: int = 1) -> None:
+    if report is not None:
+        report[key] = int(report.get(key, 0)) + amount
+
+
+def _report_read(report: dict | None, *, t: float, roi: str, text: str,
+                 confidence: float, matched: list[str]) -> None:
+    if report is None or not text:
+        return
+    _report_inc(report, "texts_found")
+    reads = report.setdefault("reads", [])
+    if len(reads) >= _REPORT_READ_LIMIT:
+        return
+    reads.append({
+        "t": round(float(t), 3),
+        "roi": str(roi),
+        "text": " ".join(str(text).split())[:240],
+        "confidence": round(float(confidence), 4),
+        "matched": matched[:8],
+    })
+
+
 # Viral on-screen markers. Keys are canonical labels; values are the phrases
 # (lowercased, whole-ish) that, found in OCR text, mean that event. Matched as
 # normalized substrings, so "you have been eliminated" still hits "eliminated".
@@ -107,13 +160,36 @@ _ALIAS = {"auto": "generic", "cs": "cs2", "fifa": "eafc"}
 
 _NORM_RE = re.compile(r"[^a-z0-9 ]+")
 _WS_RE = re.compile(r"\s+")
+_OCR_CONFUSIONS = str.maketrans({
+    "0": "o",
+    "1": "i",
+    "3": "e",
+    "4": "a",
+    "5": "s",
+    "7": "t",
+    "8": "b",
+})
+
+
+def _repair_ocr_token(token: str) -> str:
+    """Repair common OCR glyph confusions inside mostly-word tokens.
+
+    Keep compact game markers like ``1v5`` intact; those are meaningful digits.
+    But repair banner text such as ``V1CT0RY``/``HEADSH0T`` so exact matching
+    still works when rapidfuzz is not installed.
+    """
+    alpha = sum(1 for ch in token if ch.isalpha())
+    if alpha >= 2 and any(ch.isdigit() for ch in token):
+        return token.translate(_OCR_CONFUSIONS)
+    return token
 
 
 def _norm(text: str) -> str:
     """Lowercase and collapse to alphanumerics + single spaces for matching."""
     folded = unicodedata.normalize("NFKD", text or "")
     folded = folded.encode("ascii", "ignore").decode("ascii")
-    return _WS_RE.sub(" ", _NORM_RE.sub(" ", folded.lower())).strip()
+    norm = _WS_RE.sub(" ", _NORM_RE.sub(" ", folded.lower())).strip()
+    return " ".join(_repair_ocr_token(tok) for tok in norm.split())
 
 
 def lexicon(profile: str | None) -> dict[str, tuple[str, ...]]:
@@ -619,7 +695,7 @@ def _ocr_batch(paths: list[str], engine: str, lang: str = "en") -> list[tuple[st
         # APIs are less stable across versions; sequential is correct everywhere).
     except Exception as e:
         log.debug("ocr batch failed (%s); sequential", e)
-    return [_ocr_image_conf(p, engine) for p in paths]
+    return [_ocr_image_conf(p, engine, lang) for p in paths]
 
 
 def _easyocr_text(reader, path: str) -> str:
@@ -786,19 +862,32 @@ def _manual_matches(text: str, cues: list[str] | tuple[str, ...] | None
     out: list[tuple[str, str]] = []
     for cue in cues or ():
         p = _norm(cue)
-        if p and f" {p} " in padded:
+        exact = bool(p and f" {p} " in padded)
+        if not exact and p:
+            exact = _fuzzy_contains(p, norm.split(), threshold=86)
+        if exact:
             out.append(("manual_visual", p))
     return out
 
 
 def find_text_events(src_path: str, info: MediaInfo,
                      settings, *, every: float = 2.0,
-                     focus_times: list[float] | None = None) -> list[OcrEvent]:
+                     focus_times: list[float] | None = None,
+                     report: dict | None = None) -> list[OcrEvent]:
     """Sample frames and return viral on-screen-text events. [] if OCR is off
     or the source has no video."""
     s = get_settings()
+    engine = s.ocr_engine
     if not s.has_ocr or not info.has_video or info.duration <= 0:
+        init_report(
+            report,
+            enabled=bool(getattr(settings, "use_ocr", True) and info.has_video),
+            engine=engine,
+            status="unavailable" if not s.has_ocr else "skipped",
+        )
         return []
+    init_report(report, enabled=bool(getattr(settings, "use_ocr", True)),
+                engine=engine, status="running")
     cfg = getattr(settings, "game_config", None)
     scene_times = scene_frame_times(src_path, info.duration)
     # Adaptive frame sampling (#1): when scene cuts are abundant, we sample
@@ -810,9 +899,10 @@ def find_text_events(src_path: str, info: MediaInfo,
     times = focused_frame_times(info.duration, focused or None,
                                 every=adaptive_every)
     if not times:
+        if report is not None:
+            report["status"] = "ran"
         return []
     lang = getattr(settings, "language", "en") or "en"
-    engine = s.ocr_engine
     profile = getattr(settings, "game_profile", "generic")
     extra_regions = getattr(cfg, "visual_rois", []) if cfg is not None else []
     manual_cues = getattr(cfg, "visual_text_cues", []) if cfg is not None else []
@@ -837,7 +927,9 @@ def find_text_events(src_path: str, info: MediaInfo,
                 except Exception as e:
                     log.warning("ocr frame grab failed at %.1fs: %s", t, e)
                     continue
+                _report_inc(report, "frames_sampled")
                 roi_texts = []
+                pending_reads: list[tuple[str, Path, str | None, int]] = []
                 for roi, img in _ocr_frame_images(
                         frame, tmpd, i, profile, extra_regions=extra_regions):
                     # ROI lifetime check: skip ROIs that have been empty for
@@ -849,9 +941,21 @@ def find_text_events(src_path: str, info: MediaInfo,
                     h = _crop_hash(str(img))
                     cached = prev_crops.get(roi)
                     if cached and _hashes_match(h, cached[0]):
+                        _report_inc(report, "cache_hits")
                         text, rconf = cached[1], cached[2]
+                        # Update ROI lifetime: if empty, increment the dead counter.
+                        if text:
+                            roi_life[roi] = 0
+                            roi_texts.append((roi, text, rconf))
+                        else:
+                            roi_life[roi] = dead + 1
                     else:
-                        text, rconf = _ocr_image_conf(str(img), engine, lang)
+                        pending_reads.append((roi, img, h, dead))
+                if pending_reads:
+                    _report_inc(report, "crops_read", len(pending_reads))
+                    reads = _ocr_batch([str(img) for _roi, img, _h, _dead in pending_reads],
+                                       engine, lang)
+                    for (roi, img, h, dead), (text, rconf) in zip(pending_reads, reads):
                         # Garbled-text rejection (#5): if OCR returned garbage
                         # (gunfire noise), drop it before it becomes a match.
                         if _is_garbled(text):
@@ -861,16 +965,17 @@ def find_text_events(src_path: str, info: MediaInfo,
                         # and this ROI came back empty or very low confidence, retry
                         # with EasyOCR.
                         if (not text or rconf < 0.5) and engine == "paddleocr" and _easyocr_available():
+                            _report_inc(report, "crops_read")
                             etext, econf = _ocr_image_conf(str(img), "easyocr", lang)
                             if len(etext) > len(text) or econf > rconf:
                                 text, rconf = etext, econf
                         prev_crops[roi] = (h, text, rconf)
-                    # Update ROI lifetime: if empty, increment the dead counter.
-                    if text:
-                        roi_life[roi] = 0
-                        roi_texts.append((roi, text, rconf))
-                    else:
-                        roi_life[roi] = dead + 1
+                        # Update ROI lifetime: if empty, increment the dead counter.
+                        if text:
+                            roi_life[roi] = 0
+                            roi_texts.append((roi, text, rconf))
+                        else:
+                            roi_life[roi] = dead + 1
                 for roi, text, rconf in roi_texts:
                     # Prefer the engine's real recognition confidence; fall back
                     # to a ROI prior only when the backend doesn't report one
@@ -882,6 +987,10 @@ def find_text_events(src_path: str, info: MediaInfo,
                         conf = 0.9 if roi != "full" else 0.8
                     matches = match_keywords(text, profile)
                     matches.extend(_manual_matches(text, manual_cues))
+                    matched_labels = [f"{label}:{matched}" for label, matched in matches]
+                    _report_inc(report, "matches", len(matches))
+                    _report_read(report, t=t, roi=roi, text=text,
+                                 confidence=conf, matched=matched_labels)
                     for label, matched in matches:
                         events.append(OcrEvent(t=round(t, 3), label=label,
                                                text=_ocr_evidence(matched, text),
@@ -890,7 +999,13 @@ def find_text_events(src_path: str, info: MediaInfo,
         # Re-raise so the caller (_find_ocr_events) records a UI warning instead
         # of silently degrading to zero on-screen events.
         log.warning("ocr detection aborted: %s", e)
+        if report is not None:
+            report["status"] = "failed"
+            add_report_warning(report, "OCR scan crashed before it completed.")
         raise
     events = dedupe_events(events)
+    if report is not None:
+        report["status"] = "ran"
+        report["matches"] = len(events)
     log.info("ocr: %d on-screen events via %s", len(events), engine)
     return events

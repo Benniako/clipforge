@@ -63,8 +63,10 @@ ingest → transcribe → detect → score → caption → render
   auto-enriched (`audio_events.enrich_prompts`) per the finding that prompt
   phrasing swings CLAP accuracy ~20%.
 - **OCR** — PaddleOCR → EasyOCR → Tesseract cascade for in-game HUD text (kill
-  banners, scorelines, "VICTORY" splashes). Low-confidence PaddleOCR frames are
-  retried with EasyOCR (noisy VODs). Learned cues persist per game profile.
+  banners, scorelines, "VICTORY" splashes). Crops are batched per sampled frame,
+  repeated static crops are cached, low-confidence PaddleOCR frames are retried
+  with EasyOCR, and OCR-miss diagnostics point users to Cue Lab tuning. Learned
+  cues persist per game profile. See [OCR_CUES.md](OCR_CUES.md).
 - **Active-speaker attribution** — optional LR-ASD ties transcript words to the
   on-screen speaker for multi-person content.
 - **Facecam detection** — YuNet/OpenCV; stable-face clustering finds a static

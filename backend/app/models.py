@@ -87,6 +87,9 @@ class Transcript(BaseModel):
     language: str = "de"
     speakers: int = 1
     provider: str = "synthetic"
+    # Absolute source-time speech spans from VAD when available. These let
+    # captions clear on real voice activity even if ASR word boxes are loose.
+    speech: list[list[float]] = Field(default_factory=list)
 
     def text(self) -> str:
         return " ".join(w.text for w in self.words)
@@ -115,6 +118,9 @@ class CaptionWord(BaseModel):
 class CaptionSet(BaseModel):
     id: str = Field(default_factory=lambda: _id("cap"))
     words: list[CaptionWord] = Field(default_factory=list)
+    # Clip-relative speech spans, copied from Transcript.speech for this clip.
+    # Renderers use these only to shorten overlong caption display.
+    speech: list[list[float]] = Field(default_factory=list)
     style_id: str = "bold-pop"
     # Words per on-screen line — keeps lines phone-readable. libass wraps any
     # line that is still too wide for the safe area (WrapStyle 0).
@@ -145,6 +151,34 @@ class DetectedEvent(BaseModel):
     label: str                  # canonical event name, e.g. "kill", "victory"
     detail: str = ""            # raw text / cue file matched
     confidence: float = 0.0     # 0..1
+
+
+class OcrRead(BaseModel):
+    """One non-empty OCR observation retained for scan debugging."""
+    t: float
+    roi: str
+    text: str = ""
+    confidence: float = 0.0
+    matched: list[str] = Field(default_factory=list)
+
+
+class OcrReport(BaseModel):
+    """Bounded OCR scan telemetry surfaced in the UI.
+
+    Detector candidates can be discarded later when clips are scored. This report
+    keeps enough raw evidence to explain why a configured visual cue did or did
+    not fire without storing every crop from long videos.
+    """
+    enabled: bool = False
+    engine: str = ""
+    status: str = "skipped"     # "skipped" | "unavailable" | "ran" | "failed"
+    frames_sampled: int = 0
+    crops_read: int = 0
+    cache_hits: int = 0
+    texts_found: int = 0
+    matches: int = 0
+    warnings: list[str] = Field(default_factory=list)
+    reads: list[OcrRead] = Field(default_factory=list)
 
 
 # --------------------------------------------------------------------------- #
@@ -438,6 +472,7 @@ class Project(BaseModel):
     # Accepted audio-cue/OCR/audio events tied to final clips, sorted by time.
     # Raw detector candidates stay internal so the UI does not overstate proof.
     events: list[DetectedEvent] = Field(default_factory=list)
+    ocr_report: OcrReport = Field(default_factory=OcrReport)
     warnings: list[Notice] = Field(default_factory=list)  # non-fatal issues for the UI
     error: str | None = None
     created_at: float = Field(default_factory=now)

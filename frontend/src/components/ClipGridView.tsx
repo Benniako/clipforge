@@ -19,6 +19,7 @@ interface Learning {
 }
 
 type Sort = "score" | "timeline" | "duration";
+type ScanTab = "events" | "ocr" | "visual";
 type ProjectClip = Project["clips"][number];
 
 const POWER_LABELS: Record<string, string> = {
@@ -32,6 +33,85 @@ const SORT_LABELS: Record<Sort, string> = {
   timeline: "Timeline",
   duration: "Dauer",
 };
+
+const OCR_STATUS_LABELS: Record<string, string> = {
+  skipped: "Uebersprungen",
+  unavailable: "Nicht installiert",
+  running: "Laeuft",
+  ran: "Fertig",
+  failed: "Fehler",
+};
+
+function OcrReportPanel({
+  report,
+  useOcr,
+}: {
+  report?: Project["ocr_report"];
+  useOcr: boolean;
+}) {
+  const reads = report?.reads ?? [];
+  const stats = [
+    { label: "Status", value: OCR_STATUS_LABELS[report?.status || "skipped"] || report?.status || "Uebersprungen" },
+    { label: "Engine", value: report?.engine || "-" },
+    { label: "Frames", value: String(report?.frames_sampled ?? 0) },
+    { label: "OCR-Crops", value: String(report?.crops_read ?? 0) },
+    { label: "Cache-Hits", value: String(report?.cache_hits ?? 0) },
+    { label: "Texte", value: String(report?.texts_found ?? 0) },
+    { label: "Matches", value: String(report?.matches ?? 0) },
+  ];
+
+  return (
+    <div className="ocr-report">
+      <div className="ocr-report-grid">
+        {stats.map((s) => (
+          <div className="ocr-stat" key={s.label}>
+            <span>{s.label}</span>
+            <b>{s.value}</b>
+          </div>
+        ))}
+      </div>
+
+      {report?.warnings?.length ? (
+        <div className="ocr-warning-list">
+          {report.warnings.map((w, i) => (
+            <div key={i} className="ocr-warning">{w}</div>
+          ))}
+        </div>
+      ) : null}
+
+      <div className="ocr-read-head">
+        <span className="muted tiny">
+          Rohlesungen ({reads.length}) - auch Texte ohne Keyword-Match
+        </span>
+        {!useOcr && <span className="pill">OCR aus</span>}
+      </div>
+
+      <div className="ocr-read-list">
+        {reads.slice(0, 60).map((r, i) => (
+          <div key={`${r.t}-${r.roi}-${i}`} className="ocr-read-row">
+            <div className="ocr-read-meta">
+              <b>{fmtClock(r.t)}</b>
+              <span>{r.roi}</span>
+              <span>{Math.round((r.confidence || 0) * 100)}%</span>
+            </div>
+            <div className="ocr-read-text">{r.text || "-"}</div>
+            <div className="ocr-read-match">
+              {r.matched?.length ? r.matched.join(", ") : "kein Match"}
+            </div>
+          </div>
+        ))}
+        {reads.length > 60 && (
+          <span className="muted tiny">+{reads.length - 60} weitere Rohlesungen</span>
+        )}
+        {!reads.length && (
+          <span className="muted tiny">
+            Keine OCR-Rohdaten gespeichert. Status und Warnungen oben zeigen, ob OCR lief.
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
 
 export default function ClipGridView({
   project,
@@ -49,7 +129,7 @@ export default function ClipGridView({
   const [rerenderingSelected, setRerenderingSelected] = useState(false);
   const [montageErr, setMontageErr] = useState<string | null>(null);
   const [showCues, setShowCues] = useState(false);
-  const [scanTab, setScanTab] = useState<"events" | "visual">("events");
+  const [scanTab, setScanTab] = useState<ScanTab>("events");
   const [selectedPreviewMode, setSelectedPreviewMode] = useState<"rendered" | "original">("rendered");
   const [renderDraft, setRenderDraft] = useState({
     power_mode: project.settings.power_mode,
@@ -352,6 +432,9 @@ export default function ClipGridView({
                 <button className={scanTab === "events" ? "on" : ""} onClick={() => setScanTab("events")}>
                   Ereignisse
                 </button>
+                <button className={scanTab === "ocr" ? "on" : ""} onClick={() => setScanTab("ocr")}>
+                  OCR-Bericht
+                </button>
                 <button className={scanTab === "visual" ? "on" : ""} onClick={() => setScanTab("visual")}>
                   Visuelle Kalibrierung
                 </button>
@@ -378,6 +461,8 @@ export default function ClipGridView({
                 )}
               </div>
             </>
+          ) : scanTab === "ocr" ? (
+            <OcrReportPanel report={project.ocr_report} useOcr={project.settings.use_ocr} />
           ) : (
             <VisualCueCalibration project={project} />
           )}

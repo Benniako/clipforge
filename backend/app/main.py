@@ -14,6 +14,7 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
@@ -103,6 +104,19 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    @app.exception_handler(StarletteHTTPException)
+    async def friendly_http_exception(_request, exc: StarletteHTTPException):
+        detail = exc.detail
+        if exc.status_code == 400 and str(detail) == "There was an error parsing the body":
+            detail = (
+                "The upload body could not be parsed. For large local videos, "
+                "refresh ClipForge and try again so the direct uploader is used. "
+                "If it keeps happening, check free disk space and whether the "
+                "browser interrupted the upload."
+            )
+        return JSONResponse({"detail": detail}, status_code=exc.status_code,
+                            headers=getattr(exc, "headers", None))
 
     @app.get("/api/health", tags=["meta"])
     def health() -> dict:

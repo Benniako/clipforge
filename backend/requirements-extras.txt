@@ -30,11 +30,19 @@ modelscope>=1.15
 
 # Content-aware vertical reframe — tracks people/objects through cuts.
 # Default is YOLO11 nano. Opt into YOLO26 with CLIPFORGE_YOLO_MODEL=yolo26n.pt.
+# Optional temporal trackers exposed by Ultralytics:
+#   CLIPFORGE_YOLO_TRACKER=bytetrack   (or botsort)
 ultralytics>=8.4
 
 # Higher-quality transcription: forced word alignment + speaker diarization.
 # Diarization also needs a Hugging Face token (HF_TOKEN).
 whisperx>=3.1
+
+# ASR benchmark candidates. `scripts/benchmark_asr.py` compares installed
+# candidates such as large-v3-turbo, distil-large-v3, whisperX, and NeMo
+# Parakeet TDT 0.6B v3. NeMo is intentionally not installed by default because
+# it is heavy; install `nemo_toolkit[asr]` separately when you want to benchmark
+# Parakeet.
 
 # Audio-event detection (PANNs / CNN14 on AudioSet) — score cheering, laughter,
 # applause, explosions as an explainable virality signal. Zero-shot (no per-game

@@ -67,6 +67,51 @@ def map_to_tight(t_abs: float, segments: list[tuple[float, float]]) -> float:
     return cum
 
 
+def _speech_spans(transcript: Transcript,
+                  speech: list[tuple[float, float]] | list[list[float]] | None
+                  ) -> list[tuple[float, float]]:
+    src = speech if speech is not None else getattr(transcript, "speech", [])
+    out: list[tuple[float, float]] = []
+    for span in src or []:
+        if len(span) < 2:
+            continue
+        a, b = float(span[0]), float(span[1])
+        if b > a:
+            out.append((a, b))
+    return out
+
+
+def _clip_speech(transcript: Transcript, start: float, end: float,
+                 speech: list[tuple[float, float]] | list[list[float]] | None = None
+                 ) -> list[list[float]]:
+    spans = []
+    for a, b in _speech_spans(transcript, speech):
+        ca, cb = max(a, start), min(b, end)
+        if cb > ca:
+            spans.append([round(ca - start, 3), round(cb - start, 3)])
+    return spans
+
+
+def _tight_speech(transcript: Transcript, segments: list[tuple[float, float]],
+                  speech: list[tuple[float, float]] | list[list[float]] | None = None
+                  ) -> list[list[float]]:
+    spans: list[tuple[float, float]] = []
+    for sa, sb in _speech_spans(transcript, speech):
+        for a, b in segments:
+            ca, cb = max(sa, a), min(sb, b)
+            if cb > ca:
+                spans.append((map_to_tight(ca, segments),
+                              map_to_tight(cb, segments)))
+    spans.sort()
+    merged: list[list[float]] = []
+    for a, b in spans:
+        if merged and a <= merged[-1][1] + 0.01:
+            merged[-1][1] = round(max(merged[-1][1], b), 3)
+        else:
+            merged.append([round(a, 3), round(b, 3)])
+    return merged
+
+
 def _speaker_ok(w, speakers: set[int] | None) -> bool:
     """Whether word ``w`` belongs to a speaker the user kept in captions."""
     return speakers is None or (w.speaker or 0) in speakers
@@ -75,7 +120,9 @@ def _speaker_ok(w, speakers: set[int] | None) -> bool:
 def build_tight_caption_set(transcript: Transcript,
                             segments: list[tuple[float, float]],
                             style_id: str,
-                            speakers: set[int] | None = None) -> CaptionSet:
+                            speakers: set[int] | None = None,
+                            speech: list[tuple[float, float]] | list[list[float]] | None = None
+                            ) -> CaptionSet:
     """Caption set retimed onto the tightened timeline. ``speakers`` (a set of
     diarized speaker ids) keeps only those speakers' words; None keeps all."""
     words: list[CaptionWord] = []
@@ -96,14 +143,17 @@ def build_tight_caption_set(transcript: Transcript,
             d = max(min(w.end, b) - max(w.t, a), 0.04)
             words.append(CaptionWord(t=round(rel, 3), d=round(d, 3), text=text,
                                      speaker=w.speaker))
-    return CaptionSet(words=words, style_id=style_id,
+    return CaptionSet(words=words, speech=_tight_speech(transcript, segments, speech),
+                      style_id=style_id,
                       lang=(transcript.language or "en")[:2])
 
 
 def build_caption_set(transcript: Transcript, start: float, end: float,
                       style_id: str,
                       exclude: list[tuple[float, float]] | None = None,
-                      speakers: set[int] | None = None) -> CaptionSet:
+                      speakers: set[int] | None = None,
+                      speech: list[tuple[float, float]] | list[list[float]] | None = None
+                      ) -> CaptionSet:
     """``exclude`` lists absolute source-time spans whose words are dropped —
     used to keep in-game announcer lines (matched audio cues) out of the
     captions: ASR transcribes "Double Kill!" too, but the streamer didn't say it.
@@ -127,7 +177,8 @@ def build_caption_set(transcript: Transcript, start: float, end: float,
         d = max(wend - rel, 0.04)
         words.append(CaptionWord(t=round(rel, 3), d=round(d, 3), text=text,
                                  speaker=w.speaker))
-    return CaptionSet(words=words, style_id=style_id,
+    return CaptionSet(words=words, speech=_clip_speech(transcript, start, end, speech),
+                      style_id=style_id,
                       lang=(transcript.language or "en")[:2])
 
 

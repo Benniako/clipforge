@@ -30,6 +30,27 @@ export interface DetectedEvent {
   confidence: number;
 }
 
+export interface OcrRead {
+  t: number;
+  roi: string;
+  text: string;
+  confidence: number;
+  matched: string[];
+}
+
+export interface OcrReport {
+  enabled: boolean;
+  engine: string;
+  status: "skipped" | "unavailable" | "running" | "ran" | "failed" | string;
+  frames_sampled: number;
+  crops_read: number;
+  cache_hits: number;
+  texts_found: number;
+  matches: number;
+  warnings: string[];
+  reads: OcrRead[];
+}
+
 export interface Notice {
   message: string;
   severity: "info" | "warn" | "error" | string;
@@ -39,6 +60,7 @@ export interface Notice {
 export interface CaptionSet {
   id: string;
   words: CaptionWord[];
+  speech: number[][];
   style_id: string;
   max_words_per_line: number;
   // Spoken language ("en"/"de"); drives the lexicon for keyword emphasis + emoji.
@@ -198,13 +220,14 @@ export interface Project {
   status: ProjectStatus;
   settings: ImportSettings;
   source: SourceMedia | null;
-  transcript: { provider: string; language: string; words: unknown[]; speakers: number } | null;
+  transcript: { provider: string; language: string; words: unknown[]; speech?: number[][]; speakers: number } | null;
   clips: Clip[];
   montages: Montage[];
   progress: JobProgress;
   content_type: string | null;
   facecam: Rect | null;
   events: DetectedEvent[];
+  ocr_report: OcrReport;
   warnings: Notice[];
   error: string | null;
   created_at: number;

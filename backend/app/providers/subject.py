@@ -20,6 +20,12 @@ log = logging.getLogger("clipforge.subject")
 
 _YOLO_MODEL = os.environ.get("CLIPFORGE_YOLO_MODEL", "yolo11n.pt")
 _yolo = None  # cached ultralytics model, or False
+_TRACKER_ALIASES = {
+    "bytetrack": "bytetrack.yaml",
+    "byte": "bytetrack.yaml",
+    "botsort": "botsort.yaml",
+    "bot-sort": "botsort.yaml",
+}
 
 
 def _load_yolo():
@@ -49,6 +55,30 @@ def _center_from_boxes(boxes, frame_w: int) -> float | None:
     return max(0.0, min(1.0, ((x0 + x1) / 2) / frame_w))
 
 
+def tracker_yaml() -> str | None:
+    """Optional Ultralytics tracker config for subject reframe.
+
+    ``CLIPFORGE_YOLO_TRACKER=bytetrack`` or ``botsort`` lets users opt into the
+    proven trackers exposed by Ultralytics. Empty/``off`` keeps the cheaper
+    stateless detection path.
+    """
+    raw = os.environ.get("CLIPFORGE_YOLO_TRACKER", "").strip().lower()
+    if raw in ("", "0", "false", "off", "none", "predict"):
+        return None
+    return _TRACKER_ALIASES.get(raw, raw if raw.endswith(".yaml") else None)
+
+
+def _yolo_result(model, img):
+    tracker = tracker_yaml()
+    if tracker:
+        try:
+            return model.track(img, verbose=False, conf=0.35, persist=True,
+                               tracker=tracker)[0]
+        except Exception as e:
+            log.warning("YOLO tracker %s failed (%s); using predict", tracker, e)
+    return model.predict(img, verbose=False, conf=0.35)[0]
+
+
 def subject_center(img) -> float | None:
     """Horizontal centre (0..1) of the dominant subject in a BGR frame, or None."""
     if get_settings().reframe_engine != "yolo":
@@ -57,8 +87,8 @@ def subject_center(img) -> float | None:
     if model is None:
         return None
     try:
-        h, w = img.shape[:2]
-        res = model.predict(img, verbose=False, conf=0.35)[0]
+        _, w = img.shape[:2]
+        res = _yolo_result(model, img)
         boxes = []
         for b in res.boxes:
             x0, y0, x1, y1 = (float(v) for v in b.xyxy[0])

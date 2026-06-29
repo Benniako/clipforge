@@ -6,6 +6,10 @@ Rocket League goal explosion, a horror jump-scare sting) by matching a short
 yours and no API needed. When no cue is present it falls back to the generic
 audio-energy detector, so this is purely additive.
 
+For visual/on-screen cues such as kill feeds, scoreboards, `VICTORY`, or `GOAL`,
+see [OCR visual cues](OCR_CUES.md). OCR hits can also learn reusable audio cues
+automatically, so the two systems reinforce each other.
+
 ## Easiest: add cues in the app (no command line)
 On the import screen, pick a **Game profile** and a **"Pinpoint cues"** panel
 appears listing that game's events. For each one, **paste a sound URL**

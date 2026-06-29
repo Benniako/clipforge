@@ -160,6 +160,7 @@ runs from a **single process on http://localhost:8000** — no second terminal.
 | `CLIPFORGE_CODEC` | `h264` | `av1` opts into av1_nvenc (RTX 40/50 series) — better quality per bitrate. |
 | `CLIPFORGE_WHISPER_BATCH` | `8` | Batched-inference batch size for faster-whisper on GPU (keeps the card saturated). |
 | `CLIPFORGE_YOLO_MODEL` | `yolo11n.pt` | YOLO subject-tracking model. Set `yolo26n.pt` to opt into YOLO26 when `ultralytics>=8.4` is installed. |
+| `CLIPFORGE_YOLO_TRACKER` | `off` | Optional Ultralytics temporal tracker for YOLO reframe: `bytetrack` or `botsort`. |
 | `CLIPFORGE_ASD_DIR` | – | Path to an [LR-ASD](https://github.com/Junhua-Liao/LR-ASD) checkout to enable active-speaker attribution. |
 | `CLIPFORGE_WATCH_DIR` | – | Watch folder path. New videos dropped here are auto-imported and processed. |
 | `CLIPFORGE_DATA_DIR` | `backend/data` | Where the DB + media live. |
@@ -180,6 +181,15 @@ when accuracy matters more than speed. The default auto/turbo path stays faster
 for everyday batches, but `large-v3` is the better quality choice for dense
 German speech.
 
+To compare local ASR alternatives before changing defaults, run:
+
+```bash
+python scripts/benchmark_asr.py path/to/audio.wav --language de --device cuda
+```
+
+It benchmarks installed candidates such as `large-v3-turbo`, `distil-large-v3`,
+whisperX, and NeMo/Parakeet TDT 0.6B v3 when available.
+
 Default spoken language is **German** (English/auto selectable per project).
 Game events can be pinpointed by matching reference **audio cues** — see
 [docs/GAME_CUES.md](docs/GAME_CUES.md) — including a **Common (all games)** cue
@@ -189,6 +199,8 @@ model when running (otherwise heuristic titles/scores). **On-screen text
 detection (OCR)** is optional and auto-detected — install any one of
 `pip install paddleocr` (most accurate), `easyocr`, or `pytesseract` (+ the
 Tesseract binary); with none installed, the audio/cue path still finds highlights.
+See [docs/OCR_CUES.md](docs/OCR_CUES.md) for visual cue setup, Cue Lab tuning,
+and miss diagnostics.
 
 **Transcription engines (auto-selected, with fallback):** whisperX → faster-whisper
 → synthetic. Install the optional, higher-quality engine with `pip install whisperx`
@@ -213,8 +225,9 @@ pip install -r backend/requirements-extras.txt
 | **PANNs audio events** | Hears the *sounds* that signal a highlight — **cheering, laughter, applause, explosions** — as an explainable, zero-shot virality factor (no per-game cue needed). | `panns-inference` |
 | **Demucs clean voice** | Isolates the **voice** from background music / game audio so speech and captions sound studio-clean. Opt-in per project (*Clean voice*). | `demucs` |
 | **VLM vision read** | A local **vision-language second opinion** on virality from a clip's keyframes (expression, action, framing) — bounded & explainable, like the text re-rank. | `ollama pull qwen2.5vl` |
-| **OCR** | On-screen game text (kill banners, scorelines, VICTORY) → highlights, and **learns reusable audio cues** from them. | `easyocr` / `paddleocr` |
+| **OCR** | On-screen game text (kill banners, scorelines, VICTORY) → highlights, and **learns reusable audio cues** from them. | `paddleocr` / `easyocr` + [OCR guide](docs/OCR_CUES.md) |
 | **YOLO reframe** | Content-aware 9:16 — tracks people/objects through cuts when no face is visible. | `ultralytics` |
+| **YOLO temporal tracker** | Optional ByteTrack/BoT-SORT subject tracking through Ultralytics. | `CLIPFORGE_YOLO_TRACKER=bytetrack` |
 | **LR-ASD** | Active-speaker detection: crop & captions follow the *real* talker in multi-person shots. | clone [LR-ASD](https://github.com/Junhua-Liao/LR-ASD), set `CLIPFORGE_ASD_DIR` |
 | **whisperX** | Forced word alignment + speaker diarization. | `whisperx` (+ `HF_TOKEN`) |
 

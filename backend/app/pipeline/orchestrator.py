@@ -21,8 +21,8 @@ from ..config import get_settings
 from ..media import ffmpeg
 from ..media.ffmpeg import MediaInfo
 from ..models import (ASPECTS, Clip, ClipStatus, ContentType, JobProgress,
-                      LayoutType, ProjectStatus, Reframe, ReframeKeyframe,
-                      now)
+                      LayoutType, OcrReport, ProjectStatus, Reframe,
+                      ReframeKeyframe, now)
 from ..providers import detect as detect_mod
 from ..providers import detect_gameplay as gameplay_mod
 from ..providers import hashtags as hashtags_mod
@@ -130,13 +130,25 @@ def _speech_intervals(transcript, start: float, end: float
     """
     if transcript is None or transcript.provider == "synthetic":
         return None
-    segs = captionize.compute_tight_segments(transcript, start, end)
-    return [(a - start, b - start) for a, b in segs]
+    segs = _full_speech_segments(transcript)
+    if segs is None:
+        return None
+    dur = max(end - start, 0.0)
+    clipped = []
+    for a, b in segs:
+        ca, cb = max(a, start), min(b, end)
+        if cb > ca:
+            clipped.append((ca, cb))
+    if not clipped:
+        return [(0.0, dur)]
+    saved = dur - sum(b - a for a, b in clipped)
+    if len(clipped) < 2 or saved < captionize.MIN_SAVING:
+        return [(0.0, dur)]
+    return [(a - start, b - start) for a, b in clipped]
 
 
-# Cache for pre-computed full-timeline speech intervals.
-_full_speech_intervals: list[tuple[float, float]] | None = None
-_full_speech_transcript_id: int = 0
+_SPEECH_INTERVAL_CACHE_MAX = 16
+_speech_interval_cache: dict[int, tuple[object, list[tuple[float, float]] | None]] = {}
 
 
 def _precompute_speech_intervals(transcript) -> None:
@@ -146,18 +158,59 @@ def _precompute_speech_intervals(transcript) -> None:
     intervals (subtract clip start), but the full-timeline scan of the
     transcript is done here once instead of per-clip.
     """
-    global _full_speech_intervals, _full_speech_transcript_id
+    _full_speech_segments(transcript)
+
+
+def _full_speech_segments(transcript) -> list[tuple[float, float]] | None:
     if transcript is None or transcript.provider == "synthetic":
-        _full_speech_intervals = None
-        return
-    # Cheap identity check — skip if already computed for this transcript.
+        return None
     tid = id(transcript)
-    if tid == _full_speech_transcript_id and _full_speech_intervals is not None:
-        return
-    _full_speech_transcript_id = tid
-    _full_speech_intervals = transcript.words  # store words list for filtering
-    log.debug("pre-computed speech intervals for transcript (%d words)",
-              len(transcript.words))
+    cached = _speech_interval_cache.get(tid)
+    if cached is not None and cached[0] is transcript:
+        return cached[1]
+    intervals = _build_full_speech_segments(transcript)
+    _speech_interval_cache[tid] = (transcript, intervals)
+    while len(_speech_interval_cache) > _SPEECH_INTERVAL_CACHE_MAX:
+        old = next(iter(_speech_interval_cache))
+        if old == tid and len(_speech_interval_cache) == 1:
+            break
+        _speech_interval_cache.pop(old, None)
+    if intervals is not None:
+        log.debug("pre-computed %d speech interval(s) for transcript (%d words)",
+                  len(intervals), len(transcript.words))
+    return intervals
+
+
+def _build_full_speech_segments(transcript) -> list[tuple[float, float]] | None:
+    vad_spans: list[tuple[float, float]] = []
+    for span in getattr(transcript, "speech", []) or []:
+        if len(span) < 2:
+            continue
+        a, b = float(span[0]), float(span[1])
+        if b > a:
+            vad_spans.append((a, b))
+    if vad_spans:
+        return sorted(vad_spans)
+
+    words = sorted((w for w in transcript.words if w.end > w.t), key=lambda w: w.t)
+    if not words:
+        return None
+    segs: list[list[float]] = []
+    for w in words:
+        ws, we = w.t, w.end
+        if segs and ws - segs[-1][1] <= captionize.MAX_GAP:
+            segs[-1][1] = max(segs[-1][1], we)
+        else:
+            segs.append([ws, we])
+    padded = [(max(0.0, a - captionize.EDGE_PAD), b + captionize.EDGE_PAD)
+              for a, b in segs]
+    merged: list[tuple[float, float]] = []
+    for a, b in padded:
+        if merged and a <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], b))
+        else:
+            merged.append((a, b))
+    return merged
 
 
 def _score_visual_reads(src_path: str, clips: list[Clip], *,
@@ -473,6 +526,8 @@ class Engine:
                 from ..providers import vad as vad_mod
                 speech = vad_mod.speech_intervals(wav_path)
                 if speech:
+                    transcript.speech = [[round(a, 3), round(b, 3)]
+                                         for a, b in speech if b > a]
                     transcript.words = vad_mod.refine_words(transcript.words, speech)
                 elif not vad_mod.available():
                     vad_absent_warned = True
@@ -540,6 +595,11 @@ class Engine:
 
         # 2. detect + 3. score (branch on content type) -------------------
         plat = project.settings.platform.value
+        ocr_report_data = OcrReport(
+            enabled=bool(project.settings.use_ocr and kind == "gameplay"),
+            engine=getattr(get_settings(), "ocr_engine", ""),
+            status="skipped",
+        ).model_dump()
         if kind == "gameplay":
             self._advance(project_id, 1, "Finding gameplay highlights…")
             prof = project.settings.game_profile
@@ -550,7 +610,8 @@ class Engine:
             gcs = gameplay_mod.detect_gameplay(src_path, info, project.settings,
                                                weights=gweights, wav_path=wav_path,
                                                events_out=detected,
-                                               warnings_out=detect_warnings)
+                                               warnings_out=detect_warnings,
+                                               ocr_report=ocr_report_data)
             if detect_warnings:
                 with store.mutate(project_id) as p:
                     for msg in detect_warnings:
@@ -820,6 +881,7 @@ class Engine:
                 log.debug("b-roll selection skipped: %s", e)
         with store.mutate(project_id) as p:
             p.clips = clips
+            p.ocr_report = OcrReport.model_validate(ocr_report_data)
             if kind == "gameplay":
                 p.events = gameplay_mod.accepted_events_for_clips(detected, clips)
 

@@ -70,10 +70,13 @@ class FaceTracker:
         speaker instead of switching every frame.
         """
         result: dict[tuple[float, float, float, float], int] = {}
+        matched_track_ids: set[int] = set()
 
         for box in detections:
             best_iou, best_tid = 0.0, None
             for tid, track in self._tracks.items():
+                if tid in matched_track_ids:
+                    continue
                 iou = _iou(box, track.box)
                 if iou > best_iou:
                     best_iou, best_tid = iou, tid
@@ -86,21 +89,21 @@ class FaceTracker:
                 track.age += 1
                 track.missed = 0
                 result[box] = track.id
+                matched_track_ids.add(track.id)
             else:
                 # New track
                 tid = self._next_id
                 self._next_id += 1
                 self._tracks[tid] = FaceTrack(tid, box)
                 result[box] = tid
+                matched_track_ids.add(tid)
 
         # Mark unmatched tracks as missed; remove stale ones.
-        tracked_boxes = {tuple(round(v, 4) for v in t.box): t
-                         for t in self._tracks.values()}
-        for box, t in list(tracked_boxes.items()):
-            if box not in result:
+        for tid, t in list(self._tracks.items()):
+            if tid not in matched_track_ids:
                 t.missed += 1
                 if t.missed > self._max_missed:
-                    del self._tracks[t.id]
+                    del self._tracks[tid]
 
         return result
 

@@ -40,22 +40,81 @@ def _ts(t: float) -> str:
 # across a real pause — silence, or a span where another (toggled-off) speaker
 # was talking — holding the word that long leaves a caption frozen on a silent
 # shot. So once the gap past a word exceeds SILENCE_GAP, the caption clears
-# LINGER_PAD after the word instead of lingering. Must be < LINE_GAP, or lines
-# always break before the clamp can fire and captions over-hold into silence.
-SILENCE_GAP = 0.6
-LINGER_PAD = 0.4
+# shortly after the word instead of lingering.
+SILENCE_GAP = 0.45
+LINGER_PAD = 0.22
 # Start a fresh caption line after a pause this long, even mid-count — keeps a
 # line from spanning silence so captions begin/end with the speech.
-LINE_GAP = 0.9
+LINE_GAP = 0.7
+# Whisper-style ASR can occasionally stretch the last word through silence. This
+# is display-only: transcript timing remains untouched, but burned-in captions
+# get a sane upper bound based on rough word readability.
+WORD_DISPLAY_MIN_CAP = 0.65
+WORD_DISPLAY_PER_CHAR = 0.075
+WORD_DISPLAY_MAX_CAP = 1.05
+MIN_EVENT_DUR = 0.08
+SPEECH_END_PAD = 0.06
 
 
-def _group_lines(words, n: int, max_gap: float = LINE_GAP):
+def _raw_word_end(w) -> float:
+    return w.t + max(getattr(w, "d", 0.0), 0.0)
+
+
+def _word_display_cap(w) -> float:
+    token = str(getattr(w, "text", "") or "").strip()
+    return min(WORD_DISPLAY_MAX_CAP,
+               max(WORD_DISPLAY_MIN_CAP, len(token) * WORD_DISPLAY_PER_CHAR))
+
+
+def _speech_end_for_word(w, speech) -> float | None:
+    if not speech:
+        return None
+    ws, we = w.t, _raw_word_end(w)
+    best_end = None
+    best_overlap = 0.0
+    for span in speech:
+        if len(span) < 2:
+            continue
+        a, b = float(span[0]), float(span[1])
+        overlap = min(we, b) - max(ws, a)
+        starts_inside = a <= ws <= b
+        if overlap > best_overlap or (best_end is None and starts_inside):
+            best_overlap = max(overlap, 0.0)
+            best_end = b
+    return best_end
+
+
+def _spoken_end_for_display(line, idx: int, speech=None) -> float:
+    w = line[idx]
+    end = min(_raw_word_end(w), w.t + _word_display_cap(w))
+    speech_end = _speech_end_for_word(w, speech)
+    if speech_end is not None:
+        end = min(end, speech_end + SPEECH_END_PAD)
+    if idx + 1 < len(line):
+        end = min(end, line[idx + 1].t)
+    return end
+
+
+def _event_end_for_display(line, idx: int, speech=None) -> float:
+    w = line[idx]
+    spoken_end = _spoken_end_for_display(line, idx, speech)
+    if idx + 1 < len(line):
+        end = line[idx + 1].t
+        if end - spoken_end > SILENCE_GAP:
+            end = spoken_end + LINGER_PAD
+    else:
+        end = spoken_end
+    return max(end, w.t + MIN_EVENT_DUR)
+
+
+def _group_lines(words, n: int, max_gap: float = LINE_GAP, speech=None):
     """Group words into on-screen lines: a new line every ``n`` words OR after a
     speech pause longer than ``max_gap`` (whichever comes first)."""
     lines: list = []
     cur: list = []
     for w in words:
-        if cur and (len(cur) >= n or (w.t - (cur[-1].t + cur[-1].d)) > max_gap):
+        prev_end = _spoken_end_for_display(cur, len(cur) - 1, speech) if cur else 0.0
+        if cur and (len(cur) >= n or (w.t - prev_end) > max_gap):
             lines.append(cur)
             cur = []
         cur.append(w)
@@ -74,13 +133,14 @@ def _srt_ts(t: float) -> str:
 
 def build_srt(captions: CaptionSet) -> str:
     """Plain .srt sidecar (clip-relative times) for editing in an NLE."""
-    lines = _group_lines(captions.words, captions.max_words_per_line)
+    speech = getattr(captions, "speech", [])
+    lines = _group_lines(captions.words, captions.max_words_per_line, speech=speech)
     out: list[str] = []
     idx = 1
     for line in lines:
         if not line:
             continue
-        start, end = line[0].t, line[-1].t + line[-1].d
+        start, end = line[0].t, _event_end_for_display(line, len(line) - 1, speech)
         text = " ".join(w.text for w in line).strip()
         if not text:
             continue
@@ -124,8 +184,10 @@ Format: Layer, Start, End, Style, MarginL, MarginR, MarginV, Effect, Text
     from .caption_fx import annotate
     words = annotate(captions.words, lang=captions.lang,
                      emphasis=style.emphasis, emoji=style.emoji,
-                     max_words_per_line=captions.max_words_per_line)
-    lines = _group_lines(words, captions.max_words_per_line)
+                     max_words_per_line=captions.max_words_per_line,
+                     line_gap=LINE_GAP)
+    speech = getattr(captions, "speech", [])
+    lines = _group_lines(words, captions.max_words_per_line, speech=speech)
 
     # Speaker-aware caption colours: when more than one speaker is present,
     # give each their own primary colour so a podcast reads as a conversation
@@ -146,22 +208,14 @@ Format: Layer, Start, End, Style, MarginL, MarginR, MarginV, Effect, Text
     for line in lines:
         if not line:
             continue
-        line_end = line[-1].t + line[-1].d
         # The active word's speaker picks this line's primary colour.
         line_primary = speaker_colors.get(
             getattr(line[0], "speaker", 0) or 0, primary)
         for idx, w in enumerate(line):
             start = w.t
-            # Hold until the next word in the line starts; last word holds to its end.
-            end = line[idx + 1].t if idx + 1 < len(line) else max(w.t + w.d, line_end)
-            # Don't let a word freeze on screen through a silence/other-speaker
-            # gap — clear it shortly after it's spoken instead.
-            if end - (w.t + w.d) > SILENCE_GAP:
-                end = w.t + w.d + LINGER_PAD
-            # Unconditional floor: a zero/negative-duration Dialogue (words that
-            # share a timestamp, a near-zero w.d) would be dropped by libass and
-            # the highlight flickers off. Always keep a visible minimum span.
-            end = max(end, start + 0.08)
+            # Hold until the next word starts, unless that would freeze a word
+            # through silence. Also cap suspiciously long ASR word durations.
+            end = _event_end_for_display(line, idx, speech)
             events.append(_dialogue(line, idx, start, end, line_primary, highlight,
                                     style.uppercase))
 

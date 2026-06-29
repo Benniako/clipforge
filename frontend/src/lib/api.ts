@@ -258,51 +258,36 @@ export const api = {
   // Uses XHR so we can report real upload progress for large files.
   createProject: (input: CreateProjectInput) =>
     new Promise<Project>((resolve, reject) => {
-      const fd = new FormData();
-      fd.set("name", input.name ?? "");
-      fd.set("platform", input.platform);
-      fd.set("power_mode", input.power_mode);
-      fd.set("min_len", String(input.min_len));
-      fd.set("max_len", String(input.max_len));
-      fd.set("target_clips", String(input.target_clips));
-      fd.set("style_id", input.style_id);
-      fd.set("language", input.language);
-      fd.set("content_type", input.content_type);
-      fd.set("aspect", input.aspect);
-      fd.set("burn_captions", String(input.burn_captions));
-      fd.set("game_profile", input.game_profile);
-      fd.set("tighten", String(input.tighten));
-      fd.set("denoise", String(input.denoise));
-      fd.set("motion", input.motion);
-      fd.set("ai_boost_emphasis", String(input.ai_boost?.emphasis ?? true));
-      fd.set("ai_boost_emoji", String(input.ai_boost?.emoji ?? true));
-      fd.set("ai_boost_speaker_colors", String(input.ai_boost?.speakerColors ?? true));
-      fd.set("ai_boost_auto_zoom", String(input.ai_boost?.autoZoom ?? true));
-      fd.set("ai_boost_broll", String(input.ai_boost?.broll ?? false));
-      fd.set("ai_boost_hook_check", String(input.ai_boost?.hookCheck ?? true));
-      fd.set("facecam_layout", input.facecam_layout);
-      fd.set("use_ocr", String(input.use_ocr));
-      fd.set("use_vlm", String(input.use_vlm));
-      fd.set("use_cues", String(input.use_cues));
-      fd.set("use_audio_events", String(input.use_audio_events));
-      fd.set("cue_learning", String(input.cue_learning));
-      fd.set("auto_length", String(input.auto_length));
-      if (input.lead_seconds !== null) fd.set("lead_seconds", String(input.lead_seconds));
-      if (input.tail_seconds !== null) fd.set("tail_seconds", String(input.tail_seconds));
-      if (input.game_config) {
-        fd.set("detection_mode", input.game_config.detection_mode);
-        fd.set("visual_rois_json", JSON.stringify(input.game_config.visual_rois ?? []));
-        fd.set("visual_text_cues", (input.game_config.visual_text_cues ?? []).join("\n"));
-        fd.set("reference_audio_files", (input.game_config.reference_audio_files ?? []).join("\n"));
-        fd.set("vlm_visual_prompts", (input.game_config.vlm_visual_prompts ?? []).join("\n"));
-        fd.set("audio_prompts", (input.game_config.audio_prompts ?? []).join("\n"));
-        fd.set("audio_negative_prompts", (input.game_config.audio_negative_prompts ?? []).join("\n"));
-      }
-      if (input.url) fd.set("url", input.url);
-      if (input.file) fd.set("file", input.file);
+      const metadata = {
+        name: input.name ?? "",
+        platform: input.platform,
+        power_mode: input.power_mode,
+        min_len: input.min_len,
+        max_len: input.max_len,
+        target_clips: input.target_clips,
+        style_id: input.style_id,
+        language: input.language,
+        content_type: input.content_type,
+        aspect: input.aspect,
+        burn_captions: input.burn_captions,
+        game_profile: input.game_profile,
+        tighten: input.tighten,
+        denoise: input.denoise,
+        motion: input.motion,
+        ai_boost: input.ai_boost,
+        facecam_layout: input.facecam_layout,
+        use_ocr: input.use_ocr,
+        use_vlm: input.use_vlm,
+        use_cues: input.use_cues,
+        use_audio_events: input.use_audio_events,
+        cue_learning: input.cue_learning,
+        auto_length: input.auto_length,
+        lead_seconds: input.lead_seconds,
+        tail_seconds: input.tail_seconds,
+        game_config: input.game_config,
+      };
 
       const xhr = new XMLHttpRequest();
-      xhr.open("POST", "/api/projects");
       xhr.upload.onprogress = (e) => {
         if (e.lengthComputable && input.onProgress)
           input.onProgress(Math.round((e.loaded / e.total) * 100));
@@ -321,6 +306,61 @@ export const api = {
         }
       };
       xhr.onerror = () => reject(new Error("network error during upload"));
+
+      if (input.file) {
+        const filename = encodeURIComponent(input.file.name || "upload.mp4");
+        const enc = new TextEncoder();
+        const meta = enc.encode(JSON.stringify(metadata));
+        const prefix = enc.encode(`CFMETA ${meta.byteLength}\n`);
+        const body = new Blob([prefix, meta, input.file], { type: "application/octet-stream" });
+        xhr.open("POST", `/api/projects/raw-upload?filename=${filename}`);
+        xhr.setRequestHeader("Content-Type", "application/octet-stream");
+        xhr.send(body);
+        return;
+      }
+
+      const fd = new FormData();
+      fd.set("name", metadata.name);
+      fd.set("platform", metadata.platform);
+      fd.set("power_mode", metadata.power_mode);
+      fd.set("min_len", String(metadata.min_len));
+      fd.set("max_len", String(metadata.max_len));
+      fd.set("target_clips", String(metadata.target_clips));
+      fd.set("style_id", metadata.style_id);
+      fd.set("language", metadata.language);
+      fd.set("content_type", metadata.content_type);
+      fd.set("aspect", metadata.aspect);
+      fd.set("burn_captions", String(metadata.burn_captions));
+      fd.set("game_profile", metadata.game_profile);
+      fd.set("tighten", String(metadata.tighten));
+      fd.set("denoise", String(metadata.denoise));
+      fd.set("motion", metadata.motion);
+      fd.set("ai_boost_emphasis", String(metadata.ai_boost?.emphasis ?? true));
+      fd.set("ai_boost_emoji", String(metadata.ai_boost?.emoji ?? true));
+      fd.set("ai_boost_speaker_colors", String(metadata.ai_boost?.speakerColors ?? true));
+      fd.set("ai_boost_auto_zoom", String(metadata.ai_boost?.autoZoom ?? true));
+      fd.set("ai_boost_broll", String(metadata.ai_boost?.broll ?? false));
+      fd.set("ai_boost_hook_check", String(metadata.ai_boost?.hookCheck ?? true));
+      fd.set("facecam_layout", metadata.facecam_layout);
+      fd.set("use_ocr", String(metadata.use_ocr));
+      fd.set("use_vlm", String(metadata.use_vlm));
+      fd.set("use_cues", String(metadata.use_cues));
+      fd.set("use_audio_events", String(metadata.use_audio_events));
+      fd.set("cue_learning", String(metadata.cue_learning));
+      fd.set("auto_length", String(metadata.auto_length));
+      if (metadata.lead_seconds !== null) fd.set("lead_seconds", String(metadata.lead_seconds));
+      if (metadata.tail_seconds !== null) fd.set("tail_seconds", String(metadata.tail_seconds));
+      if (input.game_config) {
+        fd.set("detection_mode", input.game_config.detection_mode);
+        fd.set("visual_rois_json", JSON.stringify(input.game_config.visual_rois ?? []));
+        fd.set("visual_text_cues", (input.game_config.visual_text_cues ?? []).join("\n"));
+        fd.set("reference_audio_files", (input.game_config.reference_audio_files ?? []).join("\n"));
+        fd.set("vlm_visual_prompts", (input.game_config.vlm_visual_prompts ?? []).join("\n"));
+        fd.set("audio_prompts", (input.game_config.audio_prompts ?? []).join("\n"));
+        fd.set("audio_negative_prompts", (input.game_config.audio_negative_prompts ?? []).join("\n"));
+      }
+      if (input.url) fd.set("url", input.url);
+      xhr.open("POST", "/api/projects");
       xhr.send(fd);
     }),
 
