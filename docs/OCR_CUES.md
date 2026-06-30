@@ -36,6 +36,27 @@ python -m app.main
 Accepted values are `paddleocr`, `easyocr`, `rapidocr`, `surya`, `tesseract`,
 and `off`.
 
+## Benchmark OCR Engines
+
+Use the OCR benchmark before changing defaults or tuning Cue Lab regions:
+
+```powershell
+python scripts/benchmark_ocr.py path\to\crops --profile valorant --language de
+```
+
+Useful modes:
+
+```powershell
+python scripts/benchmark_ocr.py --list
+python scripts/benchmark_ocr.py frame.png --roi killfeed:0.55,0.02,0.35,0.22 --expect "victory"
+python scripts/benchmark_ocr.py frames --saved-regions --profile valorant --json
+python scripts/benchmark_ocr.py crops --engines paddleocr,easyocr,rapidocr
+```
+
+The table reports engine, runtime, confidence, matched cue labels, expected-hit
+status, source image, and raw text/error. `--saved-regions` reuses the saved Cue
+Lab boxes for `common` plus the selected profile.
+
 ## How Detection Works
 
 1. Gameplay detection finds likely event times from audio peaks, reference cues,

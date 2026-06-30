@@ -456,6 +456,67 @@ def test_asr_benchmark_candidate_matrix_is_dependency_safe():
     assert any(c.engine == "nemo-parakeet" and "Parakeet" in c.label for c in cands)
 
 
+def test_ocr_benchmark_candidates_and_roi_parse():
+    from app.providers import ocr_benchmark as OB
+
+    old_has = OB._has_module
+    old_which = OB.shutil.which
+    try:
+        OB._has_module = lambda name: name in {"rapidocr_onnxruntime", "pytesseract"}
+        OB.shutil.which = lambda name: "tesseract.exe" if name == "tesseract" else None
+        cands = OB.candidate_matrix(engines=["rapid", "tesseract", "easyocr"])
+    finally:
+        OB._has_module = old_has
+        OB.shutil.which = old_which
+
+    by_engine = {c.engine: c for c in cands}
+    assert by_engine["rapidocr"].available is True
+    assert by_engine["tesseract"].available is True
+    assert by_engine["easyocr"].available is False
+
+    roi = OB.parse_roi("kill feed:0.55,0.02,0.35,0.22")
+    assert roi.label == "kill_feed"
+    assert roi.x == 0.55 and roi.y == 0.02 and roi.w == 0.35 and roi.h == 0.22
+
+
+def test_ocr_benchmark_run_reports_matches_and_expected_hit():
+    from app.providers import detect_ocr as OCR
+    from app.providers import ocr_benchmark as OB
+
+    old_read = OCR._ocr_image_conf
+    try:
+        OCR._ocr_image_conf = lambda path, engine, lang="en": ("V1CT0RY banner", 0.82)
+        result = OB.run_candidate(
+            OB.OcrCandidate("rapidocr", "RapidOCR", True),
+            OB.OcrBenchSample("crop.png", "frame.png", "full"),
+            profile="generic",
+            expected=["victory"],
+        )
+    finally:
+        OCR._ocr_image_conf = old_read
+
+    assert result.error is None
+    assert result.confidence == 0.82
+    assert result.expected_hit is True
+    assert any(m["label"] == "victory" for m in result.matches)
+
+
+def test_ocr_benchmark_iter_image_paths_expands_directories():
+    from app.providers import ocr_benchmark as OB
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        (root / "a.png").write_text("x")
+        (root / "b.txt").write_text("x")
+        sub = root / "sub"
+        sub.mkdir()
+        (sub / "c.jpg").write_text("x")
+
+        paths = OB.iter_image_paths([root])
+
+    assert [p.name for p in paths] == ["a.png", "c.jpg"]
+
+
 def test_whisperx_diarization_constructor_supports_new_and_old_token_api():
     from app.providers import transcribe as T
 
