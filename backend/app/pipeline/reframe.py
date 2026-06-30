@@ -24,8 +24,12 @@ from ..models import LayoutType, Reframe, ReframeKeyframe
 log = logging.getLogger("clipforge.reframe")
 
 # Global pre-computed face tracks: src_path -> [(time_abs, cx_fraction)] or None.
-# Populated once by precompute_face_tracks() and reused by all clips on that source.
+# Populated once by precompute_face_tracks() and reused by all clips on that
+# source. None means "known unsafe/unavailable; use the per-clip tracker".
 _PRECOMPUTED_TRACKS: dict[str, list[tuple[float, float]] | None] = {}
+_PRECOMPUTED_TRACKS_LOCK = threading.Lock()
+_PRECOMPUTED_TRACKS_MAX = 8
+_PRECOMPUTED_MISSING = object()
 
 # Frame cache: face detection results keyed by (source_path, start_bucket, end_bucket).
 # Multiple overlapping clips on the same source (e.g. 20 candidate clips on a
@@ -50,6 +54,28 @@ ONE_EURO_D_CUTOFF = 1.0
 MAX_STEP = 0.05           # max centre move per sample (final safety clamp)
 
 
+def _cached_precomputed(src: str):
+    with _PRECOMPUTED_TRACKS_LOCK:
+        return _PRECOMPUTED_TRACKS.get(src, _PRECOMPUTED_MISSING)
+
+
+def _store_precomputed(src: str, centers: list[tuple[float, float]] | None) -> None:
+    with _PRECOMPUTED_TRACKS_LOCK:
+        if (src not in _PRECOMPUTED_TRACKS
+                and len(_PRECOMPUTED_TRACKS) >= _PRECOMPUTED_TRACKS_MAX):
+            _PRECOMPUTED_TRACKS.pop(next(iter(_PRECOMPUTED_TRACKS)), None)
+        _PRECOMPUTED_TRACKS[src] = centers
+
+
+def clear_precomputed_face_tracks(src: str | None = None) -> None:
+    """Drop whole-source face tracks so long-running sessions stay bounded."""
+    with _PRECOMPUTED_TRACKS_LOCK:
+        if src is None:
+            _PRECOMPUTED_TRACKS.clear()
+        else:
+            _PRECOMPUTED_TRACKS.pop(src, None)
+
+
 def precompute_face_tracks(src: str, duration: float) -> None:
     """Decode the entire source once and pre-compute face positions for all clips.
 
@@ -61,16 +87,16 @@ def precompute_face_tracks(src: str, duration: float) -> None:
     Call this once per source before processing any clips on it. Idempotent:
     subsequent calls are no-ops.
     """
-    if src in _PRECOMPUTED_TRACKS:
+    if _cached_precomputed(src) is not _PRECOMPUTED_MISSING:
         return  # already pre-computed
     try:
         import cv2  # noqa: F401
     except Exception:
-        _PRECOMPUTED_TRACKS[src] = None
+        _store_precomputed(src, None)
         return
 
     if duration <= 0 or not get_settings().has_opencv:
-        _PRECOMPUTED_TRACKS[src] = None
+        _store_precomputed(src, None)
         return
 
     log.info("pre-computing face tracks for %s (%.1fs)", src, duration)
@@ -84,18 +110,20 @@ def precompute_face_tracks(src: str, duration: float) -> None:
             ], timeout=min(duration * 2, 600))
         except Exception as e:
             log.warning("pre-compute frame sampling failed: %s", e)
-            _PRECOMPUTED_TRACKS[src] = None
+            _store_precomputed(src, None)
             return
 
         frames = sorted(Path(tmp).glob("pf_*.jpg"))
         if not frames:
-            _PRECOMPUTED_TRACKS[src] = None
+            _store_precomputed(src, None)
             return
 
         from ..media import faces as faces_mod
 
         centers: list[tuple[float, float]] = []
         total = len(frames)
+        face_frames = 0
+        multi_face_frames = 0
         for i, fp in enumerate(frames):
             img = cv2.imread(str(fp))
             if img is None:
@@ -104,6 +132,9 @@ def precompute_face_tracks(src: str, duration: float) -> None:
             raw_faces = faces_mod.detect_faces(img, min_size_frac=0.06)
             t_abs = i / SAMPLE_FPS
             if raw_faces:
+                face_frames += 1
+                if len(raw_faces) > 1:
+                    multi_face_frames += 1
                 # Pick the largest face (by area).
                 best = max(raw_faces, key=lambda f: f[2] * f[3])
                 cx = (best[0] + best[2] / 2) / w
@@ -112,11 +143,16 @@ def precompute_face_tracks(src: str, duration: float) -> None:
                 # Carry the last known position; None on the very first frame.
                 if centers:
                     centers.append((t_abs, centers[-1][1]))
+        if multi_face_frames >= max(2, int(face_frames * 0.10)):
+            log.info("pre-compute skipped for multi-face source %s (%d/%d frames)",
+                     src, multi_face_frames, face_frames)
+            _store_precomputed(src, None)
+            return
         if len(centers) < max(2, total * 0.15):
             log.warning("pre-compute: too few faces found (%d/%d)", len(centers), total)
-            _PRECOMPUTED_TRACKS[src] = None
+            _store_precomputed(src, None)
             return
-        _PRECOMPUTED_TRACKS[src] = centers
+        _store_precomputed(src, centers)
         log.info("pre-computed %d face positions for %s", len(centers), src)
 
 
@@ -189,7 +225,9 @@ def compute_reframe(src: str, start: float, end: float, src_aspect: float,
     if not centers and s.has_opencv:
         # Use pre-computed face tracks (whole-source single ffmpeg pass) if
         # available — this is 3-10x faster than per-clip ffmpeg decoding.
-        precomputed = _PRECOMPUTED_TRACKS.get(src)
+        precomputed = _cached_precomputed(src)
+        if precomputed is _PRECOMPUTED_MISSING:
+            precomputed = None
         if precomputed is not None:
             # Filter to the clip's time range and rebase.
             centers = [(t - start, cx) for t, cx in precomputed

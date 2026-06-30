@@ -405,7 +405,7 @@ class Settings:
     has_nvenc: bool         # ffmpeg has the h264_nvenc encoder compiled in
     has_nvidia: bool        # an NVIDIA GPU + driver is actually present
     has_av1_nvenc: bool = False  # ffmpeg has av1_nvenc (RTX 40/50 series)
-    ocr_engine: str = ""    # on-screen text OCR: "paddleocr"|"easyocr"|"tesseract"|""
+    ocr_engine: str = ""    # OCR: paddleocr|easyocr|rapidocr|surya|tesseract|""
     # --- optional power-ups (graceful: no-op when absent) ---------------
     has_vad: bool = False        # Silero VAD — snap captions to exact speech
     has_scenedetect: bool = False  # PySceneDetect — better scene-cut snapping

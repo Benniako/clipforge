@@ -604,7 +604,8 @@ async def create_project_raw_upload(
     Large videos should not go through multipart parsing: Starlette may spool the
     whole body before our handler runs, and parser/temp-disk failures surface as
     the unhelpful "error parsing the body". This route streams bytes directly to
-    our temp file and uses a small JSON settings header for project options.
+    our temp file and accepts settings in the CFMETA body prefix (or the legacy
+    X-ClipForge-Settings header).
     """
     data, body_stream, first_file_bytes = await _raw_upload_stream_parts(
         request, x_clipforge_settings)

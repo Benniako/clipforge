@@ -1087,6 +1087,50 @@ def test_compute_reframe_uses_precomputed_tracks_without_cache_fallback():
         RF._track_faces = old_track_faces
 
 
+def test_precompute_face_tracks_skips_multi_face_sources():
+    from app.media import faces as faces_mod
+    from app.pipeline import reframe as RF
+
+    old_settings = RF.get_settings
+    old_tracks = dict(RF._PRECOMPUTED_TRACKS)
+    old_run = RF.ffmpeg.run
+    old_detect = faces_mod.detect_faces
+    old_cv2 = sys.modules.get("cv2")
+
+    class FakeImage:
+        shape = (100, 100, 3)
+
+    fake_cv2 = types.SimpleNamespace(imread=lambda _p: FakeImage())
+
+    def fake_run(args, **_kw):
+        pattern = Path(args[-1])
+        for i in range(1, 9):
+            frame = pattern.with_name(pattern.name.replace("%05d", f"{i:05d}"))
+            frame.write_text("x")
+
+    try:
+        RF.get_settings = lambda: _settings(has_opencv=True)
+        RF._PRECOMPUTED_TRACKS.clear()
+        RF.ffmpeg.run = fake_run
+        faces_mod.detect_faces = lambda _img, min_size_frac=0.06: [
+            (5, 10, 20, 20), (55, 10, 20, 20)
+        ]
+        sys.modules["cv2"] = fake_cv2
+
+        RF.precompute_face_tracks("panel.mp4", 3.0)
+        assert RF._PRECOMPUTED_TRACKS["panel.mp4"] is None
+    finally:
+        RF.get_settings = old_settings
+        RF.ffmpeg.run = old_run
+        faces_mod.detect_faces = old_detect
+        RF._PRECOMPUTED_TRACKS.clear()
+        RF._PRECOMPUTED_TRACKS.update(old_tracks)
+        if old_cv2 is None:
+            sys.modules.pop("cv2", None)
+        else:
+            sys.modules["cv2"] = old_cv2
+
+
 def test_scene_showinfo_parse_and_snap():
     from app.providers import scenes
     err = ("[Parsed_showinfo_1 @ 0x1] n:   0 pts:  12345 pts_time:1.04  fmt:yuv420p\n"
@@ -1208,6 +1252,57 @@ def test_pause_resume_project_endpoint():
 
     missing = c.post("/api/projects/proj_missing/pause")
     assert missing.status_code == 404
+
+
+def test_resume_incomplete_clears_stale_ocr_report():
+    from app import store
+    from app.models import OcrRead, OcrReport
+    from app.pipeline.orchestrator import Engine
+
+    store.init_db()
+    for summary in store.list_summaries(limit=1000):
+        if summary.status in (ProjectStatus.queued, ProjectStatus.processing):
+            with store.mutate(summary.id) as existing:
+                existing.status = ProjectStatus.ready
+    p = Project(
+        id="proj_resume_stale_ocr",
+        status=ProjectStatus.processing,
+        source=SourceMedia(filename="source.mp4", path="proj_resume_stale_ocr/source.mp4"),
+        ocr_report=OcrReport(
+            enabled=True,
+            engine="easyocr",
+            status="ran",
+            reads=[OcrRead(t=5.0, roi="full", text="VICTORY", confidence=0.9)],
+            matches=1,
+        ),
+    )
+    store.save(p)
+    e = Engine()
+
+    assert e.resume_incomplete() == 1
+    out = store.get(p.id)
+    assert out is not None
+    assert out.status == ProjectStatus.queued
+    assert out.ocr_report.status == "skipped"
+    assert out.ocr_report.reads == []
+    assert out.ocr_report.matches == 0
+
+
+def test_engine_clears_progress_runtime_state():
+    from app.pipeline.orchestrator import Engine
+
+    e = Engine()
+    e._stage_started["p"] = 1.0
+    e._stage_idx["p"] = 2
+    e._last_progress_pct["p"] = 42.0
+    e._last_progress_ts["p"] = 99.0
+
+    e._clear_runtime_state("p")
+
+    assert "p" not in e._stage_started
+    assert "p" not in e._stage_idx
+    assert "p" not in e._last_progress_pct
+    assert "p" not in e._last_progress_ts
 
 
 def test_render_finish_fails_project_when_no_clips_ready():

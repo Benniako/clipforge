@@ -336,6 +336,7 @@ class Engine:
                     p.clips = []
                     p.events = []
                     p.montages = []
+                    p.ocr_report = OcrReport()
                 self.enqueue(summary.id)
                 resumed += 1
             except Exception:
@@ -370,7 +371,15 @@ class Engine:
             finally:
                 with self._pause_condition:
                     self._active_projects.discard(project_id)
+                self._clear_runtime_state(project_id)
                 self._q.task_done()
+
+    def _clear_runtime_state(self, project_id: str) -> None:
+        """Drop per-run caches that should not grow across many projects."""
+        self._stage_started.pop(project_id, None)
+        self._stage_idx.pop(project_id, None)
+        self._last_progress_pct.pop(project_id, None)
+        self._last_progress_ts.pop(project_id, None)
 
     # -- progress helpers -------------------------------------------------
     def _stage_view(self, current: int, frac: float,
