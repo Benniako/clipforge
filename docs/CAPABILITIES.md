@@ -23,7 +23,7 @@ ingest → transcribe → detect → score → caption → render
 |-------|--------------|-------|---------------|-------------------------|
 | **ingest** | Accept an upload or a pasted URL; probe duration/dimensions/audio | `pipeline/ingest.py` | ffmpeg | `yt-dlp` (URL import) |
 | **transcribe** | Word-timed speech-to-text + speaker labels | `providers/transcribe.py` | `faster-whisper`, `silero-vad` | `whisperx` (alignment + diarization), `torchaudio` (extra alignment) |
-| **detect** | Find highlight moments: salience, audio cues, OCR, facecam | `providers/detect.py`, `detect_gameplay.py`, `detect_ocr.py`, `audio_events.py` | — | `opencv`, CLAP, PaddleOCR/EasyOCR/Tesseract, LR-ASD |
+| **detect** | Find highlight moments: salience, audio cues, OCR, facecam | `providers/detect.py`, `detect_gameplay.py`, `detect_ocr.py`, `audio_events.py` | — | `opencv`, CLAP, PaddleOCR/EasyOCR/RapidOCR/Surya/Tesseract, LR-ASD |
 | **score** | Rank moments by virality; LLM re-rank; per-user feedback learning | `providers/score.py`, `feedback.py` | numpy | Ollama (LLM re-rank) |
 | **caption** | Build word-timed ASS subtitles; tight segment cuts | `pipeline/captions.py`, `captionize.py` | ffmpeg | — |
 | **render** | Vertical reframe + facecam layout + burn-in captions → mp4 | `pipeline/reframe.py`, `pipeline/render.py` | ffmpeg | `opencv` (tracked reframe) |
@@ -62,11 +62,13 @@ ingest → transcribe → detect → score → caption → render
   attribute-style prompt sets per game profile. Short user prompts are
   auto-enriched (`audio_events.enrich_prompts`) per the finding that prompt
   phrasing swings CLAP accuracy ~20%.
-- **OCR** — PaddleOCR → EasyOCR → Tesseract cascade for in-game HUD text (kill
-  banners, scorelines, "VICTORY" splashes). Crops are batched per sampled frame,
-  repeated static crops are cached, low-confidence PaddleOCR frames are retried
-  with EasyOCR, and OCR-miss diagnostics point users to Cue Lab tuning. Learned
-  cues persist per game profile. See [OCR_CUES.md](OCR_CUES.md).
+- **OCR** — PaddleOCR → EasyOCR → RapidOCR → Surya/Tesseract cascade for
+  in-game HUD text (kill banners, scorelines, "VICTORY" splashes). Crops are
+  batched per sampled frame, repeated static crops are cached, low-confidence
+  PaddleOCR frames are retried with EasyOCR, and `CLIPFORGE_OCR_ENGINE` can
+  force one installed backend for benchmarking. OCR-miss diagnostics point
+  users to Cue Lab tuning. Learned cues persist per game profile. See
+  [OCR_CUES.md](OCR_CUES.md).
 - **Active-speaker attribution** — optional LR-ASD ties transcript words to the
   on-screen speaker for multi-person content.
 - **Facecam detection** — YuNet/OpenCV; stable-face clustering finds a static

@@ -17,11 +17,13 @@ onnxruntime>=1.17
 scenedetect[opencv]>=0.6.4
 
 # Gameplay on-screen text (kill banners / scorelines / VICTORY). PaddleOCR v6
-# is tried first when installed; EasyOCR remains the robust fallback.
+# is tried first when installed; EasyOCR is robust on noisy crops, and RapidOCR
+# is the fast ONNX/CPU fallback.
 paddleocr>=3.2
 paddlepaddle>=3.2
 transformers>=4.45
 easyocr>=1.7
+rapidocr>=3.0
 rapidfuzz>=3.0
 
 # Speech-emotion excitement signal (laughs/hype/rage) for virality.

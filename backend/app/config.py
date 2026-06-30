@@ -83,14 +83,26 @@ def _detect_ocr() -> str:
     Every backend is optional — with none installed, OCR detection is skipped
     and the audio-energy / cue path still finds highlights.
     """
-    if _has_module("paddleocr"):
-        return "paddleocr"
-    if _has_module("easyocr"):
-        return "easyocr"
-    if _has_module("surya"):
-        return "surya"
-    if _has_module("pytesseract") and shutil.which("tesseract"):
-        return "tesseract"
+    available = {
+        "paddleocr": _has_module("paddleocr"),
+        "easyocr": _has_module("easyocr"),
+        "rapidocr": _has_module("rapidocr") or _has_module("rapidocr_onnxruntime"),
+        "surya": _has_module("surya"),
+        "tesseract": _has_module("pytesseract") and bool(shutil.which("tesseract")),
+    }
+    forced = os.environ.get("CLIPFORGE_OCR_ENGINE", "").strip().lower()
+    forced = {"paddle": "paddleocr", "easy": "easyocr",
+              "rapid": "rapidocr"}.get(forced, forced)
+    if forced in {"off", "none", "false", "0"}:
+        return ""
+    if forced:
+        if available.get(forced):
+            return forced
+        log.warning("CLIPFORGE_OCR_ENGINE=%s is not available; using auto OCR",
+                    forced)
+    for engine in ("paddleocr", "easyocr", "rapidocr", "surya", "tesseract"):
+        if available.get(engine):
+            return engine
     return ""
 
 
@@ -414,6 +426,7 @@ class Settings:
     has_torchaudio: bool = False # wav2vec2 forced alignment for tighter captions
     has_paddleocr: bool = False  # OCR engine (best accuracy overall)
     has_easyocr: bool = False    # OCR engine (best on noisy frames)
+    has_rapidocr: bool = False   # OCR engine (fast ONNX/CPU fallback)
     has_tesseract: bool = False  # OCR engine (fallback)
     has_scrfd: bool = False      # SCRFD face detection (upgrade from YuNet)
     has_surya: bool = False      # Surya OCR (vision-language based OCR)
@@ -545,6 +558,8 @@ class Settings:
                      "PaddleOCR", "Best overall OCR accuracy for in-game HUD text."),
                 item("easyocr", self.has_easyocr,
                      "EasyOCR", "Better than PaddleOCR on noisy/bitrate-starved frames."),
+                item("rapidocr", self.has_rapidocr,
+                     "RapidOCR", "Fast ONNX OCR fallback for CPU-focused installs."),
                 item("tesseract", self.has_tesseract,
                      "Tesseract", "Fallback OCR engine."),
                 item("surya", self.has_surya,
@@ -717,6 +732,7 @@ class Settings:
             "torchaudio": self.has_torchaudio,
             "paddleocr": self.has_paddleocr,
             "easyocr": self.has_easyocr,
+            "rapidocr": self.has_rapidocr,
             "tesseract": self.has_tesseract,
             "scrfd": self.has_scrfd,
             "surya": self.has_surya,
@@ -776,6 +792,7 @@ def get_settings() -> Settings:
         has_torchaudio=_has_module("torchaudio"),
         has_paddleocr=_has_module("paddleocr"),
         has_easyocr=_has_module("easyocr"),
+        has_rapidocr=_has_module("rapidocr") or _has_module("rapidocr_onnxruntime"),
         has_tesseract=bool(_has_module("pytesseract") and shutil.which("tesseract")),
         has_scrfd=_has_module("scrfd"),
         has_surya=_has_module("surya"),

@@ -420,6 +420,30 @@ def test_diarization_capability_requires_token():
     assert _settings(has_whisperx=True, hf_token=None).capability_report()["diarization_model"] is None
 
 
+def test_ocr_detection_supports_rapidocr_and_engine_override():
+    from app import config as CFG
+
+    old_has = CFG._has_module
+    old_which = CFG.shutil.which
+    old_env = os.environ.get("CLIPFORGE_OCR_ENGINE")
+    try:
+        CFG._has_module = lambda name: name in {"rapidocr_onnxruntime"}
+        CFG.shutil.which = lambda _name: None
+        os.environ.pop("CLIPFORGE_OCR_ENGINE", None)
+        assert CFG._detect_ocr() == "rapidocr"
+        os.environ["CLIPFORGE_OCR_ENGINE"] = "rapid"
+        assert CFG._detect_ocr() == "rapidocr"
+        os.environ["CLIPFORGE_OCR_ENGINE"] = "off"
+        assert CFG._detect_ocr() == ""
+    finally:
+        CFG._has_module = old_has
+        CFG.shutil.which = old_which
+        if old_env is None:
+            os.environ.pop("CLIPFORGE_OCR_ENGINE", None)
+        else:
+            os.environ["CLIPFORGE_OCR_ENGINE"] = old_env
+
+
 def test_asr_benchmark_candidate_matrix_is_dependency_safe():
     from app.providers import asr_benchmark as AB
 
@@ -1574,6 +1598,54 @@ def test_raw_upload_endpoint_streams_without_multipart():
         RP.engine.enqueue = old_enqueue
 
 
+def test_reprocess_clears_stale_ocr_report_before_enqueue():
+    from starlette.testclient import TestClient
+    from app import store
+    from app.api import routes_projects as RP
+    from app.main import create_app
+    from app.models import OcrRead, OcrReport
+
+    store.init_db()
+    p = Project(
+        name="stale ocr",
+        status=ProjectStatus.ready,
+        source=SourceMedia(
+            filename="source.mp4",
+            path="proj/source.mp4",
+            duration=60.0,
+            width=1920,
+            height=1080,
+            size_bytes=123,
+        ),
+        ocr_report=OcrReport(
+            enabled=True,
+            engine="easyocr",
+            status="ran",
+            frames_sampled=12,
+            crops_read=40,
+            texts_found=3,
+            matches=1,
+            reads=[OcrRead(t=10.0, roi="full", text="VICTORY", confidence=0.9)],
+        ),
+    )
+    store.save(p)
+    seen: dict = {}
+    old_enqueue = RP.engine.enqueue
+    try:
+        RP.engine.enqueue = lambda pid: seen.setdefault("queued", pid)
+        c = TestClient(create_app(), raise_server_exceptions=False)
+        r = c.post(f"/api/projects/{p.id}/reprocess", json={"use_ocr": False})
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["ocr_report"]["status"] == "skipped"
+        assert body["ocr_report"]["reads"] == []
+        assert body["ocr_report"]["matches"] == 0
+        assert body["settings"]["use_ocr"] is False
+        assert seen["queued"] == p.id
+    finally:
+        RP.engine.enqueue = old_enqueue
+
+
 def test_clip_aspect_override_falls_back_to_project_dims():
     from app.models import ASPECTS
     st = ImportSettings(aspect="9:16")
@@ -1747,6 +1819,22 @@ def test_ocr_reads_real_recognition_confidence():
     _te, ce = O._easyocr_read(E(), "f.png")
     assert abs(ce - 0.7) < 1e-6
 
+    class R:
+        def __call__(self, _p):
+            return [([[0, 0]], "Victory", 0.8), ([[0, 1]], "Headshot", 0.6)], 0.01
+    rt, rc = O._rapidocr_read(R(), "f.png")
+    assert rt == "Victory Headshot" and abs(rc - 0.7) < 1e-6
+
+    class RapidObj:
+        txts = ["Spike", "Plant"]
+        scores = [0.9, 0.7]
+
+    class R2:
+        def __call__(self, _p):
+            return RapidObj()
+    rt2, rc2 = O._rapidocr_read(R2(), "f.png")
+    assert rt2 == "Spike Plant" and abs(rc2 - 0.8) < 1e-6
+
     # Unknown confidence (tesseract / detail=0) → 0.0 so the ROI prior kicks in.
     class E0:
         def readtext(self, _p, detail=1, paragraph=False):
@@ -1762,7 +1850,7 @@ def test_ocr_reads_real_recognition_confidence():
 def test_ocr_reader_falls_back_to_easyocr_when_paddle_fails():
     from app.providers import detect_ocr as O
 
-    old_reader = O._reader
+    old_cache = dict(O._reader_cache)
     old_make_paddle = O._make_paddle
     old_make_easyocr = O._make_easyocr
 
@@ -1770,7 +1858,7 @@ def test_ocr_reader_falls_back_to_easyocr_when_paddle_fails():
         pass
 
     try:
-        O._reader = None
+        O._reader_cache.clear()
 
         def fail_paddle(_gpu, _lang="en"):
             raise RuntimeError("broken paddle runtime")
@@ -1781,7 +1869,8 @@ def test_ocr_reader_falls_back_to_easyocr_when_paddle_fails():
         assert kind == "easyocr"
         assert isinstance(reader, EasyReader)
     finally:
-        O._reader = old_reader
+        O._reader_cache.clear()
+        O._reader_cache.update(old_cache)
         O._make_paddle = old_make_paddle
         O._make_easyocr = old_make_easyocr
 
@@ -3167,6 +3256,34 @@ def test_ocr_batch_fallback_preserves_language():
         OCR._ocr_image_conf = old_read
 
 
+def test_ocr_reader_cache_is_keyed_by_engine_and_language():
+    from app.providers import detect_ocr as OCR
+
+    old_settings = OCR.get_settings
+    old_try = OCR._try_with_timeout
+    old_paddle = OCR._make_paddle
+    old_easy = OCR._make_easyocr
+    old_cache = dict(OCR._reader_cache)
+    try:
+        OCR._reader_cache.clear()
+        OCR.get_settings = lambda: types.SimpleNamespace(device="cpu")
+        OCR._try_with_timeout = lambda make, timeout=15.0: make()
+        OCR._make_paddle = lambda gpu, lang="en": f"paddle:{lang}:{gpu}"
+        OCR._make_easyocr = lambda gpu, langs=None: f"easy:{','.join(langs or [])}:{gpu}"
+
+        assert OCR._get_reader("paddleocr", "de") == ("paddleocr", "paddle:de:False")
+        assert OCR._get_reader("easyocr", "de") == ("easyocr", "easy:de,en:False")
+        assert OCR._get_reader("paddleocr", "en") == ("paddleocr", "paddle:en:False")
+        assert len(OCR._reader_cache) == 3
+    finally:
+        OCR.get_settings = old_settings
+        OCR._try_with_timeout = old_try
+        OCR._make_paddle = old_paddle
+        OCR._make_easyocr = old_easy
+        OCR._reader_cache.clear()
+        OCR._reader_cache.update(old_cache)
+
+
 def test_ocr_scan_batches_uncached_frame_crops():
     from app.providers import detect_ocr as OCR
     from app.models import ImportSettings
@@ -3427,7 +3544,7 @@ def test_adaptive_binarization_checks_monotone_rois():
     assert "THRESH_BINARY" in src  # fallback threshold method
 
 
-if __name__ == "__main__":
+def _run_direct_tests() -> None:
     import sys
     # Windows consoles default to a legacy code page that can't print "✓".
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -3657,19 +3774,28 @@ def test_watcher_discovers_video_files():
     from pathlib import Path
     from app.pipeline.watcher import WatchDirectoryPoller
 
+    class TestPoller(WatchDirectoryPoller):
+        def _import_video(self, path: Path) -> None:
+            self.imported.append(path.name)
+
+        def __init__(self, directory, interval=0.5):
+            super().__init__(directory, interval)
+            self.imported: list[str] = []
+
     with tempfile.TemporaryDirectory() as td:
         # Create some test files.
         (Path(td) / "video1.mp4").write_text("fake mp4")
         (Path(td) / "video2.mov").write_text("fake mov")
         (Path(td) / "readme.txt").write_text("not a video")
 
-        poller = WatchDirectoryPoller(td, interval=0.5)
+        poller = TestPoller(td, interval=0.5)
         poller._poll_once()  # first pass records sizes
         poller._poll_once()  # second pass should discover stable files
 
         assert "video1.mp4" in poller._seen
         assert "video2.mov" in poller._seen
         assert "readme.txt" not in poller._seen  # not a video extension
+        assert poller.imported == ["video1.mp4", "video2.mov"]
 
 
 def test_watcher_skips_growing_files():
@@ -3677,11 +3803,19 @@ def test_watcher_skips_growing_files():
     from pathlib import Path
     from app.pipeline.watcher import WatchDirectoryPoller
 
+    class TestPoller(WatchDirectoryPoller):
+        def _import_video(self, path: Path) -> None:
+            self.imported.append(path.name)
+
+        def __init__(self, directory, interval=0.5):
+            super().__init__(directory, interval)
+            self.imported: list[str] = []
+
     with tempfile.TemporaryDirectory() as td:
         f = Path(td) / "growing.mp4"
         f.write_text("small")
 
-        poller = WatchDirectoryPoller(td, interval=0.5)
+        poller = TestPoller(td, interval=0.5)
         poller._poll_once()  # records size = 5
         f.write_text("still growing")  # size changed
         poller._poll_once()  # should skip because size differs
@@ -3691,3 +3825,8 @@ def test_watcher_skips_growing_files():
         f.write_text("still growing")  # same size
         poller._poll_once()  # should be discovered
         assert "growing.mp4" in poller._seen
+        assert poller.imported == ["growing.mp4"]
+
+
+if __name__ == "__main__":
+    _run_direct_tests()

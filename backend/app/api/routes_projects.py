@@ -29,7 +29,7 @@ from urllib.parse import unquote
 from .. import store
 from ..config import get_settings
 from ..models import (ASPECTS, AiBoostSettings, ContentType, GameProfileConfig,
-                      ImportSettings, Platform, PowerMode, Project,
+                      ImportSettings, OcrReport, Platform, PowerMode, Project,
                       ProjectStatus, ProjectSummary)
 from ..pipeline import ingest
 from ..pipeline.captions import build_srt
@@ -965,6 +965,7 @@ def reprocess(project_id: str, body: Reprocess | None = None) -> Project:
         proj.clips = []
         proj.montages = []
         proj.events = []
+        proj.ocr_report = OcrReport()
         proj.content_type = None
         proj.facecam = None      # re-detected on the next run
         proj.warnings = []

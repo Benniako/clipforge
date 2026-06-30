@@ -15,12 +15,26 @@ Recommended order:
 
 - `paddleocr` for clean HUD and banner text.
 - `easyocr` as a robust fallback for noisy stream/video-compressed overlays.
+- `rapidocr` as a fast ONNX/CPU fallback when the heavier OCR stacks are too
+  slow or hard to install.
+- `surya-ocr` for heavier visual OCR experiments; benchmark before making it
+  the default for gameplay crops.
 - `pytesseract` plus the system Tesseract binary as a lightweight fallback.
 - `rapidfuzz` for typo-tolerant matching when OCR reads `V1CT0RY` or `HEADSH0T`.
 
 The active OCR engine appears in `/api/capabilities` and the app capability
 panel. If OCR is enabled but no engine is installed, the project now records a
 warning instead of silently finding zero visual cues.
+
+To benchmark or debug one backend, force it before starting the backend:
+
+```powershell
+$env:CLIPFORGE_OCR_ENGINE = "rapidocr"
+python -m app.main
+```
+
+Accepted values are `paddleocr`, `easyocr`, `rapidocr`, `surya`, `tesseract`,
+and `off`.
 
 ## How Detection Works
 
@@ -94,7 +108,8 @@ ClipForge now records a project warning that points back to Cue Lab tuning.
 - Prefer a saved ROI over full-frame OCR. It cuts model work and reduces false
   text from the rest of the screen.
 - Keep `rapidfuzz` installed; it is small and helps stylized fonts.
-- Use `paddleocr` first, with EasyOCR installed as fallback.
+- Use `paddleocr` first, with EasyOCR installed as fallback. Try `rapidocr` when
+  CPU speed and simple deployment matter more than maximum accuracy.
 - For long VODs, use audio/reference cues too. OCR then focuses around likely
   moments instead of scanning blindly.
 - Add one clean audio cue after OCR detects a visual event. Future runs can find

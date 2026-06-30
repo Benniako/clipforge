@@ -329,7 +329,10 @@ export interface Health {
     torchaudio: boolean;
     paddleocr: boolean;
     easyocr: boolean;
+    rapidocr: boolean;
     tesseract: boolean;
+    scrfd: boolean;
+    surya: boolean;
   };
   output: { width: number; height: number };
 }

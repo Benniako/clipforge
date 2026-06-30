@@ -9,6 +9,10 @@
 #
 #   pip install -r backend/requirements-ocr.txt
 #
+# To benchmark or force one installed backend:
+#   set CLIPFORGE_OCR_ENGINE=paddleocr
+# Accepted values: paddleocr, easyocr, rapidocr, surya, tesseract, off.
+#
 # PaddleOCR (PP-OCRv6 -> PP-OCRv5 fallback) is the most accurate overall.
 paddleocr>=3.2
 transformers>=4.45        # required for PP-OCRv6 engine="transformers"
@@ -18,6 +22,11 @@ paddlepaddle>=3.2         # runtime engine used by PaddleOCR/PaddleX
 # It pulls PyTorch; a CUDA GPU makes it much faster but it runs on CPU too.
 easyocr>=1.7
 
+# RapidOCR is a fast ONNX/CPU fallback for installs that should avoid the
+# heavier Paddle/EasyOCR stacks.
+rapidocr>=3.0
+onnxruntime>=1.17
+
 # Lightweight fallback — Tesseract (needs the system `tesseract` binary too):
 # pytesseract>=0.3.10
 
@@ -26,12 +35,6 @@ easyocr>=1.7
 # absent, ClipForge falls back to exact substring matching automatically.
 rapidfuzz>=3.0
 
-# Surya OCR (vision-language based, 90+ languages, GPU) — detected by config.py
-# and wired as an alternate OCR engine in detect_ocr.py. The installed `surya`
-# package is just scaffolding; the detector and recognizer model repos need
-# separate install:
-#   pip install surya-detection surya-recognition
-# These pull ~2GB of model weights.
-# surya>=0.4
-# surya-detection>=0.2
-# surya-recognition>=0.2
+# Surya OCR is a heavier optional vision OCR candidate. Keep it opt-in until it
+# is benchmarked on gameplay HUD crops:
+#   pip install surya-ocr

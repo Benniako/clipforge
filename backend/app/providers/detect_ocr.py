@@ -357,7 +357,11 @@ def dedupe_events(events: list[OcrEvent], *, min_gap: float = 4.0) -> list[OcrEv
 # --------------------------------------------------------------------------- #
 # OCR backends (lazy, optional)
 # --------------------------------------------------------------------------- #
-_reader = None  # cached backend instance
+# Cached backend instances keyed by requested engine/language/device. A single
+# global reader is wrong because the PaddleOCR low-confidence path deliberately
+# calls EasyOCR as a fallback, and German/English readers may load different
+# language packs.
+_reader_cache: dict[tuple[str, str, str], tuple[str, object | None]] = {}
 _easyocr_ok: bool | None = None  # cached availability probe for the low-conf retry
 _reader_lock = threading.Lock()
 _easyocr_lock = threading.Lock()
@@ -475,6 +479,16 @@ def _make_easyocr(gpu: bool, langs: list[str] | None = None):
     return easyocr.Reader(langs or ["en"], gpu=gpu, verbose=False)
 
 
+def _make_rapidocr():
+    """Construct RapidOCR from either the modern or legacy package name."""
+    try:
+        from rapidocr import RapidOCR
+    except Exception:
+        from rapidocr_onnxruntime import RapidOCR  # type: ignore
+
+    return RapidOCR()
+
+
 def _make_surya():
     """Construct a Surya OCR RecognitionPredictor (VLM-based, GPU-accelerated).
 
@@ -490,13 +504,14 @@ def _make_surya():
 
 
 def _get_reader(engine: str, lang: str = "en"):
-    global _reader
     with _reader_lock:
-        if _reader is not None:
-            return _reader
         s = get_settings()
         gpu = s.device == "cuda"
-        ocr_langs = {"de": ["de", "en"], "en": ["en"]}.get(lang[:2].lower(), ["en"])
+        lang_key = (lang or "en")[:2].lower()
+        cache_key = (engine or "", lang_key, s.device)
+        if cache_key in _reader_cache:
+            return _reader_cache[cache_key]
+        ocr_langs = {"de": ["de", "en"], "en": ["en"]}.get(lang_key, ["en"])
         attempts = []
         if engine == "paddleocr":
             attempts.append(("paddleocr", lambda: _make_paddle(gpu, lang)))
@@ -509,6 +524,8 @@ def _get_reader(engine: str, lang: str = "en"):
             attempts.append(("easyocr", lambda: _make_easyocr(gpu, ocr_langs)))
         elif engine == "easyocr":
             attempts.append(("easyocr", lambda: _make_easyocr(gpu, ocr_langs)))
+        elif engine == "rapidocr":
+            attempts.append(("rapidocr", lambda: _make_rapidocr()))
         elif engine == "tesseract":
             attempts.append(("tesseract", lambda: None))
         elif engine == "surya":
@@ -517,12 +534,14 @@ def _get_reader(engine: str, lang: str = "en"):
             try:
                 # GPU model loads can hang indefinitely (CUDA deadlock). Wrap the
                 # constructor with a timeout so the CPU fallback gets a chance.
-                _reader = (kind, _try_with_timeout(make, timeout=15.0))
-                return _reader
+                reader = (kind, _try_with_timeout(make, timeout=15.0))
+                _reader_cache[cache_key] = reader
+                return reader
             except Exception as e:
                 log.warning("%s OCR unavailable, trying fallback if present: %s", kind, e)
-        _reader = ("", None)
-        return _reader
+        reader = ("", None)
+        _reader_cache[cache_key] = reader
+        return reader
 
 
 def _paddle_read(reader, path: str) -> tuple[str, float]:
@@ -604,6 +623,57 @@ def _is_garbled(text: str, threshold: float = 0.40) -> bool:
     return clean / len(text) < (1.0 - threshold)
 
 
+def _rapidocr_read(reader, path: str) -> tuple[str, float]:
+    """Read RapidOCR output without depending on one package version.
+
+    rapidocr_onnxruntime returns ``(rows, elapse)`` with rows shaped like
+    ``[box, text, score]``. Newer RapidOCR releases may return an object with
+    parallel ``txts``/``scores`` fields. Support both so the backend remains a
+    safe optional CPU fallback.
+    """
+    try:
+        result = reader(path)
+    except Exception as e:
+        log.warning("rapidocr read failed for %s: %s", path, e)
+        return "", 0.0
+    if isinstance(result, tuple):
+        result = result[0]
+    texts: list[str] = []
+    scores: list[float] = []
+    obj_texts = getattr(result, "txts", None)
+    if obj_texts is not None:
+        texts.extend(str(t) for t in obj_texts if t)
+        for score in getattr(result, "scores", []) or []:
+            try:
+                scores.append(float(score))
+            except (TypeError, ValueError):
+                pass
+    else:
+        if isinstance(result, dict):
+            rows = result.get("result") or result.get("rec_res") or result.get("data") or []
+        else:
+            rows = result or []
+        for row in rows:
+            text = ""
+            score = None
+            if isinstance(row, str):
+                text = row
+            elif isinstance(row, (list, tuple)):
+                if len(row) >= 3 and isinstance(row[1], str):
+                    text, score = row[1], row[2]
+                elif len(row) >= 2 and isinstance(row[0], str):
+                    text, score = row[0], row[1]
+            if text:
+                texts.append(str(text))
+            if score is not None:
+                try:
+                    scores.append(float(score))
+                except (TypeError, ValueError):
+                    pass
+    mean = sum(scores) / len(scores) if scores else 0.0
+    return " ".join(texts).strip(), max(0.0, min(1.0, mean))
+
+
 def _surya_read(reader, path: str) -> tuple[str, float]:
     """Read text from one image via Surya VLM (full-page OCR).
 
@@ -648,6 +718,8 @@ def _ocr_image_conf(path: str, engine: str, lang: str = "en") -> tuple[str, floa
             return _paddle_read(reader, path)
         if kind == "easyocr":
             return _easyocr_read(reader, path)
+        if kind == "rapidocr":
+            return _rapidocr_read(reader, path)
         if kind == "tesseract":
             import pytesseract
             from PIL import Image

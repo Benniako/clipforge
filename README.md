@@ -49,7 +49,7 @@ talking vs gameplay, and for games finds **audio-energy highlights** (kills,
 goals, clutches, jump-scares) tuned by an optional **per-game profile**
 (Valorant / CS2 / EA FC / Rocket League / Horror / generic — works for any game).
 It also reads the screen: an optional **OCR pass** (PaddleOCR → EasyOCR →
-Tesseract, whichever is installed) catches on-screen viral markers — a
+RapidOCR → Surya/Tesseract, whichever is installed) catches on-screen viral markers — a
 **VICTORY** / **DEFEAT** / **ELIMINATED** banner, a **GOAL!**, a kill-feed entry —
 and opens a clip on that guaranteed beat. Matched audio cues and OCR hits are
 **saved on the project** so you can see exactly what each highlight keyed off.
@@ -197,8 +197,10 @@ pack (airhorn, hype, laugh…) that's matched for every profile. Optional **AI
 titles** and the **virality re-rank** use a local [Ollama](https://ollama.com)
 model when running (otherwise heuristic titles/scores). **On-screen text
 detection (OCR)** is optional and auto-detected — install any one of
-`pip install paddleocr` (most accurate), `easyocr`, or `pytesseract` (+ the
-Tesseract binary); with none installed, the audio/cue path still finds highlights.
+`pip install paddleocr` (most accurate), `easyocr`, `rapidocr` (fast CPU/ONNX),
+`surya-ocr`, or `pytesseract` (+ the Tesseract binary); with none installed, the
+audio/cue path still finds highlights. Set `CLIPFORGE_OCR_ENGINE` to force a
+specific installed backend while benchmarking.
 See [docs/OCR_CUES.md](docs/OCR_CUES.md) for visual cue setup, Cue Lab tuning,
 and miss diagnostics.
 
@@ -225,7 +227,7 @@ pip install -r backend/requirements-extras.txt
 | **PANNs audio events** | Hears the *sounds* that signal a highlight — **cheering, laughter, applause, explosions** — as an explainable, zero-shot virality factor (no per-game cue needed). | `panns-inference` |
 | **Demucs clean voice** | Isolates the **voice** from background music / game audio so speech and captions sound studio-clean. Opt-in per project (*Clean voice*). | `demucs` |
 | **VLM vision read** | A local **vision-language second opinion** on virality from a clip's keyframes (expression, action, framing) — bounded & explainable, like the text re-rank. | `ollama pull qwen2.5vl` |
-| **OCR** | On-screen game text (kill banners, scorelines, VICTORY) → highlights, and **learns reusable audio cues** from them. | `paddleocr` / `easyocr` + [OCR guide](docs/OCR_CUES.md) |
+| **OCR** | On-screen game text (kill banners, scorelines, VICTORY) → highlights, and **learns reusable audio cues** from them. | `paddleocr` / `easyocr` / `rapidocr` + [OCR guide](docs/OCR_CUES.md) |
 | **YOLO reframe** | Content-aware 9:16 — tracks people/objects through cuts when no face is visible. | `ultralytics` |
 | **YOLO temporal tracker** | Optional ByteTrack/BoT-SORT subject tracking through Ultralytics. | `CLIPFORGE_YOLO_TRACKER=bytetrack` |
 | **LR-ASD** | Active-speaker detection: crop & captions follow the *real* talker in multi-person shots. | clone [LR-ASD](https://github.com/Junhua-Liao/LR-ASD), set `CLIPFORGE_ASD_DIR` |
@@ -293,7 +295,8 @@ Opens http://localhost:8000. Data persists in a named Docker volume.
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `GET` | `/api/health` | Version + detected capabilities |
-| `POST` | `/api/projects` | Import (multipart file **or** `url`) + settings; enqueues processing |
+| `POST` | `/api/projects` | Import (`url`, or legacy multipart file upload) + settings; enqueues processing |
+| `POST` | `/api/projects/raw-upload` | Preferred large-file upload path; streams an octet body directly so Starlette multipart parsing cannot fail first |
 | `GET` | `/api/projects` | Recent projects (summaries) |
 | `GET` | `/api/projects/{id}` | Full project (clips, factors, transcript) |
 | `GET` | `/api/projects/{id}/status` | Lightweight polling: status + per-stage progress + clip cards |
