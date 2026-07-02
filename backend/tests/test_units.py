@@ -1697,6 +1697,37 @@ def test_ocr_reader_falls_back_to_easyocr_when_paddle_fails():
         O._make_easyocr = old_make_easyocr
 
 
+def test_easyocr_gpu_flag_uses_torch_cuda_not_asr_device():
+    """CTranslate2 CUDA does not imply EasyOCR/Torch CUDA is available."""
+    from app.providers import detect_ocr as O
+
+    old_reader = O._reader
+    old_make_easyocr = O._make_easyocr
+    old_easyocr_gpu_available = O._easyocr_gpu_available
+    calls: list[bool] = []
+
+    class EasyReader:
+        pass
+
+    try:
+        O._reader = None
+        O._easyocr_gpu_available = lambda: False
+
+        def make_easyocr(gpu: bool, _langs=None):
+            calls.append(gpu)
+            return EasyReader()
+
+        O._make_easyocr = make_easyocr
+        kind, reader = O._get_reader("easyocr")
+        assert kind == "easyocr"
+        assert isinstance(reader, EasyReader)
+        assert calls == [False]
+    finally:
+        O._reader = old_reader
+        O._make_easyocr = old_make_easyocr
+        O._easyocr_gpu_available = old_easyocr_gpu_available
+
+
 def test_ocr_fuzzy_matches_garbled_text():
     from app.providers import detect_ocr as O
     try:

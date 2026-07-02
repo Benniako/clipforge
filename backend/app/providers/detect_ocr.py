@@ -335,6 +335,16 @@ def _easyocr_available() -> bool:
         return _easyocr_ok
 
 
+def _easyocr_gpu_available() -> bool:
+    """True only when EasyOCR's Torch backend can actually use CUDA."""
+    try:
+        import torch
+
+        return bool(torch.cuda.is_available())
+    except Exception:
+        return False
+
+
 def _crop_hash(path: str) -> str | None:
     """Fast perceptual fingerprint of a crop for inter-frame diffing.
 
@@ -450,8 +460,7 @@ def _get_reader(engine: str, lang: str = "en"):
         # routing the wrong reader through the wrong pipeline breaks silently.
         if _reader is not None and _reader[0] == engine:
             return _reader
-        s = get_settings()
-        gpu = s.device == "cuda"
+        gpu = _easyocr_gpu_available()
         ocr_langs = {"de": ["de", "en"], "en": ["en"]}.get(lang[:2].lower(), ["en"])
         attempts = []
         if engine == "paddleocr":
@@ -460,7 +469,8 @@ def _get_reader(engine: str, lang: str = "en"):
             # Skip the GPU attempt entirely (it logs a scary "device not available"
             # warning before falling to CPU) and go straight to EasyOCR which
             # uses torch CUDA. Keep one CPU PaddleOCR attempt as a fallback when
-            # EasyOCR isn't installed either.
+            # EasyOCR isn't installed either. ASR CUDA (ctranslate2) is separate
+            # from Torch CUDA, so only pass gpu=True when Torch confirms it.
             if gpu:
                 attempts.append(("easyocr", lambda: _make_easyocr(gpu, ocr_langs)))
             attempts.append(("paddleocr", lambda: _make_paddle(False, lang)))
@@ -468,6 +478,8 @@ def _get_reader(engine: str, lang: str = "en"):
                 attempts.append(("easyocr", lambda: _make_easyocr(gpu, ocr_langs)))
         elif engine == "easyocr":
             attempts.append(("easyocr", lambda: _make_easyocr(gpu, ocr_langs)))
+            if gpu:
+                attempts.append(("easyocr", lambda: _make_easyocr(False, ocr_langs)))
         for kind, make in attempts:
             try:
                 # GPU model loads can hang indefinitely (CUDA deadlock). Wrap the

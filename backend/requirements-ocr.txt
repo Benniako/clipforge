@@ -18,6 +18,9 @@ paddlepaddle>=3.2         # runtime engine used by PaddleOCR/PaddleX
 # It pulls PyTorch; a CUDA GPU makes it much faster but it runs on CPU too.
 easyocr>=1.7
 
+# ClipForge uses PIL for OCR crop hashing and the Tesseract fallback path.
+pillow>=10
+
 # Lightweight fallback — Tesseract (needs the system `tesseract` binary too):
 # pytesseract>=0.3.10
 
