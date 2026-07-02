@@ -157,9 +157,10 @@ runs from a **single process on http://localhost:8000** — no second terminal.
 | `CLIPFORGE_DIARIZATION_MODEL` | `pyannote/speaker-diarization-community-1` | WhisperX/pyannote diarization model to load once `HF_TOKEN` is valid. |
 | `CLIPFORGE_OLLAMA_URL` | `http://localhost:11434` | Local LLM (Ollama) for AI titles/hooks; used only if reachable. |
 | `CLIPFORGE_LLM_MODEL` | *auto* | Ollama model for titles — auto-picks the strongest installed (qwen3 → llama3.1 → …). Set to force. |
+| `CLIPFORGE_DEFAULT_POWER_MODE` | *auto* | Override the project/profile default (`balanced`, `max_gpu`, `quality`). Auto picks `max_gpu` on CUDA-ready or high-VRAM NVIDIA systems. |
 | `CLIPFORGE_RENDER_WORKERS` | *auto* | Parallel clip renders (scaled to CPU cores). |
 | `CLIPFORGE_CODEC` | `h264` | `av1` opts into av1_nvenc (RTX 40/50 series) — better quality per bitrate. |
-| `CLIPFORGE_WHISPER_BATCH` | `8` | Batched-inference batch size for faster-whisper on GPU (keeps the card saturated). |
+| `CLIPFORGE_WHISPER_BATCH` | *auto* | Batched-inference batch size for faster-whisper on GPU (keeps the card saturated). |
 | `CLIPFORGE_DENO_BIN` | auto | Override Deno executable path for yt-dlp YouTube player parsing. Setup installs a local copy in `.tools/deno`. |
 | `CLIPFORGE_YOLO_MODEL` | `yolo11n.pt` | YOLO subject-tracking model. Set `yolo26n.pt` to opt into YOLO26 when `ultralytics>=8.4` is installed. |
 | `CLIPFORGE_ASD_DIR` | – | Path to an [LR-ASD](https://github.com/Junhua-Liao/LR-ASD) checkout to enable active-speaker attribution. |
@@ -172,9 +173,12 @@ By default, `setup.bat` pulls the strongest hardware-fit local models it can:
 on a 16 GB NVIDIA GPU / 32 GB RAM machine this is the strongest installed
 compatible vision model (`qwen3-vl` if available, then `qwen2.5vl`) for visual
 scoring and `qwen3:14b` / `gemma4` tier models for titles/virality. `run.bat`
-starts Ollama when available, but does not force `max_gpu` or a large Whisper
-model. ClipForge chooses balanced/CPU-safe defaults when CUDA ASR dependencies
-are missing, and upgrades automatically once the CUDA runtime is usable.
+starts Ollama when available. ClipForge chooses the project/profile default from
+the capability report: `max_gpu` on CUDA-ready or high-VRAM NVIDIA machines,
+`balanced` elsewhere. Individual stages still fall back safely when CUDA ASR
+runtime packages are missing; the UI now surfaces "GPU detected" separately from
+"CUDA ready" so setup problems are visible instead of silently looking like CPU
+hardware.
 `CLIPFORGE_LLM_MODEL` / `CLIPFORGE_VLM_MODEL` stay unset so ClipForge
 automatically chooses the strongest installed compatible Ollama model. Set
 either variable only when you want to force a specific model.
