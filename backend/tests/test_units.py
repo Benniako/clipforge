@@ -515,6 +515,14 @@ def test_power_mode_scales_local_engine():
     assert s.capability_report()["recommended_power_mode"] == "max_gpu"
 
 
+def test_power_mode_recommends_high_vram_nvidia_even_without_cuda_runtime():
+    s = _settings(has_cuda=False, has_nvidia=True, vram_mb=16000, device="cpu")
+    flat = s.capability_report()
+    assert flat["gpu"] is False
+    assert flat["gpu_detected"] is True
+    assert flat["recommended_power_mode"] == "max_gpu"
+
+
 def test_av1_codec_opt_in_with_safe_fallbacks():
     # av1 requested + encoder present -> av1_nvenc
     av1 = _settings(has_nvenc=True, has_nvidia=True, has_av1_nvenc=True,
@@ -2710,7 +2718,8 @@ def test_capability_report_includes_new_detector_fields():
     """The flat report carries the new deno/ollama/torchaudio/ocr-engine flags."""
     from app.config import get_settings
     flat = get_settings().capability_report()
-    for key in ("deno", "ollama", "torchaudio", "paddleocr", "easyocr"):
+    for key in ("deno", "ollama", "torchaudio", "paddleocr", "easyocr", "tesseract",
+                "gpu_detected", "llm", "vlm"):
         assert key in flat, f"flat report missing new field '{key}'"
         assert isinstance(flat[key], bool), f"{key} should be bool"
 

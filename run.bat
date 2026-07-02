@@ -1,5 +1,5 @@
 @echo off
-setlocal
+setlocal enabledelayedexpansion
 cd /d "%~dp0"
 if not exist ".venv\Scripts\python.exe" (
     echo Please run setup.bat first.
@@ -33,33 +33,36 @@ echo Starting Ollama if available...
 powershell -ExecutionPolicy Bypass -NoProfile -File "%~dp0scripts\setup_ollama_models.ps1" -StartOnly -MaxWaitSeconds 3 >nul 2>&1
 
 echo Checking ClipForge backend...
-powershell -NoProfile -ExecutionPolicy Bypass -Command "try { $r = Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:8000/api/ready' -TimeoutSec 2; if ($r.StatusCode -eq 200) { exit 0 } } catch {}; exit 1" >nul 2>&1
+set CLIPFORGE_PORT=8000
+powershell -NoProfile -ExecutionPolicy Bypass -Command "try { $r = Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:%CLIPFORGE_PORT%/api/ready' -TimeoutSec 2; if ($r.StatusCode -eq 200) { exit 0 } } catch {}; exit 1" >nul 2>&1
 if errorlevel 1 (
+    for /f "usebackq delims=" %%P in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "$used = @(Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | ForEach-Object LocalPort); if ($used -contains 8000) { 8010..8099 | Where-Object { $used -notcontains $_ } | Select-Object -First 1 } else { 8000 }"`) do set "CLIPFORGE_PORT=%%P"
+    if "!CLIPFORGE_PORT!"=="" set CLIPFORGE_PORT=8010
     echo Starting ClipForge backend in a new window...
-    start "ClipForge backend - close this window to stop" "%~dp0.venv\Scripts\python.exe" -m uvicorn app.main:app --app-dir backend --port 8000
+    start "ClipForge backend - close this window to stop" "%~dp0.venv\Scripts\python.exe" -m uvicorn app.main:app --app-dir backend --port !CLIPFORGE_PORT!
 ) else (
     echo ClipForge backend is already running.
 )
 
 echo Waiting until the server is ready...
 for /l %%I in (1,1,60) do (
-    powershell -NoProfile -ExecutionPolicy Bypass -Command "try { $r = Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:8000/api/ready' -TimeoutSec 2; if ($r.StatusCode -eq 200) { exit 0 } } catch {}; exit 1" >nul 2>&1
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "try { $r = Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:!CLIPFORGE_PORT!/api/ready' -TimeoutSec 2; if ($r.StatusCode -eq 200) { exit 0 } } catch {}; exit 1" >nul 2>&1
     if not errorlevel 1 goto ready
     timeout /t 1 /nobreak >nul
 )
 
 echo(
-echo ClipForge did not become ready on http://localhost:8000.
+echo ClipForge did not become ready on http://localhost:!CLIPFORGE_PORT!.
 echo If the backend window closed, scroll up there for the Python error.
 echo You can also run this for details:
-echo   .venv\Scripts\python.exe -m uvicorn app.main:app --app-dir backend --port 8000
+echo   .venv\Scripts\python.exe -m uvicorn app.main:app --app-dir backend --port !CLIPFORGE_PORT!
 echo(
 pause
 exit /b 1
 
 :ready
-start "" http://localhost:8000
+start "" http://localhost:!CLIPFORGE_PORT!
 echo(
-echo ClipForge is running at  http://localhost:8000
+echo ClipForge is running at  http://localhost:!CLIPFORGE_PORT!
 echo To stop it, close the "ClipForge backend" window.
 echo(

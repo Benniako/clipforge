@@ -121,7 +121,7 @@ def _has_module(name: str) -> bool:
         return False
 
 
-def _detect_ocr() -> str:
+def _detect_ocr(has_gpu: bool | None = None) -> str:
     """Best available OCR backend for on-screen game text, or "" if none.
 
     On GPU systems EasyOCR is preferred — it uses torch CUDA directly and
@@ -129,7 +129,7 @@ def _detect_ocr() -> str:
     accurate on static HUD text but falls to CPU inference on most installs
     (no paddlepaddle-gpu), making it slower per-frame than EasyOCR GPU.
     """
-    gpu = _torch_cuda_available() or _detect_nvidia_gpu()
+    gpu = (_torch_cuda_available() or _detect_nvidia_gpu()) if has_gpu is None else has_gpu
     if gpu and _has_module("easyocr"):
         return "easyocr"
     if _has_module("paddleocr"):
@@ -275,13 +275,15 @@ def _ct2_cuda_runtime_available() -> bool:
         return False
 
 
-def _detect_cuda() -> bool:
+def _detect_cuda(has_nvidia: bool | None = None) -> bool:
     """True if CUDA is usable by the ASR stack (ctranslate2), not only visible
     to PyTorch. This is the stricter check — used for capability reporting and
     ASR-specific decisions. For the broader `device` default (which also covers
     torch-based models like whisperX), see :func:`_detect_any_cuda`."""
     if os.name == "nt":
-        if not _detect_nvidia_gpu():
+        if has_nvidia is None:
+            has_nvidia = _detect_nvidia_gpu()
+        if not has_nvidia:
             return False
         if not _ct2_cuda_runtime_available():
             return False
@@ -297,7 +299,8 @@ def _detect_cuda() -> bool:
     return False
 
 
-def _detect_any_cuda() -> bool:
+def _detect_any_cuda(has_nvidia: bool | None = None,
+                     has_cuda: bool | None = None) -> bool:
     """True when ANY CUDA-capable backend is usable (ctranslate2 OR torch).
 
     This is the broader check used to decide the default ``device``: if the
@@ -306,9 +309,13 @@ def _detect_any_cuda() -> bool:
     to CPU when the strict ``has_cuda`` is False but ``device="cuda"`` still
     accelerates alignment, VAD, VLM, and other torch-based stages.
     """
-    if not _detect_nvidia_gpu():
+    if has_nvidia is None:
+        has_nvidia = _detect_nvidia_gpu()
+    if not has_nvidia:
         return False
-    if _detect_cuda():
+    if has_cuda is None:
+        has_cuda = _detect_cuda(has_nvidia)
+    if has_cuda:
         return True
     return _torch_cuda_available()
 
@@ -451,6 +458,7 @@ class Settings:
     has_torchaudio: bool = False # wav2vec2 forced alignment for tighter captions
     has_paddleocr: bool = False  # OCR engine (best accuracy overall)
     has_easyocr: bool = False    # OCR engine (best on noisy frames)
+    has_tesseract: bool = False  # OCR fallback via pytesseract + tesseract binary
     has_scrfd: bool = False      # SCRFD face detection (upgrade from YuNet)
 
     # --- pipeline tunables ----------------------------------------------
@@ -577,6 +585,8 @@ class Settings:
                      "PaddleOCR", "Best overall OCR accuracy for in-game HUD text."),
                 item("easyocr", self.has_easyocr,
                      "EasyOCR", "Better than PaddleOCR on noisy/bitrate-starved frames."),
+                item("tesseract", self.has_tesseract,
+                     "Tesseract", "CPU OCR fallback for sparse text when deep OCR engines are absent."),
                 item("ocr_selected", bool(self.ocr_engine),
                      f"Active OCR: {self.ocr_engine or 'none'}",
                      "Selected automatically from the engines above. None = OCR detection skipped."),
@@ -689,7 +699,25 @@ class Settings:
         return {"budget": 45.0, "max_workers": 1, "n_frames": 2,
                 "timeout": 30.0}
 
+    def recommended_power_mode(self) -> str:
+        """Best default profile for this machine.
+
+        Use actual CUDA when it works, but also honor a high-VRAM NVIDIA card as
+        a strong signal for the user's intended workstation profile. Individual
+        stages still degrade when a CUDA runtime package is missing; this only
+        selects the UI/default project profile.
+        """
+        env = os.environ.get("CLIPFORGE_DEFAULT_POWER_MODE")
+        if env in {"balanced", "max_gpu", "quality"}:
+            return env
+        if self.has_cuda and self.vram_mb >= 8000:
+            return "max_gpu"
+        if self.has_nvidia and self.vram_mb >= 12000:
+            return "max_gpu"
+        return "balanced"
+
     def capability_report(self) -> dict:
+        has_local_ai = self.has_ollama or self.has_openmodel
         return {
             "ffmpeg": bool(self.ffmpeg),
             "ffprobe": bool(self.ffprobe),
@@ -706,6 +734,7 @@ class Settings:
             "face_tracking": self.has_opencv,
             "url_import": self.has_ytdlp,
             "gpu": self.has_cuda,
+            "gpu_detected": self.has_nvidia,
             "gpu_encode": self.use_nvenc,
             "codec": ("av1" if self.use_nvenc and self.codec == "av1"
                       and self.has_av1_nvenc else "h264"),
@@ -715,16 +744,19 @@ class Settings:
             "auto_model": self.auto_model,
             "vram_gb": round(self.vram_mb / 1024, 1) if self.vram_mb else 0,
             "cpu": os.cpu_count() or 0,
-            "recommended_power_mode": (
-                "max_gpu" if self.has_cuda and self.vram_mb >= 12000 else "balanced"
-            ),
+            "recommended_power_mode": self.recommended_power_mode(),
             # New, surfaced for the diagnostics panel.
             "deno": self.has_deno,
             "ollama": self.has_ollama,
             "ollama_models": self.ollama_models,
+            "llm": has_local_ai,
+            "llm_model": self.ollama_text if self.has_ollama else None,
+            "vlm": self.has_ollama,
+            "vlm_model": self.ollama_vision if self.has_ollama else None,
             "torchaudio": self.has_torchaudio,
             "paddleocr": self.has_paddleocr,
             "easyocr": self.has_easyocr,
+            "tesseract": self.has_tesseract,
             "scrfd": self.has_scrfd,
         }
 
@@ -737,11 +769,11 @@ def get_settings() -> Settings:
     data_dir.mkdir(parents=True, exist_ok=True)
     media_dir.mkdir(parents=True, exist_ok=True)
 
-    ffmpeg, ffprobe = _resolve_ffmpeg()
-    has_cuda = _detect_cuda()
-    has_any_cuda = _detect_any_cuda()
-    has_nvenc, has_av1_nvenc = _detect_nvenc(ffmpeg)
     has_nvidia = _detect_nvidia_gpu()
+    ffmpeg, ffprobe = _resolve_ffmpeg()
+    has_cuda = _detect_cuda(has_nvidia)
+    has_any_cuda = _detect_any_cuda(has_nvidia, has_cuda)
+    has_nvenc, has_av1_nvenc = _detect_nvenc(ffmpeg)
     vram_mb = _detect_vram_mb()
     # Device default: prefer CUDA when *any* GPU backend is usable (not just
     # ctranslate2). torch-based models (whisperX alignment, VAD, VLM) benefit
@@ -770,7 +802,7 @@ def get_settings() -> Settings:
         has_whisperx=_has_module("whisperx"),
         has_opencv=_has_module("cv2"),
         has_ytdlp=_has_module("yt_dlp"),
-        ocr_engine=_detect_ocr(),
+        ocr_engine=_detect_ocr(has_any_cuda or has_nvidia),
         has_vad=_has_module("silero_vad"),
         has_scenedetect=_has_module("scenedetect"),
         has_emotion=_has_module("funasr"),
@@ -794,6 +826,7 @@ def get_settings() -> Settings:
         has_torchaudio=_has_module("torchaudio"),
         has_paddleocr=_has_module("paddleocr"),
         has_easyocr=_has_module("easyocr"),
+        has_tesseract=_has_module("pytesseract") and bool(_find_executable("tesseract")),
         has_scrfd=_has_module("scrfd"),
         device=device,
         whisper_model=whisper_model,

@@ -288,6 +288,7 @@ export interface Health {
     face_tracking: boolean;
     url_import: boolean;
     gpu: boolean;
+    gpu_detected: boolean;
     gpu_encode: boolean;
     device: string;
     llm: boolean;
@@ -303,6 +304,7 @@ export interface Health {
     /** New diagnostics-panel fields (from /api/capabilities). */
     deno: boolean;
     ollama: boolean;
+    ollama_models: string;
     torchaudio: boolean;
     paddleocr: boolean;
     easyocr: boolean;

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link, Route, Routes } from "react-router-dom";
 import { api } from "./lib/api";
 import type { Health } from "./lib/types";
+import { capabilityReadiness, capabilitySummary } from "./lib/capabilities";
 import CueModal from "./components/CueModal";
 import DiagnosticsPanel from "./components/DiagnosticsPanel";
 import { useT, LanguageToggle } from "./lib/i18n";
@@ -10,25 +11,15 @@ import ProjectView from "./screens/ProjectView";
 import Upload from "./screens/Upload";
 
 function Caps({ health }: { health: Health | null }) {
+  const { t } = useT();
   if (!health) return null;
   const c = health.capabilities;
-  // Count active capabilities
-  const count = Object.entries(c).filter(([k, v]) =>
-    typeof v === "boolean" && v === true && !k.includes("auto_model")
-  ).length;
-  const total = Object.entries(c).filter(([k, v]) =>
-    typeof v === "boolean" && !k.includes("auto_model")
-  ).length;
-  const pct = total > 0 ? Math.round((count / total) * 100) : 0;
-  // Short summary for the nav strip — full details in diagnostics panel
-  const engine =
-    c.transcription === "whisperx" ? "WhisperX" : c.transcription === "whisper" ? "Whisper" : "Synthetisch";
-  const summary = [
-    `${engine}${c.diarization ? "+DZ" : ""}`,
-    c.gpu_encode ? "GPU" : c.gpu ? "GPU" : "CPU",
-    c.audio_events ? "Audio" : "",
-    c.ocr || "no OCR",
-  ].filter(Boolean).join(" · ");
+  const { count, total, pct } = capabilityReadiness(c);
+  const summary = capabilitySummary(c, {
+    synthetic: t("caps.synthetic"),
+    gpuDetected: t("caps.gpuDetected"),
+    ocrOff: t("caps.ocrOff"),
+  });
   return (
     <div className="caps" title="ClipForge System-Erkennung — klicke für Details">
       <span className="caps-summary">{summary}</span>

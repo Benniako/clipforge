@@ -67,10 +67,10 @@ export default function Upload({ health }: { health: Health | null }) {
   const [denoise, setDenoise] = useState(false);
   const [motion, setMotion] = useState("none");
   const [facecamLayout, setFacecamLayout] = useState("auto");
-  const [useOcr, setUseOcr] = useState(true);
-  const [useVlm, setUseVlm] = useState(true);
+  const [useOcr, setUseOcr] = useState(false);
+  const [useVlm, setUseVlm] = useState(false);
   const [useCues, setUseCues] = useState(() => localStorage.getItem("clipforge.useCues") !== "off");
-  const [useAudioEvents, setUseAudioEvents] = useState(true);
+  const [useAudioEvents, setUseAudioEvents] = useState(false);
   const [cueLearning, setCueLearning] = useState(true);
   const [autoLength, setAutoLength] = useState(false);
   const [manualContext, setManualContext] = useState(false);
@@ -82,6 +82,12 @@ export default function Upload({ health }: { health: Health | null }) {
   const [pct, setPct] = useState(0);
   const [err, setErr] = useState<string | null>(null);
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
+  const [capDefaultsApplied, setCapDefaultsApplied] = useState(false);
+  const caps = health?.capabilities;
+  const ocrAvailable = Boolean(caps?.ocr);
+  const vlmAvailable = Boolean(caps?.vlm);
+  const audioEventsAvailable = Boolean(caps?.audio_events);
+  const detectorEnabled = (enabled: boolean, available: boolean) => enabled && available;
 
   // Auto-dismiss the error toast (no CSS animation drives it).
   useEffect(() => {
@@ -97,9 +103,17 @@ export default function Upload({ health }: { health: Health | null }) {
   }, []);
 
   useEffect(() => {
-    const recommended = health?.capabilities.recommended_power_mode;
+    const recommended = caps?.recommended_power_mode;
     if (recommended) setPowerMode(recommended);
-  }, [health?.capabilities.recommended_power_mode]);
+  }, [caps?.recommended_power_mode]);
+
+  useEffect(() => {
+    if (!caps || capDefaultsApplied) return;
+    setUseOcr(ocrAvailable);
+    setUseVlm(vlmAvailable);
+    setUseAudioEvents(audioEventsAvailable);
+    setCapDefaultsApplied(true);
+  }, [audioEventsAvailable, capDefaultsApplied, caps, ocrAvailable, vlmAvailable]);
 
   useEffect(() => {
     localStorage.setItem("clipforge.useCues", useCues ? "on" : "off");
@@ -172,10 +186,10 @@ export default function Upload({ health }: { health: Health | null }) {
         // emphasis/emoji, speaker colours, zoom, B-roll, hook check).
         ai_boost: aiBoost,
         facecam_layout: facecamLayout,
-        use_ocr: useOcr,
-        use_vlm: useVlm,
+        use_ocr: detectorEnabled(useOcr, ocrAvailable),
+        use_vlm: detectorEnabled(useVlm, vlmAvailable),
         use_cues: useCues,
-        use_audio_events: useAudioEvents,
+        use_audio_events: detectorEnabled(useAudioEvents, audioEventsAvailable),
         cue_learning: cueLearning,
         auto_length: autoLength,
         lead_seconds: manualContext ? leadSeconds : null,
@@ -212,7 +226,6 @@ export default function Upload({ health }: { health: Health | null }) {
     });
 
   const urlDisabled = health ? !health.capabilities.url_import : false;
-  const caps = health?.capabilities;
   const status = {
     captions: caps?.transcription && caps.transcription !== "synthetic" ? caps.transcription : "synthetic",
     cleanVoice: caps?.denoise ? t("up.statusReady") : t("up.statusUnavailable"),
@@ -437,31 +450,34 @@ export default function Upload({ health }: { health: Health | null }) {
           <label>{t("up.detectionToggles")}</label>
           <div className="toggle-stack compact capability-toggles">
             <button
-              className={"toggle" + (useOcr ? " on" : "")}
+              className={"toggle" + (useOcr ? " on" : "") + (!ocrAvailable ? " disabled" : "")}
+              disabled={!ocrAvailable}
               onClick={() => setUseOcr((v) => !v)}
               title={t("up.ocrTitle")}
             >
               <span>OCR</span>
               <small>{status.ocr}</small>
-              <i>{useOcr ? t("up.on") : t("up.off")}</i>
+              <i>{useOcr && ocrAvailable ? t("up.on") : t("up.off")}</i>
             </button>
             <button
-              className={"toggle" + (useVlm ? " on" : "")}
+              className={"toggle" + (useVlm ? " on" : "") + (!vlmAvailable ? " disabled" : "")}
+              disabled={!vlmAvailable}
               onClick={() => setUseVlm((v) => !v)}
               title={t("up.aiVisionTitle")}
             >
               <span>{t("up.aiVision")}</span>
               <small>{status.vlm}</small>
-              <i>{useVlm ? t("up.on") : t("up.off")}</i>
+              <i>{useVlm && vlmAvailable ? t("up.on") : t("up.off")}</i>
             </button>
             <button
-              className={"toggle" + (useAudioEvents ? " on" : "")}
+              className={"toggle" + (useAudioEvents ? " on" : "") + (!audioEventsAvailable ? " disabled" : "")}
+              disabled={!audioEventsAvailable}
               onClick={() => setUseAudioEvents((v) => !v)}
               title={t("up.audioEventsTitle")}
             >
               <span>{t("up.audioEvents")}</span>
               <small>{status.audio}</small>
-              <i>{useAudioEvents ? t("up.on") : t("up.off")}</i>
+              <i>{useAudioEvents && audioEventsAvailable ? t("up.on") : t("up.off")}</i>
             </button>
             <button
               className={"toggle" + (cueLearning ? " on" : "")}
