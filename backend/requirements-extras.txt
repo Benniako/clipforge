@@ -22,6 +22,7 @@ paddleocr>=3.2
 paddlepaddle>=3.2
 transformers>=4.45
 easyocr>=1.7
+pytesseract>=0.3.13
 rapidfuzz>=3.0
 
 # Speech-emotion excitement signal (laughs/hype/rage) for virality.
@@ -31,6 +32,9 @@ modelscope>=1.15
 # Content-aware vertical reframe — tracks people/objects through cuts.
 # Default is YOLO11 nano. Opt into YOLO26 with CLIPFORGE_YOLO_MODEL=yolo26n.pt.
 ultralytics>=8.4
+
+# Stronger face detection for speaker-aware reframing than the OpenCV fallback.
+scrfd>=0.3.0
 
 # Higher-quality transcription: forced word alignment + speaker diarization.
 # Diarization also needs a Hugging Face token (HF_TOKEN).
