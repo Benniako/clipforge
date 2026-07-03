@@ -395,6 +395,33 @@ def test_diarization_capability_requires_token():
     assert _settings(has_whisperx=True, hf_token=None).capability_report()["diarization_model"] is None
 
 
+def test_whisperx_torchaudio_metadata_shim_restores_removed_type():
+    from app.providers import transcribe as T
+
+    old_torchaudio = sys.modules.get("torchaudio")
+    fake = types.ModuleType("torchaudio")
+    try:
+        sys.modules["torchaudio"] = fake
+        T._patch_torchaudio_metadata()
+        assert hasattr(fake, "AudioMetaData")
+        meta = fake.AudioMetaData(
+            sample_rate=48000,
+            num_frames=96000,
+            num_channels=2,
+            bits_per_sample=16,
+            encoding="PCM_S",
+        )
+        assert meta.sample_rate == 48000
+        assert meta.num_channels == 2
+        assert fake.list_audio_backends() == ["soundfile"]
+        assert callable(fake.info)
+    finally:
+        if old_torchaudio is None:
+            sys.modules.pop("torchaudio", None)
+        else:
+            sys.modules["torchaudio"] = old_torchaudio
+
+
 def test_whisperx_diarization_constructor_supports_new_and_old_token_api():
     from app.providers import transcribe as T
 
@@ -2178,6 +2205,25 @@ def test_clap_loader_hides_server_args_and_restores_argv():
             sys.modules.pop("laion_clap", None)
         else:
             sys.modules["laion_clap"] = old_mod
+
+
+def test_audio_event_torch_device_uses_cpu_without_torch_cuda():
+    from app.providers import audio_events as AE
+
+    old_get_settings = AE.get_settings
+    old_torch = sys.modules.get("torch")
+    fake_torch = types.ModuleType("torch")
+    fake_torch.cuda = types.SimpleNamespace(is_available=lambda: False)
+    sys.modules["torch"] = fake_torch
+    AE.get_settings = lambda: _settings(device="cuda")
+    try:
+        assert AE._torch_inference_device() == "cpu"
+    finally:
+        AE.get_settings = old_get_settings
+        if old_torch is None:
+            sys.modules.pop("torch", None)
+        else:
+            sys.modules["torch"] = old_torch
 
 
 def test_clap_loader_uses_nonstrict_checkpoint_fallback():

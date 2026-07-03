@@ -186,6 +186,20 @@ def capability_flags() -> dict[str, bool]:
     }
 
 
+def _torch_inference_device() -> str:
+    """Torch-backed audio models need PyTorch CUDA, not just ASR CUDA."""
+    if get_settings().device != "cuda":
+        return "cpu"
+    try:
+        import torch
+
+        if bool(torch.cuda.is_available()):
+            return "cuda"
+    except Exception:
+        pass
+    return "cpu"
+
+
 def _load():
     global _tagger
     if _tagger is not None:
@@ -194,7 +208,7 @@ def _load():
         from panns_inference import AudioTagging
         from panns_inference.config import labels
 
-        device = "cuda" if get_settings().device == "cuda" else "cpu"
+        device = _torch_inference_device()
         _tagger = (AudioTagging(checkpoint_path=None, device=device), list(labels))
         log.info("PANNs audio tagging loaded (%d classes)", len(labels))
     except Exception as e:
@@ -226,7 +240,7 @@ def _load_clap():
                 sys.argv = [old_argv[0] if old_argv else "clipforge"]
                 import laion_clap
 
-                device = "cuda" if get_settings().device == "cuda" else "cpu"
+                device = _torch_inference_device()
                 model = laion_clap.CLAP_Module(enable_fusion=False, device=device)
                 _load_clap_checkpoint(model)
                 _clap = model

@@ -92,6 +92,43 @@ def _ensure_cuda_dlls() -> None:
                 pass
 
 
+def _patch_torchaudio_metadata() -> None:
+    """Restore the old torchaudio annotation expected by pyannote/whisperX."""
+    try:
+        import torchaudio
+    except Exception:
+        return
+    if hasattr(torchaudio, "AudioMetaData"):
+        AudioMetaData = torchaudio.AudioMetaData
+    else:
+        from typing import NamedTuple
+
+        class AudioMetaData(NamedTuple):
+            sample_rate: int
+            num_frames: int
+            num_channels: int
+            bits_per_sample: int
+            encoding: str
+
+        torchaudio.AudioMetaData = AudioMetaData  # type: ignore[attr-defined]
+    if not hasattr(torchaudio, "list_audio_backends"):
+        torchaudio.list_audio_backends = lambda: ["soundfile"]  # type: ignore[attr-defined]
+    if not hasattr(torchaudio, "info"):
+        def _info(uri, backend=None):  # noqa: ANN001 - mirrors torchaudio API
+            import soundfile as sf
+
+            data = sf.info(uri)
+            return AudioMetaData(
+                sample_rate=int(data.samplerate),
+                num_frames=int(data.frames),
+                num_channels=int(data.channels),
+                bits_per_sample=0,
+                encoding=str(getattr(data, "subtype", "") or getattr(data, "format", "")),
+            )
+
+        torchaudio.info = _info  # type: ignore[attr-defined]
+
+
 def _load_whisper():
     global _model
     if _model is not None:
@@ -225,6 +262,7 @@ def _load_whisperx_model():
     global _wx_model
     if _wx_model is not None:
         return _wx_model
+    _patch_torchaudio_metadata()
     import whisperx
 
     _ensure_cuda_dlls()
@@ -243,6 +281,7 @@ def _diarization_pipeline():
     s = get_settings()
     if not s.hf_token:
         return None
+    _patch_torchaudio_metadata()
     try:  # location moved across whisperX versions
         from whisperx.diarize import DiarizationPipeline
     except Exception:
@@ -262,6 +301,7 @@ def _diarization_pipeline():
 
 
 def _whisperx_transcribe(audio_path, language, progress, batch_size: int) -> Transcript:
+    _patch_torchaudio_metadata()
     import whisperx
 
     _ensure_ffmpeg_on_path()
