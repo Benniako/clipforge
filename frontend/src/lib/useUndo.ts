@@ -25,6 +25,7 @@ export interface UndoState {
   cam: { x: number; y: number; w: number; h: number } | null;
   aspect: string;
   capSpeakers: number[] | null;
+  loopPreviewSeconds: number;
 }
 
 export function useUndo(initial: UndoState) {

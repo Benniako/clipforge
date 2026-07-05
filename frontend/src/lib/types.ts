@@ -98,6 +98,7 @@ export interface Clip {
   // (null = all). Drives the editor's per-speaker caption toggles.
   speakers: number[];
   caption_speakers: number[] | null;
+  loop_preview_seconds: number;
   tightened_duration: number | null;
   export_url: string | null;
   thumb_url: string | null;

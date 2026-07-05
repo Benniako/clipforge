@@ -2067,6 +2067,19 @@ def test_speakers_in_lists_present_speakers():
     assert captionize.speakers_in(tr, 0.0, 0.6) == [0]   # only speaker 0 talks early
 
 
+def test_loop_preview_caption_sidecar_duplicates_tail():
+    from app.models import CaptionSet, CaptionWord
+    caps = CaptionSet(words=[
+        CaptionWord(t=0.5, d=0.3, text="open"),
+        CaptionWord(t=8.0, d=0.4, text="button"),
+    ])
+
+    looped = captionize.with_loop_preview(caps, 3.0, 10.0)
+
+    assert [w.text for w in looped.words] == ["button", "open", "button"]
+    assert [w.t for w in looped.words] == [1.0, 3.5, 11.0]
+
+
 def test_caption_does_not_linger_through_silence():
     from app.models import CaptionSet, CaptionWord
     # word at t=0, then a 3s gap, then a word — within one line the first word
@@ -3349,6 +3362,59 @@ def test_broll_pip_writes_complex_filtergraph():
     assert "broll_overlay" in src
     assert "between(t," in src  # enable gate
     assert "filter_complex_script" in src  # switches from simple to complex
+
+
+def test_render_loop_preview_prepends_tail_to_rendered_clip():
+    import tempfile
+    from pathlib import Path
+    from app.media import ffmpeg
+    from app.media.ffmpeg import MediaInfo
+    from app.pipeline import render as R
+    from app.styles import get_style
+
+    class FakeSettings:
+        use_nvenc = False
+        has_nvidia = False
+
+        def video_encoder_args(self):
+            return ["-c:v", "libx264"]
+
+    calls = []
+    graphs = []
+    thumbs = []
+
+    def fake_run(args, **kwargs):
+        calls.append(args)
+        if "loop.txt" in args:
+            graphs.append((Path(kwargs["cwd"]) / "loop.txt").read_text())
+        return ""
+
+    orig_get_settings = R.get_settings
+    orig_run = ffmpeg.run
+    orig_make_thumbnail = R._make_thumbnail
+    try:
+        R.get_settings = lambda: FakeSettings()  # type: ignore[method-assign]
+        ffmpeg.run = fake_run
+        R._make_thumbnail = lambda *a, **kw: thumbs.append(kw)  # type: ignore[method-assign]
+
+        clip = Clip(start=0.0, end=10.0, title="loop", loop_preview_seconds=3.0)
+        info = MediaInfo(duration=12.0, width=640, height=360, fps=30.0,
+                         has_audio=False, has_video=True, codec="h264")
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "out.mp4"
+            thumb = Path(td) / "out.jpg"
+            R.render_clip(clip, "source.mp4", info, get_style("bold-pop"), out, thumb,
+                          out_w=1080, out_h=1920, burn_captions=False)
+
+        assert len(calls) == 2
+        assert calls[1][calls[1].index("-ss") + 1] == "7.000"
+        assert calls[1][calls[1].index("-t") + 1] == "3.000"
+        assert graphs and "concat=n=2:v=1:a=0" in graphs[0]
+        assert thumbs[-1]["duration"] == 13.0
+    finally:
+        R.get_settings = orig_get_settings
+        ffmpeg.run = orig_run
+        R._make_thumbnail = orig_make_thumbnail
 
 
 def test_render_cpu_fallback_keeps_gpu_decode():

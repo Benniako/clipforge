@@ -141,6 +141,34 @@ def speakers_in(transcript: Transcript, start: float, end: float) -> list[int]:
     return sorted(seen)
 
 
+def with_loop_preview(captions: CaptionSet, preview_s: float,
+                      base_duration: float) -> CaptionSet:
+    """Duplicate the final preview_s seconds of captions at the start."""
+    preview_s = max(float(preview_s or 0.0), 0.0)
+    base_duration = max(float(base_duration or 0.0), 0.0)
+    if preview_s <= 0.0 or base_duration <= 0.0:
+        return captions
+
+    preview_s = min(preview_s, 5.0, max(base_duration - 0.25, 0.0))
+    if preview_s <= 0.0:
+        return captions
+    tail_start = max(base_duration - preview_s, 0.0)
+    words: list[CaptionWord] = []
+    for w in captions.words:
+        w_start, w_end = w.t, w.t + w.d
+        if w_end <= tail_start or w_start >= base_duration:
+            continue
+        start = max(w_start, tail_start)
+        end = min(w_end, base_duration)
+        words.append(w.model_copy(update={
+            "t": round(start - tail_start, 3),
+            "d": round(max(end - start, 0.04), 3),
+        }))
+    words.extend(w.model_copy(update={"t": round(w.t + preview_s, 3)})
+                 for w in captions.words)
+    return captions.model_copy(update={"words": words})
+
+
 # --------------------------------------------------------------------------- #
 # In-game voice suppression (gameplay captions)
 # --------------------------------------------------------------------------- #

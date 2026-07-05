@@ -47,6 +47,14 @@ def _filter_caption_words_by_speakers(words: list[CaptionWord],
     return [w for w in words if (w.speaker or 0) in speakers]
 
 
+def _caption_export_set(clip: Clip):
+    preview = max(float(getattr(clip, "loop_preview_seconds", 0.0) or 0.0), 0.0)
+    duration = float(clip.tightened_duration or clip.duration)
+    if preview <= 0.0:
+        return clip.captions
+    return captionize.with_loop_preview(clip.captions, preview, duration)
+
+
 class ClipEdit(BaseModel):
     title: str | None = None
     description: str | None = None
@@ -442,7 +450,7 @@ def download_srt(project_id: str, clip_id: str):
     safe = "".join(c if c.isalnum() or c in " -_" else "_" for c in clip.title).strip()
     fname = f"{(safe or clip_id)[:60]}.srt"
     return PlainTextResponse(
-        build_srt(clip.captions), media_type="application/x-subrip",
+        build_srt(_caption_export_set(clip)), media_type="application/x-subrip",
         headers={"Content-Disposition": f"attachment; filename={fname}"})
 
 

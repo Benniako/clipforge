@@ -30,6 +30,7 @@ from ..config import get_settings
 from ..models import (ASPECTS, AiBoostSettings, ContentType, GameProfileConfig,
                       ImportSettings, Platform, PowerMode, Project,
                       ProjectStatus, ProjectSummary)
+from ..pipeline import captionize
 from ..pipeline import ingest
 from ..pipeline.captions import build_srt, build_vtt
 from ..pipeline.nle_export import build_cmx3600, ready_clips_for_edl
@@ -694,7 +695,13 @@ def _status_payload(project_id: str) -> dict | None:
             {
                 "id": c.id, "title": c.title, "score": c.score, "kind": c.kind,
                 "status": c.status,
-                "duration": round(c.tightened_duration or c.duration, 2),
+                "duration": round(
+                    (c.tightened_duration or c.duration)
+                    + min(max(float(getattr(c, "loop_preview_seconds", 0.0) or 0.0), 0.0),
+                          5.0,
+                          max((c.tightened_duration or c.duration) - 0.25, 0.0)),
+                    2,
+                ),
                 "thumb_url": c.thumb_url, "export_url": c.export_url,
             }
             for c in p.clips
@@ -1133,12 +1140,17 @@ def _download_captions(project_id: str, clip_id: str,
     if not clip.captions or not clip.captions.words:
         raise HTTPException(409, "clip has no captions yet")
 
+    preview = max(float(getattr(clip, "loop_preview_seconds", 0.0) or 0.0), 0.0)
+    duration = float(clip.tightened_duration or clip.duration)
+    captions = (captionize.with_loop_preview(clip.captions, preview, duration)
+                if preview > 0.0 else clip.captions)
+
     if format == "vtt":
-        body = build_vtt(clip.captions)
+        body = build_vtt(captions)
         ext = ".vtt"
         media = "text/vtt"
     else:
-        body = build_srt(clip.captions)
+        body = build_srt(captions)
         ext = ".srt"
         media = "text/plain"
 

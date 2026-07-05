@@ -56,11 +56,12 @@ export default function ClipEditor() {
   const [cam, setCam] = useState<Rect | null>(null);
   const [aspect, setAspect] = useState<string>(""); // "" = project default
   const [capSpeakers, setCapSpeakers] = useState<number[] | null>(null); // null = all
+  const [loopPreviewSeconds, setLoopPreviewSeconds] = useState(0);
   const [showShortcuts, setShowShortcuts] = useState(false);
 
   // Undo/redo history.
   const undo = useUndo({
-    title, start, end, styleId, cx, words, layout, cam, aspect, capSpeakers,
+    title, start, end, styleId, cx, words, layout, cam, aspect, capSpeakers, loopPreviewSeconds,
   });
   // Patch the undo system into the editor state — it records changes and
   // lets us restore snapshots.
@@ -75,6 +76,7 @@ export default function ClipEditor() {
     setCam(snapshot.cam);
     setAspect(snapshot.aspect);
     setCapSpeakers(snapshot.capSpeakers);
+    setLoopPreviewSeconds(snapshot.loopPreviewSeconds);
   }, []);
 
   // Refs for keyboard-driven controls
@@ -178,7 +180,7 @@ export default function ClipEditor() {
   // Record undo snapshots when editor state changes.
   const undoSnapshot = useRef<UndoState | null>(null);
   useEffect(() => {
-    const snap = { title, start, end, styleId, cx, words, layout, cam, aspect, capSpeakers };
+    const snap = { title, start, end, styleId, cx, words, layout, cam, aspect, capSpeakers, loopPreviewSeconds };
     // Skip the initial hydration — only record user edits.
     if (clip && !undoSnapshot.current) {
       undoSnapshot.current = snap;
@@ -189,7 +191,7 @@ export default function ClipEditor() {
       undo.set(snap);
       undoSnapshot.current = snap;
     }
-  }, [title, start, end, styleId, cx, words, layout, cam, aspect, capSpeakers, clip]);
+  }, [title, start, end, styleId, cx, words, layout, cam, aspect, capSpeakers, loopPreviewSeconds, clip]);
 
   useEffect(() => {
     alive.current = true;
@@ -237,6 +239,7 @@ export default function ClipEditor() {
     setCam(c.reframe.facecam ?? null);
     setAspect(c.aspect ?? "");
     setCapSpeakers(c.caption_speakers ?? null);
+    setLoopPreviewSeconds(c.loop_preview_seconds ?? 0);
     // Reset undo history so the first undo doesn't restore empty defaults.
     undo.reset({
       title: c.title,
@@ -249,6 +252,7 @@ export default function ClipEditor() {
       cam: c.reframe.facecam ?? null,
       aspect: c.aspect ?? "",
       capSpeakers: c.caption_speakers ?? null,
+      loopPreviewSeconds: c.loop_preview_seconds ?? 0,
     });
   };
 
@@ -284,10 +288,11 @@ export default function ClipEditor() {
       layout !== clip.reframe.layout ||
       aspect !== (clip.aspect ?? "") ||
       JSON.stringify(capSpeakers) !== JSON.stringify(clip.caption_speakers ?? null) ||
+      Math.abs(loopPreviewSeconds - (clip.loop_preview_seconds ?? 0)) > 0.01 ||
       (cam !== null && JSON.stringify(cam) !== JSON.stringify(clip.reframe.facecam)) ||
       JSON.stringify(words) !== JSON.stringify(editableCaptionWords(clip))
     );
-  }, [clip, title, start, end, styleId, cx, words, layout, cam, aspect, capSpeakers]);
+  }, [clip, title, start, end, styleId, cx, words, layout, cam, aspect, capSpeakers, loopPreviewSeconds]);
 
   const spanChanged = clip && (Math.abs(start - clip.start) > 0.01 || Math.abs(end - clip.end) > 0.01);
   const captionSpeakersDirty =
@@ -308,6 +313,7 @@ export default function ClipEditor() {
         caption_speakers: number[] | null;
         layout: string;
         facecam: { x: number; y: number; w: number; h: number };
+        loop_preview_seconds: number;
         aspect: string;
       }> = {};
       if (title !== clip.title) edit.title = title;
@@ -323,6 +329,8 @@ export default function ClipEditor() {
         edit.caption_speakers = capSpeakers;
       if (cam !== null && JSON.stringify(cam) !== JSON.stringify(clip.reframe.facecam))
         edit.facecam = cam;
+      if (Math.abs(loopPreviewSeconds - (clip.loop_preview_seconds ?? 0)) > 0.01)
+        edit.loop_preview_seconds = loopPreviewSeconds;
       // Only send manual caption edits if the span didn't change (a new span
       // re-derives captions from the transcript on the server).
       if (!spanChanged) {
@@ -388,6 +396,11 @@ export default function ClipEditor() {
   const renderedSrc = clip.export_url ? `${clip.export_url}?v=${renderedKey}` : undefined;
   const originalSrc = mediaTimeUrl(project.source?.path, start, end);
   const videoSrc = previewMode === "original" ? originalSrc : renderedSrc;
+  const baseExportDuration = clip.tightened_duration ?? Math.max(end - start, 0);
+  const loopPreviewEffective = loopPreviewSeconds > 0
+    ? Math.min(loopPreviewSeconds, Math.max(baseExportDuration - 0.25, 0))
+    : 0;
+  const finalExportDuration = baseExportDuration + loopPreviewEffective;
 
   return (
     <div className="container">
@@ -514,6 +527,30 @@ export default function ClipEditor() {
                 {t("ce.spanNote")}
               </div>
             )}
+          </div>
+
+          <div className="panel section">
+            <h3>{t("ce.loopPreview")}</h3>
+            <div className="seg" style={{ marginBottom: 8 }}>
+              {[0, 3, 4, 5].map((seconds) => (
+                <button
+                  key={seconds}
+                  className={Math.abs(loopPreviewSeconds - seconds) < 0.01 ? "on" : ""}
+                  onClick={() => setLoopPreviewSeconds(seconds)}
+                  title={seconds === 0 ? t("ce.loopPreviewOffTitle") : t("ce.loopPreviewTitle", { seconds })}
+                >
+                  {seconds === 0 ? t("ce.loopPreviewNone") : t("ce.loopPreviewSeconds", { seconds })}
+                </button>
+              ))}
+            </div>
+            <span className="muted tiny">
+              {loopPreviewEffective > 0
+                ? t("ce.loopPreviewNote", {
+                    seconds: loopPreviewEffective.toFixed(loopPreviewEffective % 1 ? 1 : 0),
+                    duration: fmtDuration(finalExportDuration),
+                  })
+                : t("ce.loopPreviewOff")}
+            </span>
           </div>
 
           <div className="panel section">

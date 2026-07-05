@@ -402,6 +402,7 @@ export const api = {
       caption_speakers: number[] | null;
       layout: string;
       facecam: { x: number; y: number; w: number; h: number };
+      loop_preview_seconds: number;
       aspect: string;
     }>,
   ) =>
