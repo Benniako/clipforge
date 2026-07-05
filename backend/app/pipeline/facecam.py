@@ -42,6 +42,24 @@ MAX_PERSON_W = 0.38
 MAX_PERSON_H = 0.72
 
 
+def _as_gray(img):
+    """Return a 2-D grayscale image from OpenCV's occasionally odd shapes."""
+    if img is None:
+        return None
+    if getattr(img, "ndim", 2) == 2:
+        return img
+    if getattr(img, "ndim", 2) == 3:
+        channels = img.shape[2] if len(img.shape) > 2 else 0
+        if channels == 1:
+            return img[:, :, 0]
+        if channels in (3, 4):
+            import cv2
+
+            code = cv2.COLOR_BGRA2GRAY if channels == 4 else cv2.COLOR_BGR2GRAY
+            return cv2.cvtColor(img, code)
+    return None
+
+
 def detect_facecam(src_path: str, duration: float) -> Rect | None:
     """Detect a static webcam overlay; returns fractions of the source frame."""
     if not get_settings().has_opencv or duration <= 0:
@@ -253,8 +271,9 @@ def reaction_energy(src_path: str, cam: Rect, t0: float, t1: float,
             except Exception:
                 continue
             img = cv2.imread(str(fp), cv2.IMREAD_GRAYSCALE)
-            if img is not None:
-                crops.append(img.astype("float32"))
+            gray = _as_gray(img)
+            if gray is not None:
+                crops.append(gray.astype("float32"))
     if len(crops) < 2:
         return None
     diffs = [float(np.abs(a - b).mean()) / 255.0
@@ -293,10 +312,9 @@ def action_center(src_path: str, t0: float, t1: float, cam: Rect | None = None,
             except Exception:
                 continue
             img = cv2.imread(str(fp), cv2.IMREAD_GRAYSCALE)
-            if img is not None:
-                if getattr(img, "ndim", 2) == 3:
-                    img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-                frames.append(img.astype("float32"))
+            gray = _as_gray(img)
+            if gray is not None:
+                frames.append(gray.astype("float32"))
     if len(frames) < 2:
         return None
     h, w = frames[0].shape[:2]

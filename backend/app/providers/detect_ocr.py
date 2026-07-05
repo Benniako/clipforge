@@ -662,17 +662,42 @@ def _ocr_batch(paths: list[str], engine: str, lang: str = "en") -> list[tuple[st
         # APIs are less stable across versions; sequential is correct everywhere).
     except Exception as e:
         log.debug("ocr batch failed (%s); sequential", e)
-    return [_ocr_image_conf(p, engine) for p in paths]
+    return [_ocr_image_conf(p, engine, lang) for p in paths]
 
 
 def _easyocr_text(reader, path: str) -> str:
     return _easyocr_read(reader, path)[0]
 
 
+def _easyocr_sources(path: str):
+    """Try the raw path first, then a normalized RGB ndarray for fragile decoders."""
+    yield path
+    try:
+        import numpy as np
+        from PIL import Image
+
+        with Image.open(path) as im:
+            yield np.array(im.convert("RGB"))
+    except Exception as e:
+        log.debug("easyocr RGB retry unavailable for %s: %s", path, e)
+
+
+def _easyocr_call(reader, source, *, detail: int):
+    try:
+        return reader.readtext(source, detail=detail, paragraph=False) or []
+    except TypeError:
+        return reader.readtext(source, detail=detail) or []
+
+
 def _easyocr_read(reader, path: str) -> tuple[str, float]:
     """Read EasyOCR output + mean confidence without assuming one return shape."""
-    try:
-        rows = reader.readtext(path, detail=1, paragraph=False) or []
+    detail_errors: list[Exception] = []
+    for source in _easyocr_sources(path):
+        try:
+            rows = _easyocr_call(reader, source, detail=1)
+        except Exception as e:
+            detail_errors.append(e)
+            continue
         lines: list[str] = []
         scores: list[float] = []
         for row in rows:
@@ -691,13 +716,21 @@ def _easyocr_read(reader, path: str) -> tuple[str, float]:
         if lines:
             mean = sum(scores) / len(scores) if scores else 0.0
             return " ".join(lines), max(0.0, min(1.0, mean))
-    except Exception as e:
-        log.debug("easyocr detail read failed for %s: %s", path, e)
-    try:
-        rows = reader.readtext(path, detail=0, paragraph=False) or []
-    except TypeError:
-        rows = reader.readtext(path, detail=0) or []
-    return " ".join(str(x) for x in rows if x), 0.0
+    if detail_errors:
+        log.debug("easyocr detail read failed for %s: %s", path, detail_errors[-1])
+    fallback_errors: list[Exception] = []
+    for source in _easyocr_sources(path):
+        try:
+            rows = _easyocr_call(reader, source, detail=0)
+        except Exception as e:
+            fallback_errors.append(e)
+            continue
+        text = " ".join(str(x) for x in rows if x).strip()
+        if text:
+            return text, 0.0
+    if fallback_errors:
+        log.debug("easyocr fallback read failed for %s: %s", path, fallback_errors[-1])
+    return "", 0.0
 
 
 def _ocr_frame_images(frame: Path, tmpd: Path, idx: int,

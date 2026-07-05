@@ -315,6 +315,16 @@ def test_facecam_person_cutout_fallback_for_background_removed_cam():
     assert FC.stable_person_cluster(huge) is None
 
 
+def test_facecam_gray_normalizer_accepts_single_channel_3d_frames():
+    from app.pipeline import facecam as FC
+    import numpy as np
+
+    gray = FC._as_gray(np.zeros((90, 160, 1), dtype=np.uint8))
+
+    assert gray is not None
+    assert gray.shape == (90, 160)
+
+
 def test_rect_crop_grows_to_aspect_and_clamps():
     from app.models import Rect
     cam = Rect(x=0.02, y=0.72, w=0.18, h=0.24)   # bottom-left cam on 1920x1080
@@ -1740,6 +1750,35 @@ def test_ocr_valorant_german_markers_and_easyocr_shapes():
 
     text = O._easyocr_text(Reader(), "frame.png")
     assert "Spike platziert" in text and "Headshot" in text
+
+
+def test_easyocr_read_retries_normalized_image_after_path_shape_error():
+    from app.providers import detect_ocr as O
+    from PIL import Image
+    import numpy as np
+
+    class Reader:
+        def __init__(self):
+            self.sources = []
+
+        def readtext(self, source, detail=1, paragraph=False):
+            self.sources.append(source)
+            if isinstance(source, str):
+                raise ValueError("too many values to unpack (expected 2)")
+            assert isinstance(source, np.ndarray)
+            assert source.ndim == 3 and source.shape[2] == 3
+            return [([[0, 0]], "VICTORY", 0.88)]
+
+    reader = Reader()
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "gray.png"
+        Image.new("L", (32, 24), 200).save(path)
+
+        text, conf = O._easyocr_read(reader, str(path))
+
+    assert text == "VICTORY"
+    assert abs(conf - 0.88) < 1e-6
+    assert any(not isinstance(source, str) for source in reader.sources)
 
 
 def test_paddle_text_accepts_ocr_result_objects():
