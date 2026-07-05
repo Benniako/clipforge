@@ -39,6 +39,14 @@ def _scopes(project, clip) -> tuple[str, str]:
     return feedback.score_scope(ct, key), feedback.bound_scope(ct, key)
 
 
+def _filter_caption_words_by_speakers(words: list[CaptionWord],
+                                      speakers: set[int] | None) -> list[CaptionWord]:
+    """Apply the clip's speaker keep-set to manual caption word replacements."""
+    if speakers is None:
+        return words
+    return [w for w in words if (w.speaker or 0) in speakers]
+
+
 class ClipEdit(BaseModel):
     title: str | None = None
     description: str | None = None
@@ -182,12 +190,18 @@ def edit_clip(project_id: str, clip_id: str, edit: ClipEdit) -> Clip:
             clip.score, clip.factors, clip.features = score_mod.score_clip(
                 words, clip.duration, project.settings,
                 lang=project.transcript.language)
-    elif speakers_sent and project.transcript and edit.caption_words is None:
-        # Only the speaker keep-set changed — re-filter captions on the same span.
-        _rebuild_captions()
+    elif speakers_sent and edit.caption_words is None:
+        # Only the speaker keep-set changed: prefer a clean transcript rebuild,
+        # but still honour the toggle for clips that only have manual words.
+        if project.transcript:
+            _rebuild_captions()
+        else:
+            clip.captions.words = _filter_caption_words_by_speakers(
+                clip.captions.words, spk)
 
     if edit.caption_words is not None:
-        clip.captions.words = edit.caption_words
+        clip.captions.words = _filter_caption_words_by_speakers(
+            edit.caption_words, spk)
 
     if "reframe_cx" in edit.model_fields_set:
         if edit.reframe_cx is not None:

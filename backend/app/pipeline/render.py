@@ -159,22 +159,37 @@ def _composed_graph(clip: Clip, cam: Rect, info: MediaInfo,
     """
     cxs = sorted(k.cx for k in clip.reframe.keyframes) or [0.5]
     cx = cxs[len(cxs) // 2]
-    lines = ["[0:v]setpts=PTS-STARTPTS,split=2[cam0][game0];"]
     if clip.reframe.layout == LayoutType.split:
+        lines = ["[0:v]setpts=PTS-STARTPTS,split=3[cambg0][camfg0][game0];"]
         top_h = _even(out_h * SPLIT_CAM_FRAC)
         bot_h = out_h - top_h
         ccw, cch, ccx, ccy = rect_crop(cam, info.width, info.height, out_w / top_h)
+        fcw, fch, fcx, fcy = rect_crop(cam, info.width, info.height)
+        inset = max(_even(top_h * 0.04), 2)
+        fg_h = max(_even(top_h - inset * 2), 2)
+        fg_w = max(_even(fg_h * fcw / max(fch, 1)), 2)
+        max_fg_w = max(_even(out_w - inset * 2), 2)
+        if fg_w > max_fg_w:
+            fg_w = max_fg_w
+            fg_h = max(_even(fg_w * fch / max(fcw, 1)), 2)
         gcw, gch, gx, gy = game_pane_crop(cx, cam, info.width, info.height,
                                           out_w / bot_h)
         tail = ["vstack=inputs=2", "setsar=1"] + ([ass_part] if ass_part else [])
         lines += [
-            f"[cam0]crop=w={ccw}:h={cch}:x={ccx}:y={ccy},"
-            f"scale={out_w}:{top_h}:flags=lanczos[cam1];",
+            f"[cambg0]crop=w={ccw}:h={cch}:x={ccx}:y={ccy},"
+            f"scale={out_w}:{top_h}:flags=lanczos,"
+            "boxblur=luma_radius=24:luma_power=1:chroma_radius=12:chroma_power=1,"
+            "setsar=1[cambg1];",
+            f"[camfg0]crop=w={fcw}:h={fch}:x={fcx}:y={fcy},"
+            f"scale={fg_w}:{fg_h}:force_original_aspect_ratio=decrease:flags=lanczos,"
+            "setsar=1[camfg1];",
+            "[cambg1][camfg1]overlay=x=(W-w)/2:y=(H-h)/2[cam1];",
             f"[game0]crop=w={gcw}:h={gch}:x={gx}:y={gy},"
             f"scale={out_w}:{bot_h}:flags=lanczos[game1];",
             f"[cam1][game1]{','.join(tail)}[vo]",
         ]
     else:  # framed: full-bleed gameplay + PiP cam
+        lines = ["[0:v]setpts=PTS-STARTPTS,split=2[cam0][game0];"]
         gcw, gch, gx, gy = game_pane_crop(cx, cam, info.width, info.height,
                                           out_w / out_h)
         ccw, cch, ccx, ccy = rect_crop(cam, info.width, info.height)

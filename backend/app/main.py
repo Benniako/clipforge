@@ -151,8 +151,11 @@ def create_app() -> FastAPI:
         s = settings
         return {"flat": s.capability_report(), "detail": s.capability_detail()}
 
-    app.include_router(routes_projects.router)
     app.include_router(routes_clips.router)
+    # Register clip routes before the project router: both expose
+    # /api/projects/{id}/clips/{clip_id}, but the editor needs the rich JSON
+    # PATCH handler from routes_clips for captions, speakers, layout and style.
+    app.include_router(routes_projects.router)
     app.include_router(routes_cues.router)
 
     # Generated media (sources, clips, thumbnails). StaticFiles serves Range

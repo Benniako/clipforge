@@ -397,8 +397,8 @@ export const api = {
       start: number;
       end: number;
       style_id: string;
-	      reframe_cx: number | null;
-      caption_words: { t: number; d: number; text: string }[];
+      reframe_cx: number | null;
+      caption_words: { t: number; d: number; text: string; speaker: number | null }[];
       caption_speakers: number[] | null;
       layout: string;
       facecam: { x: number; y: number; w: number; h: number };

@@ -20,7 +20,7 @@ export interface UndoState {
   end: number;
   styleId: string;
   cx: number | null;
-  words: { t: number; d: number; text: string }[];
+  words: { t: number; d: number; text: string; speaker: number | null }[];
   layout: string;
   cam: { x: number; y: number; w: number; h: number } | null;
   aspect: string;

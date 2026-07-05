@@ -363,6 +363,7 @@ def test_composed_graph_split_and_framed():
     info = type("I", (), {"width": 1920, "height": 1080})()
     g = "\n".join(render._composed_graph(clip, cam, info, 1080, 1920, "ass=f=cap.ass"))
     assert "vstack=inputs=2" in g and "[vo]" in g and "ass=f=cap.ass" in g
+    assert "split=3" in g and "boxblur=" in g and "overlay=x=(W-w)/2" in g
     clip.reframe.layout = "framed"
     g2 = "\n".join(render._composed_graph(clip, cam, info, 1080, 1920, None))
     assert "overlay=" in g2 and "vstack" not in g2
@@ -2000,6 +2001,64 @@ def test_caption_speaker_filter_keeps_only_chosen():
     assert [w.text for w in only0.words] == ["hello", "there"]
     only1 = captionize.build_caption_set(tr, 0.0, 2.0, "bold-pop", speakers={1})
     assert [w.text for w in only1.words] == ["hi", "back"]
+    none = captionize.build_caption_set(tr, 0.0, 2.0, "bold-pop", speakers=set())
+    assert none.words == []
+
+
+def test_edit_clip_speaker_toggle_filters_manual_caption_words():
+    from starlette.testclient import TestClient
+    from app import store
+    from app.api import routes_clips
+    from app.main import create_app
+    from app.models import CaptionSet, CaptionWord
+
+    class FakeEngine:
+        def rerender_clip(self, project_id: str, clip_id: str) -> None:
+            return None
+
+    store.init_db()
+    words = [
+        CaptionWord(t=0.0, d=0.3, text="hello", speaker=0),
+        CaptionWord(t=0.4, d=0.3, text="there", speaker=0),
+        CaptionWord(t=0.8, d=0.3, text="hi", speaker=1),
+        CaptionWord(t=1.2, d=0.3, text="back", speaker=1),
+    ]
+    clip = Clip(
+        id="clip_manual_speakers",
+        start=0.0,
+        end=2.0,
+        status=ClipStatus.ready,
+        speakers=[0, 1],
+        captions=CaptionSet(words=words),
+        export_url="/media/proj_manual_speakers/clips/clip_manual_speakers.mp4",
+    )
+    project = Project(
+        id="proj_manual_speakers",
+        status=ProjectStatus.ready,
+        clips=[clip],
+    )
+    store.save(project)
+
+    orig_engine = routes_clips.engine
+    routes_clips.engine = FakeEngine()
+    try:
+        client = TestClient(create_app(), raise_server_exceptions=False)
+        payload = {
+            "caption_speakers": [0],
+            "caption_words": [w.model_dump() for w in words],
+        }
+        resp = client.patch(
+            "/api/projects/proj_manual_speakers/clips/clip_manual_speakers",
+            json=payload,
+        )
+        assert resp.status_code == 200, resp.text
+        body_words = resp.json()["captions"]["words"]
+        assert [w["text"] for w in body_words] == ["hello", "there"]
+        saved = store.get("proj_manual_speakers").clip("clip_manual_speakers")
+        assert saved.caption_speakers == [0]
+        assert [w.speaker for w in saved.captions.words] == [0, 0]
+    finally:
+        routes_clips.engine = orig_engine
 
 
 def test_speakers_in_lists_present_speakers():

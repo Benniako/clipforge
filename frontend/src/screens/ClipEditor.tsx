@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api } from "../lib/api";
-import type { Clip, Project, Rect, StyleTemplate } from "../lib/types";
+import type { CaptionWord, Clip, Project, Rect, StyleTemplate } from "../lib/types";
 import { fmtClock, fmtDuration } from "../lib/format";
 import { mediaTimeUrl } from "../lib/media";
 import { useT } from "../lib/i18n";
@@ -10,6 +10,25 @@ import Toast, { type ToastMsg } from "../components/Toast";
 import ScoreBadge from "../components/ScoreBadge";
 import PublishPanel from "../components/PublishPanel";
 import Waveform from "../components/Waveform";
+
+type EditableCaptionWord = Pick<CaptionWord, "t" | "d" | "text" | "speaker">;
+
+const editableCaptionWords = (c: Clip): EditableCaptionWord[] =>
+  c.captions.words.map((w) => ({
+    t: w.t,
+    d: w.d,
+    text: w.text,
+    speaker: w.speaker ?? null,
+  }));
+
+const originalCropCx = (c: Clip): number | null =>
+  c.reframe.cx_overridden ? c.reframe.keyframes[0]?.cx ?? 0.5 : null;
+
+const cropChanged = (c: Clip, next: number | null): boolean => {
+  const orig = originalCropCx(c);
+  if (next === null) return orig !== null;
+  return orig === null || Math.abs(next - orig) > 0.01;
+};
 
 export default function ClipEditor() {
   const { t } = useT();
@@ -31,7 +50,7 @@ export default function ClipEditor() {
   const [end, setEnd] = useState(0);
   const [styleId, setStyleId] = useState("");
   const [cx, setCx] = useState<number | null>(null);
-  const [words, setWords] = useState<{ t: number; d: number; text: string }[]>([]);
+  const [words, setWords] = useState<EditableCaptionWord[]>([]);
   const [fb, setFb] = useState<"up" | "down" | null>(null);
   const [layout, setLayout] = useState<string>("center");
   const [cam, setCam] = useState<Rect | null>(null);
@@ -211,8 +230,8 @@ export default function ClipEditor() {
     setStyleId(c.captions.style_id);
     // cx_overridden (not overridden): layout/facecam edits also set
     // `overridden`, and showing their keyframe as a manual crop is wrong.
-    setCx(c.reframe.cx_overridden ? c.reframe.keyframes[0]?.cx ?? 0.5 : null);
-    setWords(c.captions.words.map((w) => ({ t: w.t, d: w.d, text: w.text })));
+    setCx(originalCropCx(c));
+    setWords(editableCaptionWords(c));
     setFb(c.feedback);
     setLayout(c.reframe.layout);
     setCam(c.reframe.facecam ?? null);
@@ -224,8 +243,8 @@ export default function ClipEditor() {
       start: c.start,
       end: c.end,
       styleId: c.captions.style_id,
-      cx: c.reframe.cx_overridden ? c.reframe.keyframes[0]?.cx ?? 0.5 : null,
-      words: c.captions.words.map((w) => ({ t: w.t, d: w.d, text: w.text })),
+      cx: originalCropCx(c),
+      words: editableCaptionWords(c),
       layout: c.reframe.layout,
       cam: c.reframe.facecam ?? null,
       aspect: c.aspect ?? "",
@@ -261,17 +280,18 @@ export default function ClipEditor() {
       Math.abs(start - clip.start) > 0.01 ||
       Math.abs(end - clip.end) > 0.01 ||
       styleId !== clip.captions.style_id ||
-      (cx !== null && (!clip.reframe.cx_overridden || Math.abs(cx - (clip.reframe.keyframes[0]?.cx ?? 0.5)) > 0.01)) ||
-      (cx === null && clip.reframe.cx_overridden) ||
+      cropChanged(clip, cx) ||
       layout !== clip.reframe.layout ||
       aspect !== (clip.aspect ?? "") ||
       JSON.stringify(capSpeakers) !== JSON.stringify(clip.caption_speakers ?? null) ||
       (cam !== null && JSON.stringify(cam) !== JSON.stringify(clip.reframe.facecam)) ||
-      JSON.stringify(words) !== JSON.stringify(clip.captions.words.map((w) => ({ t: w.t, d: w.d, text: w.text })))
+      JSON.stringify(words) !== JSON.stringify(editableCaptionWords(clip))
     );
   }, [clip, title, start, end, styleId, cx, words, layout, cam, aspect, capSpeakers]);
 
   const spanChanged = clip && (Math.abs(start - clip.start) > 0.01 || Math.abs(end - clip.end) > 0.01);
+  const captionSpeakersDirty =
+    !!clip && JSON.stringify(capSpeakers) !== JSON.stringify(clip.caption_speakers ?? null);
 
   const apply = async () => {
     if (!projectId || !clipId || !clip) return;
@@ -284,7 +304,7 @@ export default function ClipEditor() {
         end: number;
         style_id: string;
         reframe_cx: number | null;
-        caption_words: { t: number; d: number; text: string }[];
+        caption_words: EditableCaptionWord[];
         caption_speakers: number[] | null;
         layout: string;
         facecam: { x: number; y: number; w: number; h: number };
@@ -296,17 +316,17 @@ export default function ClipEditor() {
         edit.end = end;
       }
       if (styleId !== clip.captions.style_id) edit.style_id = styleId;
-      edit.reframe_cx = cx;
+      if (cropChanged(clip, cx)) edit.reframe_cx = cx;
       if (layout !== clip.reframe.layout) edit.layout = layout;
       if (aspect !== (clip.aspect ?? "")) edit.aspect = aspect;
-      if (JSON.stringify(capSpeakers) !== JSON.stringify(clip.caption_speakers ?? null))
+      if (captionSpeakersDirty)
         edit.caption_speakers = capSpeakers;
       if (cam !== null && JSON.stringify(cam) !== JSON.stringify(clip.reframe.facecam))
         edit.facecam = cam;
       // Only send manual caption edits if the span didn't change (a new span
       // re-derives captions from the transcript on the server).
       if (!spanChanged) {
-        const orig = JSON.stringify(clip.captions.words.map((w) => ({ t: w.t, d: w.d, text: w.text })));
+        const orig = JSON.stringify(editableCaptionWords(clip));
         if (JSON.stringify(words) !== orig) edit.caption_words = words;
       }
       await api.editClip(projectId, clipId, edit);
@@ -364,7 +384,8 @@ export default function ClipEditor() {
       </div>
     );
 
-  const renderedSrc = clip.export_url ? `${clip.export_url}?v=${ver}` : undefined;
+  const renderedKey = encodeURIComponent(`${project.updated_at}-${clip.status}-${ver}`);
+  const renderedSrc = clip.export_url ? `${clip.export_url}?v=${renderedKey}` : undefined;
   const originalSrc = mediaTimeUrl(project.source?.path, start, end);
   const videoSrc = previewMode === "original" ? originalSrc : renderedSrc;
 
@@ -669,7 +690,7 @@ export default function ClipEditor() {
                 })}
               </div>
               <span className="muted tiny">
-                {t("ce.speakersNote")}
+                {captionSpeakersDirty ? t("ce.speakersDirty") : t("ce.speakersNote")}
               </span>
             </div>
           )}
@@ -750,7 +771,7 @@ export default function ClipEditor() {
               <button className="btn sm ghost" style={{ fontSize: 12 }}
                 onClick={() => {
                   const lastT = words.length > 0 ? words[words.length - 1].t + words[words.length - 1].d : 0;
-                  setWords([...words, { t: lastT + 0.3, d: 0.3, text: "" }]);
+                  setWords([...words, { t: lastT + 0.3, d: 0.3, text: "", speaker: null }]);
                 }}>
                 + {t("ce.addWord")}
               </button>
