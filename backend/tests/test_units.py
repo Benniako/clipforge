@@ -358,6 +358,40 @@ def test_composed_graph_split_and_framed():
     assert "overlay=" in g2 and "vstack" not in g2
 
 
+def test_preserve_user_clip_edits_keeps_automatic_facecam_reframe():
+    from app.models import Rect
+    from app.pipeline.orchestrator import _preserve_user_clip_edits
+
+    cam = Rect(x=0.02, y=0.70, w=0.20, h=0.26)
+    prev = Clip(id="clip_facecam", start=0, end=10, reframe=Reframe(layout="fill"))
+    fresh = Clip(id="clip_facecam", start=0, end=10, reframe=Reframe(
+        layout="split", facecam=cam, keyframes=[ReframeKeyframe(t=0, cx=0.5)]))
+
+    _preserve_user_clip_edits([fresh], [prev])
+
+    assert fresh.reframe.layout == "split"
+    assert fresh.reframe.facecam == cam
+
+
+def test_preserve_user_clip_edits_keeps_manual_reframe_override():
+    from app.models import Rect
+    from app.pipeline.orchestrator import _preserve_user_clip_edits
+
+    auto_cam = Rect(x=0.02, y=0.70, w=0.20, h=0.26)
+    manual_cam = Rect(x=0.70, y=0.05, w=0.18, h=0.22)
+    prev = Clip(id="clip_manual", start=0, end=10, reframe=Reframe(
+        layout="framed", facecam=manual_cam, overridden=True,
+        keyframes=[ReframeKeyframe(t=0, cx=0.75)]))
+    fresh = Clip(id="clip_manual", start=0, end=10, reframe=Reframe(
+        layout="split", facecam=auto_cam, keyframes=[ReframeKeyframe(t=0, cx=0.5)]))
+
+    _preserve_user_clip_edits([fresh], [prev])
+
+    assert fresh.reframe.layout == "framed"
+    assert fresh.reframe.facecam == manual_cam
+    assert fresh.reframe.keyframes[0].cx == 0.75
+
+
 # --------------------------------------------------------------------------- #
 # Transcription engine selection (whisperX > faster-whisper > synthetic)
 # --------------------------------------------------------------------------- #
@@ -524,6 +558,71 @@ def test_nvenc_requires_a_real_gpu():
 def test_upload_cap_unlimited_by_default():
     assert _settings(max_upload_mb=0).upload_cap_bytes is None      # 0 = no cap
     assert _settings(max_upload_mb=10).upload_cap_bytes == 10 * 1024 * 1024
+
+
+def test_raw_upload_endpoint_streams_without_multipart():
+    import json
+    from starlette.testclient import TestClient
+    from app.config import get_settings
+    from app.main import create_app
+    from app import store
+    from app.api import routes_projects as RP
+    from app.pipeline import ingest as I
+
+    old_finalize = I.finalize_source
+    old_enqueue = RP.engine.enqueue
+    enqueued: list[str] = []
+
+    def fake_finalize(project, path, *, filename, url):
+        assert path.read_bytes() == b"raw-video-bytes"
+        assert filename == "batch one.mp4"
+        assert url is None
+        return SourceMedia(
+            filename=filename,
+            path=str(path.relative_to(get_settings().media_dir)),
+            duration=12.0,
+            width=1920,
+            height=1080,
+            fps=30.0,
+            size_bytes=path.stat().st_size,
+        )
+
+    try:
+        I.finalize_source = fake_finalize
+        RP.engine.enqueue = lambda project_id: enqueued.append(project_id)
+        store.init_db()
+        c = TestClient(create_app(), raise_server_exceptions=False)
+        resp = c.post(
+            "/api/projects/raw-upload?filename=batch%20one.mp4",
+            content=b"raw-video-bytes",
+            headers={
+                "Content-Type": "video/mp4",
+                "X-ClipForge-Settings": json.dumps({
+                    "platform": "shorts",
+                    "power_mode": "max_gpu",
+                    "target_clips": 7,
+                    "use_ocr": True,
+                    "game_config": {
+                        "detection_mode": "hybrid",
+                        "visual_text_cues": ["VICTORY"],
+                    },
+                }),
+            },
+        )
+    finally:
+        I.finalize_source = old_finalize
+        RP.engine.enqueue = old_enqueue
+
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["name"] == "batch one"
+    assert data["source"]["filename"] == "batch one.mp4"
+    assert data["settings"]["platform"] == "shorts"
+    assert data["settings"]["power_mode"] == "max_gpu"
+    assert data["settings"]["target_clips"] == 7
+    assert data["settings"]["game_config"]["detection_mode"] == "hybrid"
+    assert data["settings"]["game_config"]["visual_text_cues"] == ["VICTORY"]
+    assert enqueued == [data["id"]]
 
 
 def test_encoder_args_switch():

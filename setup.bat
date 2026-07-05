@@ -58,15 +58,11 @@ echo Installing Python packages - this takes a few minutes...
 "%VPY%" -m pip install -r backend\requirements.txt
 if errorlevel 1 ( echo [X] Backend install failed. & pause & exit /b 1 )
 
-REM --- 4b. NVIDIA GPU runtime (auto-detected) ---------------------------
-REM Whisper-on-GPU needs cuBLAS/cuDNN; the pip wheels provide them without a
-REM system CUDA install. Skipped entirely on machines without an NVIDIA GPU.
-where nvidia-smi >nul 2>&1
-if !errorlevel! equ 0 (
-    echo NVIDIA GPU detected - installing CUDA runtime libraries for GPU transcription...
-    "%VPY%" -m pip install nvidia-cublas-cu12 nvidia-cudnn-cu12
-    if errorlevel 1 echo [!] CUDA libraries failed to install - transcription will run on CPU.
-)
+REM --- 4b. PyTorch + NVIDIA runtime (auto-detected) ----------------------
+REM Current faster-whisper/CTranslate2 builds use CUDA 12 + cuDNN 9. This
+REM helper installs matching PyTorch CUDA wheels and pip-provided NVIDIA DLLs,
+REM with CPU fallbacks if any optional acceleration package fails.
+powershell -ExecutionPolicy Bypass -NoProfile -File "%~dp0scripts\setup_python_accel.ps1" -PythonExe "%VPY%" || echo [..] Python acceleration setup had warnings - CPU fallbacks remain available.
 
 REM --- 4d. Optional AI power-ups (VAD/OCR/scene/emotion/YOLO/whisperX) --
 REM Best-effort: each line installs on its own; a failed or conflicting wheel
@@ -76,6 +72,11 @@ for /f "usebackq eol=# tokens=*" %%P in ("backend\requirements-extras.txt") do (
     echo   -^> %%P
     "%VPY%" -m pip install %%P || echo   [..] skipped %%P ^(install failed/conflict^)
 )
+
+REM Optional packages can pull CPU PyTorch wheels from PyPI. Re-apply the
+REM hardware-matched acceleration stack after extras so the final environment
+REM is the one ClipForge will actually run with.
+powershell -ExecutionPolicy Bypass -NoProfile -File "%~dp0scripts\setup_python_accel.ps1" -PythonExe "%VPY%" || echo [..] Final Python acceleration check had warnings - CPU fallbacks remain available.
 
 REM --- 4e. Hugging Face token for WhisperX diarization ------------------
 REM Token is private, so setup guides you through creating one, validates

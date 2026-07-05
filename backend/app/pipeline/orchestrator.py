@@ -124,6 +124,30 @@ def _media_url(path) -> str:
     return f"/media/{path.relative_to(get_settings().media_dir).as_posix()}"
 
 
+def _preserve_user_clip_edits(clips: list[Clip], previous: list[Clip]) -> None:
+    """Carry user edits forward without clobbering fresh automatic reframe data.
+
+    Clips are saved once before the reframe stage so the UI can show progress.
+    Those pre-reframe copies contain default ``layout=fill``/``facecam=None``;
+    blindly merging them back later erases detected facecam layouts. Only keep
+    reframe data from a previous clip when the user explicitly edited it.
+    """
+    prev = {c.id: c for c in previous}
+    for clip in clips:
+        prev_c = prev.get(clip.id)
+        if not prev_c:
+            continue
+        clip.feedback = prev_c.feedback
+        clip.title = prev_c.title
+        clip.description = prev_c.description
+        clip.start = prev_c.start
+        clip.end = prev_c.end
+        clip.caption_speakers = prev_c.caption_speakers
+        clip.aspect = prev_c.aspect
+        if prev_c.reframe.overridden:
+            clip.reframe = prev_c.reframe
+
+
 def _speech_intervals(transcript, start: float, end: float
                       ) -> list[tuple[float, float]] | None:
     """Clip-relative speech spans for speech-aware reframing.
@@ -1115,19 +1139,7 @@ class Engine:
         with store.mutate(project_id) as p:
             # The user may have edited a clip (title, trim, speakers, layout)
             # while the pipeline advanced; don't wipe their changes.
-            prev = {c.id: c for c in p.clips}
-            for clip in clips:
-                prev_c = prev.get(clip.id)
-                if prev_c:
-                    clip.feedback = prev_c.feedback
-                    clip.title = prev_c.title
-                    clip.description = prev_c.description
-                    clip.start = prev_c.start
-                    clip.end = prev_c.end
-                    clip.caption_speakers = prev_c.caption_speakers
-                    clip.reframe.layout = prev_c.reframe.layout
-                    clip.aspect = prev_c.aspect
-                    clip.reframe.facecam = prev_c.reframe.facecam
+            _preserve_user_clip_edits(clips, p.clips)
             p.clips = clips
 
         # 6. render (parallel per clip) ----------------------------------

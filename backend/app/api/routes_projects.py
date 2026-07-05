@@ -17,7 +17,7 @@ import asyncio
 import json
 import threading
 
-from fastapi import (APIRouter, File, Form, HTTPException, UploadFile,
+from fastapi import (APIRouter, File, Form, HTTPException, Request, UploadFile,
                      WebSocket, WebSocketDisconnect)
 from fastapi.concurrency import run_in_threadpool
 from fastapi.encoders import jsonable_encoder
@@ -174,6 +174,200 @@ def _game_config_from_form(*, detection_mode: str, visual_rois_json: str,
     return cfg
 
 
+def _as_bool(value, default: bool) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        clean = value.strip().lower()
+        if clean in {"1", "true", "yes", "on"}:
+            return True
+        if clean in {"0", "false", "no", "off"}:
+            return False
+    return default
+
+
+def _as_float(value, default: float) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _as_int(value, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _as_text_list(value) -> str:
+    if isinstance(value, list):
+        return "\n".join(str(v) for v in value)
+    if value is None:
+        return ""
+    return str(value)
+
+
+def _build_import_settings(
+    *,
+    platform: str = "generic",
+    power_mode: str = "balanced",
+    min_len: float = 15.0,
+    max_len: float = 60.0,
+    target_clips: int = 10,
+    style_id: str = "bold-pop",
+    language: str = "de",
+    content_type: str = "auto",
+    aspect: str = "9:16",
+    burn_captions: bool = True,
+    game_profile: str = "auto",
+    tighten: bool = False,
+    denoise: bool = False,
+    motion: str = "none",
+    facecam_layout: str = "auto",
+    use_ocr: bool = True,
+    use_vlm: bool = True,
+    use_cues: bool = True,
+    use_audio_events: bool = True,
+    cue_learning: bool = True,
+    auto_length: bool = False,
+    lead_seconds: float | None = None,
+    tail_seconds: float | None = None,
+    detection_mode: str = "zero_shot",
+    visual_rois_json: str = "",
+    visual_text_cues: str = "",
+    reference_audio_files: str = "",
+    vlm_visual_prompts: str = "",
+    audio_prompts: str = "",
+    audio_negative_prompts: str = "",
+    ai_boost_emphasis: bool = True,
+    ai_boost_emoji: bool = True,
+    ai_boost_speaker_colors: bool = True,
+    ai_boost_auto_zoom: bool = True,
+    ai_boost_broll: bool = False,
+    ai_boost_hook_check: bool = True,
+) -> ImportSettings:
+    try:
+        plat = Platform(platform)
+    except ValueError:
+        plat = Platform.generic
+    try:
+        pmode = PowerMode(power_mode)
+    except ValueError:
+        pmode = PowerMode.balanced
+
+    try:
+        ctype = ContentType(content_type)
+    except ValueError:
+        ctype = ContentType.auto
+    clean_min, clean_max = (_auto_length_range(plat, ctype) if auto_length
+                            else _clamp_lengths(min_len, max_len))
+    return ImportSettings(
+        platform=plat,
+        power_mode=pmode,
+        min_len=clean_min,
+        max_len=clean_max,
+        target_clips=max(1, min(target_clips, 30)),
+        default_style_id=style_id,
+        language=language if language in ("auto", "en", "de") else "de",
+        content_type=ctype,
+        aspect=aspect if aspect in ASPECTS else "9:16",
+        burn_captions=burn_captions,
+        game_profile=game_profile if game_profile in KNOWN_PROFILES else "auto",
+        tighten=tighten,
+        denoise=denoise,
+        motion=motion if motion in ("none", "push") else "none",
+        facecam_layout=(facecam_layout
+                        if facecam_layout in ("auto", "off", "split", "framed")
+                        else "auto"),
+        use_ocr=use_ocr,
+        use_vlm=use_vlm,
+        use_cues=use_cues,
+        use_audio_events=use_audio_events,
+        cue_learning=cue_learning,
+        auto_length=auto_length,
+        ai_boost=AiBoostSettings(
+            emphasis=ai_boost_emphasis,
+            emoji=ai_boost_emoji,
+            speakerColors=ai_boost_speaker_colors,
+            autoZoom=ai_boost_auto_zoom,
+            broll=ai_boost_broll,
+            hookCheck=ai_boost_hook_check,
+        ),
+        lead_seconds=_clamp_pad(lead_seconds),
+        tail_seconds=_clamp_pad(tail_seconds),
+        game_config=_game_config_from_form(
+            detection_mode=detection_mode,
+            visual_rois_json=visual_rois_json,
+            visual_text_cues=visual_text_cues,
+            reference_audio_files=reference_audio_files,
+            vlm_visual_prompts=vlm_visual_prompts,
+            audio_prompts=audio_prompts,
+            audio_negative_prompts=audio_negative_prompts,
+        ),
+    )
+
+
+def _settings_from_meta(meta: dict) -> ImportSettings:
+    game_config = meta.get("game_config") if isinstance(meta.get("game_config"), dict) else {}
+    return _build_import_settings(
+        platform=str(meta.get("platform", "generic")),
+        power_mode=str(meta.get("power_mode", "balanced")),
+        min_len=_as_float(meta.get("min_len"), 15.0),
+        max_len=_as_float(meta.get("max_len"), 60.0),
+        target_clips=_as_int(meta.get("target_clips"), 10),
+        style_id=str(meta.get("style_id", "bold-pop")),
+        language=str(meta.get("language", "de")),
+        content_type=str(meta.get("content_type", "auto")),
+        aspect=str(meta.get("aspect", "9:16")),
+        burn_captions=_as_bool(meta.get("burn_captions"), True),
+        game_profile=str(meta.get("game_profile", "auto")),
+        tighten=_as_bool(meta.get("tighten"), False),
+        denoise=_as_bool(meta.get("denoise"), False),
+        motion=str(meta.get("motion", "none")),
+        facecam_layout=str(meta.get("facecam_layout", "auto")),
+        use_ocr=_as_bool(meta.get("use_ocr"), True),
+        use_vlm=_as_bool(meta.get("use_vlm"), True),
+        use_cues=_as_bool(meta.get("use_cues"), True),
+        use_audio_events=_as_bool(meta.get("use_audio_events"), True),
+        cue_learning=_as_bool(meta.get("cue_learning"), True),
+        auto_length=_as_bool(meta.get("auto_length"), False),
+        lead_seconds=(None if meta.get("lead_seconds") is None
+                      else _as_float(meta.get("lead_seconds"), 0.0)),
+        tail_seconds=(None if meta.get("tail_seconds") is None
+                      else _as_float(meta.get("tail_seconds"), 0.0)),
+        detection_mode=str(game_config.get("detection_mode", meta.get("detection_mode", "zero_shot"))),
+        visual_rois_json=json.dumps(game_config.get("visual_rois", meta.get("visual_rois", []))),
+        visual_text_cues=_as_text_list(game_config.get("visual_text_cues", meta.get("visual_text_cues"))),
+        reference_audio_files=_as_text_list(game_config.get("reference_audio_files", meta.get("reference_audio_files"))),
+        vlm_visual_prompts=_as_text_list(game_config.get("vlm_visual_prompts", meta.get("vlm_visual_prompts"))),
+        audio_prompts=_as_text_list(game_config.get("audio_prompts", meta.get("audio_prompts"))),
+        audio_negative_prompts=_as_text_list(game_config.get("audio_negative_prompts", meta.get("audio_negative_prompts"))),
+        ai_boost_emphasis=_as_bool(meta.get("ai_boost_emphasis"), True),
+        ai_boost_emoji=_as_bool(meta.get("ai_boost_emoji"), True),
+        ai_boost_speaker_colors=_as_bool(meta.get("ai_boost_speaker_colors"), True),
+        ai_boost_auto_zoom=_as_bool(meta.get("ai_boost_auto_zoom"), True),
+        ai_boost_broll=_as_bool(meta.get("ai_boost_broll"), False),
+        ai_boost_hook_check=_as_bool(meta.get("ai_boost_hook_check"), True),
+    )
+
+
+def _commit_source_and_enqueue(project: Project, src, name: str) -> Project:
+    with store.mutate(project.id) as p:
+        p.source = src
+        if not name or name == "Untitled":
+            p.name = Path(src.filename).stem[:60] or "Untitled"
+    engine.enqueue(project.id)
+    saved = store.get(project.id)
+    if saved is None:
+        raise RuntimeError("project disappeared after import")
+    return saved
+
+
 def _system_usage() -> dict:
     """Best-effort CPU/GPU use for the live processing UI.
 
@@ -266,64 +460,43 @@ async def create_project(
 ) -> Project:
     if not file and not url and not local_path:
         raise HTTPException(400, "provide a file upload, a url, or a local_path")
-    try:
-        plat = Platform(platform)
-    except ValueError:
-        plat = Platform.generic
-    try:
-        pmode = PowerMode(power_mode)
-    except ValueError:
-        pmode = PowerMode.balanced
-
-    try:
-        ctype = ContentType(content_type)
-    except ValueError:
-        ctype = ContentType.auto
-    clean_min, clean_max = (_auto_length_range(plat, ctype) if auto_length
-                            else _clamp_lengths(min_len, max_len))
-    settings = ImportSettings(
-        platform=plat,
-        power_mode=pmode,
-        min_len=clean_min,
-        max_len=clean_max,
-        target_clips=max(1, min(target_clips, 30)),
-        default_style_id=style_id,
-        language=language if language in ("auto", "en", "de") else "de",
-        content_type=ctype,
-        aspect=aspect if aspect in ASPECTS else "9:16",
+    settings = _build_import_settings(
+        platform=platform,
+        power_mode=power_mode,
+        min_len=min_len,
+        max_len=max_len,
+        target_clips=target_clips,
+        style_id=style_id,
+        language=language,
+        content_type=content_type,
+        aspect=aspect,
         burn_captions=burn_captions,
-        game_profile=game_profile if game_profile in KNOWN_PROFILES else "auto",
+        game_profile=game_profile,
         tighten=tighten,
         denoise=denoise,
-        motion=motion if motion in ("none", "push") else "none",
-        facecam_layout=(facecam_layout
-                        if facecam_layout in ("auto", "off", "split", "framed")
-                        else "auto"),
+        motion=motion,
+        facecam_layout=facecam_layout,
         use_ocr=use_ocr,
         use_vlm=use_vlm,
         use_cues=use_cues,
         use_audio_events=use_audio_events,
         cue_learning=cue_learning,
         auto_length=auto_length,
-        ai_boost=AiBoostSettings(
-            emphasis=ai_boost_emphasis,
-            emoji=ai_boost_emoji,
-            speakerColors=ai_boost_speaker_colors,
-            autoZoom=ai_boost_auto_zoom,
-            broll=ai_boost_broll,
-            hookCheck=ai_boost_hook_check,
-        ),
-        lead_seconds=_clamp_pad(lead_seconds),
-        tail_seconds=_clamp_pad(tail_seconds),
-        game_config=_game_config_from_form(
-            detection_mode=detection_mode,
-            visual_rois_json=visual_rois_json,
-            visual_text_cues=visual_text_cues,
-            reference_audio_files=reference_audio_files,
-            vlm_visual_prompts=vlm_visual_prompts,
-            audio_prompts=audio_prompts,
-            audio_negative_prompts=audio_negative_prompts,
-        ),
+        lead_seconds=lead_seconds,
+        tail_seconds=tail_seconds,
+        detection_mode=detection_mode,
+        visual_rois_json=visual_rois_json,
+        visual_text_cues=visual_text_cues,
+        reference_audio_files=reference_audio_files,
+        vlm_visual_prompts=vlm_visual_prompts,
+        audio_prompts=audio_prompts,
+        audio_negative_prompts=audio_negative_prompts,
+        ai_boost_emphasis=ai_boost_emphasis,
+        ai_boost_emoji=ai_boost_emoji,
+        ai_boost_speaker_colors=ai_boost_speaker_colors,
+        ai_boost_auto_zoom=ai_boost_auto_zoom,
+        ai_boost_broll=ai_boost_broll,
+        ai_boost_hook_check=ai_boost_hook_check,
     )
     project = Project(name=name or "Untitled", settings=settings,
                       status=ProjectStatus.created)
@@ -382,15 +555,80 @@ async def create_project(
         raise HTTPException(400, error_msg)
 
     try:
-        with store.mutate(project.id) as p:
-            p.source = src
-            if not name or name == "Untitled":
-                p.name = Path(src.filename).stem[:60] or "Untitled"
-        engine.enqueue(project.id)
+        return _commit_source_and_enqueue(project, src, name)
     except Exception as e:
         _discard()
         raise HTTPException(500, f"could not start processing: {e}")
-    return store.get(project.id)
+
+
+@router.post("/raw-upload", response_model=Project)
+async def create_project_raw_upload(
+    request: Request,
+    filename: str = "upload.mp4",
+) -> Project:
+    """Create a project from a raw request body instead of multipart upload.
+
+    Large local videos can fail before route code runs when multipart parsing
+    tries to spool the body. This endpoint streams bytes directly from ASGI to
+    the project source file; settings travel in a compact JSON header.
+    """
+    header = request.headers.get("x-clipforge-settings", "{}")
+    try:
+        meta = json.loads(header) if header else {}
+    except Exception as exc:
+        raise HTTPException(400, "invalid X-ClipForge-Settings JSON") from exc
+    if not isinstance(meta, dict):
+        raise HTTPException(400, "X-ClipForge-Settings must be a JSON object")
+
+    safe_filename = Path(filename or meta.get("filename") or "upload.mp4").name
+    if not safe_filename:
+        safe_filename = "upload.mp4"
+    settings = _settings_from_meta(meta)
+    name = str(meta.get("name") or "Untitled")
+    project = Project(name=name or "Untitled", settings=settings,
+                      status=ProjectStatus.created)
+    store.save(project)
+
+    def _discard() -> None:
+        store.delete(project.id)
+        shutil.rmtree(get_settings().media_dir / project.id, ignore_errors=True)
+
+    try:
+        ext = Path(safe_filename).suffix.lower() or ".mp4"
+        if ext not in ingest.VIDEO_EXTS:
+            raise HTTPException(400, f"unsupported file type '{ext}'")
+        dest = ingest.project_dir(project.id) / f"source{ext}"
+        cap = get_settings().upload_cap_bytes
+        size = 0
+        with open(dest, "wb") as out:
+            async for chunk in request.stream():
+                if not chunk:
+                    continue
+                size += len(chunk)
+                if cap is not None and size > cap:
+                    dest.unlink(missing_ok=True)
+                    raise HTTPException(
+                        413, f"file exceeds the {get_settings().max_upload_mb} MB "
+                             "upload limit (CLIPFORGE_MAX_UPLOAD_MB; 0 = unlimited)")
+                out.write(chunk)
+        if size <= 0:
+            dest.unlink(missing_ok=True)
+            raise HTTPException(400, "empty upload")
+        src = await run_in_threadpool(
+            ingest.finalize_source, project, dest,
+            filename=safe_filename, url=None)
+    except HTTPException:
+        _discard()
+        raise
+    except Exception as e:
+        _discard()
+        raise HTTPException(400, _friendly_import_error(e)) from e
+
+    try:
+        return _commit_source_and_enqueue(project, src, name)
+    except Exception as e:
+        _discard()
+        raise HTTPException(500, f"could not start processing: {e}") from e
 
 
 @router.get("", response_model=list[ProjectSummary])

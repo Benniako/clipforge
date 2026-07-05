@@ -95,6 +95,77 @@ export interface CreateProjectInput {
   onProgress?: (pct: number) => void;
 }
 
+function projectSettings(input: CreateProjectInput): Record<string, unknown> {
+  return {
+    name: input.name ?? "",
+    platform: input.platform,
+    power_mode: input.power_mode,
+    min_len: input.min_len,
+    max_len: input.max_len,
+    target_clips: input.target_clips,
+    style_id: input.style_id,
+    language: input.language,
+    content_type: input.content_type,
+    aspect: input.aspect,
+    burn_captions: input.burn_captions,
+    game_profile: input.game_profile,
+    tighten: input.tighten,
+    denoise: input.denoise,
+    motion: input.motion,
+    ai_boost_emphasis: input.ai_boost?.emphasis ?? true,
+    ai_boost_emoji: input.ai_boost?.emoji ?? true,
+    ai_boost_speaker_colors: input.ai_boost?.speakerColors ?? true,
+    ai_boost_auto_zoom: input.ai_boost?.autoZoom ?? true,
+    ai_boost_broll: input.ai_boost?.broll ?? false,
+    ai_boost_hook_check: input.ai_boost?.hookCheck ?? true,
+    facecam_layout: input.facecam_layout,
+    use_ocr: input.use_ocr,
+    use_vlm: input.use_vlm,
+    use_cues: input.use_cues,
+    use_audio_events: input.use_audio_events,
+    cue_learning: input.cue_learning,
+    auto_length: input.auto_length,
+    lead_seconds: input.lead_seconds,
+    tail_seconds: input.tail_seconds,
+    game_config: input.game_config,
+  };
+}
+
+function asciiJson(value: unknown): string {
+  return JSON.stringify(value).replace(/[^\x20-\x7E]/g, (ch) =>
+    `\\u${ch.charCodeAt(0).toString(16).padStart(4, "0")}`,
+  );
+}
+
+function appendProjectFormFields(fd: FormData, input: CreateProjectInput) {
+  const settings = projectSettings(input);
+  Object.entries(settings).forEach(([key, value]) => {
+    if (value === null || value === undefined || key === "game_config") return;
+    fd.set(key, String(value));
+  });
+  if (input.lead_seconds !== null) fd.set("lead_seconds", String(input.lead_seconds));
+  if (input.tail_seconds !== null) fd.set("tail_seconds", String(input.tail_seconds));
+  if (input.game_config) {
+    fd.set("detection_mode", input.game_config.detection_mode);
+    fd.set("visual_rois_json", JSON.stringify(input.game_config.visual_rois ?? []));
+    fd.set("visual_text_cues", (input.game_config.visual_text_cues ?? []).join("\n"));
+    fd.set("reference_audio_files", (input.game_config.reference_audio_files ?? []).join("\n"));
+    fd.set("vlm_visual_prompts", (input.game_config.vlm_visual_prompts ?? []).join("\n"));
+    fd.set("audio_prompts", (input.game_config.audio_prompts ?? []).join("\n"));
+    fd.set("audio_negative_prompts", (input.game_config.audio_negative_prompts ?? []).join("\n"));
+  }
+}
+
+function parseXhrError(xhr: XMLHttpRequest): Error {
+  let msg = xhr.statusText;
+  try {
+    msg = JSON.parse(xhr.responseText).detail ?? msg;
+  } catch {
+    /* ignore */
+  }
+  return new Error(msg);
+}
+
 export const api = {
   health: () => fetchWithTimeout("/api/health").then((r) => json<Health>(r)),
 
@@ -268,70 +339,54 @@ export const api = {
   // Uses XHR so we can report real upload progress for large files.
   createProject: (input: CreateProjectInput) =>
     new Promise<Project>((resolve, reject) => {
-      const fd = new FormData();
-      fd.set("name", input.name ?? "");
-      fd.set("platform", input.platform);
-      fd.set("power_mode", input.power_mode);
-      fd.set("min_len", String(input.min_len));
-      fd.set("max_len", String(input.max_len));
-      fd.set("target_clips", String(input.target_clips));
-      fd.set("style_id", input.style_id);
-      fd.set("language", input.language);
-      fd.set("content_type", input.content_type);
-      fd.set("aspect", input.aspect);
-      fd.set("burn_captions", String(input.burn_captions));
-      fd.set("game_profile", input.game_profile);
-      fd.set("tighten", String(input.tighten));
-      fd.set("denoise", String(input.denoise));
-      fd.set("motion", input.motion);
-      fd.set("ai_boost_emphasis", String(input.ai_boost?.emphasis ?? true));
-      fd.set("ai_boost_emoji", String(input.ai_boost?.emoji ?? true));
-      fd.set("ai_boost_speaker_colors", String(input.ai_boost?.speakerColors ?? true));
-      fd.set("ai_boost_auto_zoom", String(input.ai_boost?.autoZoom ?? true));
-      fd.set("ai_boost_broll", String(input.ai_boost?.broll ?? false));
-      fd.set("ai_boost_hook_check", String(input.ai_boost?.hookCheck ?? true));
-      fd.set("facecam_layout", input.facecam_layout);
-      fd.set("use_ocr", String(input.use_ocr));
-      fd.set("use_vlm", String(input.use_vlm));
-      fd.set("use_cues", String(input.use_cues));
-      fd.set("use_audio_events", String(input.use_audio_events));
-      fd.set("cue_learning", String(input.cue_learning));
-      fd.set("auto_length", String(input.auto_length));
-      if (input.lead_seconds !== null) fd.set("lead_seconds", String(input.lead_seconds));
-      if (input.tail_seconds !== null) fd.set("tail_seconds", String(input.tail_seconds));
-      if (input.game_config) {
-        fd.set("detection_mode", input.game_config.detection_mode);
-        fd.set("visual_rois_json", JSON.stringify(input.game_config.visual_rois ?? []));
-        fd.set("visual_text_cues", (input.game_config.visual_text_cues ?? []).join("\n"));
-        fd.set("reference_audio_files", (input.game_config.reference_audio_files ?? []).join("\n"));
-        fd.set("vlm_visual_prompts", (input.game_config.vlm_visual_prompts ?? []).join("\n"));
-        fd.set("audio_prompts", (input.game_config.audio_prompts ?? []).join("\n"));
-        fd.set("audio_negative_prompts", (input.game_config.audio_negative_prompts ?? []).join("\n"));
-      }
-      if (input.url) fd.set("url", input.url);
-      if (input.file) fd.set("file", input.file);
+      const sendMultipart = () => {
+        const fd = new FormData();
+        appendProjectFormFields(fd, input);
+        if (input.url) fd.set("url", input.url);
+        if (input.file) fd.set("file", input.file);
 
-      const xhr = new XMLHttpRequest();
-      xhr.open("POST", "/api/projects");
-      xhr.upload.onprogress = (e) => {
-        if (e.lengthComputable && input.onProgress)
-          input.onProgress(Math.round((e.loaded / e.total) * 100));
-      };
-      xhr.onload = () => {
-        if (xhr.status >= 200 && xhr.status < 300) {
-          resolve(JSON.parse(xhr.responseText));
-        } else {
-          let msg = xhr.statusText;
-          try {
-            msg = JSON.parse(xhr.responseText).detail ?? msg;
-          } catch {
-            /* ignore */
+        const xhr = new XMLHttpRequest();
+        xhr.open("POST", "/api/projects");
+        xhr.upload.onprogress = (e) => {
+          if (e.lengthComputable && input.onProgress)
+            input.onProgress(Math.round((e.loaded / e.total) * 100));
+        };
+        xhr.onload = () => {
+          if (xhr.status >= 200 && xhr.status < 300) {
+            resolve(JSON.parse(xhr.responseText));
+          } else {
+            reject(parseXhrError(xhr));
           }
-          reject(new Error(msg));
-        }
+        };
+        xhr.onerror = () => reject(new Error("network error during upload"));
+        xhr.send(fd);
       };
-      xhr.onerror = () => reject(new Error("network error during upload"));
-      xhr.send(fd);
+
+      if (input.file && !input.url) {
+        const xhr = new XMLHttpRequest();
+        const filename = encodeURIComponent(input.file.name || "upload.mp4");
+        xhr.open("POST", `/api/projects/raw-upload?filename=${filename}`);
+        xhr.setRequestHeader("Content-Type", input.file.type || "application/octet-stream");
+        xhr.setRequestHeader("X-ClipForge-Settings", asciiJson(projectSettings(input)));
+        xhr.upload.onprogress = (e) => {
+          if (e.lengthComputable && input.onProgress)
+            input.onProgress(Math.round((e.loaded / e.total) * 100));
+        };
+        xhr.onload = () => {
+          if (xhr.status >= 200 && xhr.status < 300) {
+            resolve(JSON.parse(xhr.responseText));
+          } else if (xhr.status === 404 || xhr.status === 405) {
+            sendMultipart();
+          } else {
+            reject(parseXhrError(xhr));
+          }
+        };
+        xhr.onerror = () => reject(new Error("network error during upload"));
+        xhr.send(input.file);
+        return;
+      }
+
+      sendMultipart();
     }),
 
   editClip: (

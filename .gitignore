@@ -28,6 +28,7 @@ npm-debug.log*
 
 # Local agent/session config
 .claude/settings.local.json
+.codex-logs/
 .shots/
 .cache/
 *.tmp

@@ -46,8 +46,12 @@ whisperx>=3.1
 panns-inference>=0.1.1
 
 # Zero-shot audio cue detection with text prompts ("cheering", "laughter",
-# "explosion") when PANNs is not available or misses a moment. Heavy, optional.
-laion-clap>=1.1.4
+# "explosion") is supported by the runtime when laion_clap is installed, but
+# laion-clap 1.1.x currently pins NumPy <2 and breaks PaddleOCR / WhisperX /
+# SCRFD on a modern NumPy 2 stack. Keep it out of the default clean install
+# until an upstream-compatible release exists; PANNs remains the default audio
+# event detector.
+# laion-clap>=1.1.4
 
 # Vocal isolation (Demucs) — separate the voice from music/game audio so speech
 # and captions sound studio-clean. Heavy; a CUDA GPU is strongly recommended.

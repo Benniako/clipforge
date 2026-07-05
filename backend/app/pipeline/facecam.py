@@ -294,10 +294,12 @@ def action_center(src_path: str, t0: float, t1: float, cam: Rect | None = None,
                 continue
             img = cv2.imread(str(fp), cv2.IMREAD_GRAYSCALE)
             if img is not None:
+                if getattr(img, "ndim", 2) == 3:
+                    img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
                 frames.append(img.astype("float32"))
     if len(frames) < 2:
         return None
-    h, w = frames[0].shape
+    h, w = frames[0].shape[:2]
     energy = np.zeros((h, w), dtype="float32")
     for a, b in zip(frames, frames[1:]):
         if a.shape == b.shape:

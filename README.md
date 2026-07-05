@@ -229,6 +229,11 @@ pip install -r backend/requirements-extras.txt
 
 The nav bar shows which are live in your environment.
 
+LAION-CLAP zero-shot audio prompts are still supported when `laion_clap` is
+installed manually, but it is not part of the default extras bundle right now:
+current `laion-clap` releases pin old NumPy and conflict with the modern
+PaddleOCR / WhisperX / SCRFD stack.
+
 ## Language support
 
 Transcription auto-detects the spoken language (works for any Whisper-supported

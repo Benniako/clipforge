@@ -260,16 +260,38 @@ def _ct2_cuda_runtime_available() -> bool:
     if os.name != "nt":
         return True
     _add_nvidia_dll_dirs()
-    try:
+    def _load_one(names: list[str]) -> str | None:
         import ctypes
 
-        ctypes.WinDLL("cublas64_12.dll")
+        for name in names:
+            try:
+                ctypes.WinDLL(name)
+                return name
+            except Exception:
+                pass
+        return None
+
+    try:
+        cublas = _load_one(["cublas64_12.dll"])
+        cudnn = _load_one([
+            "cudnn64_9.dll",
+            "cudnn_ops64_9.dll",
+            "cudnn_ops_infer64_8.dll",
+        ])
+        if not cublas or not cudnn:
+            missing = []
+            if not cublas:
+                missing.append("cuBLAS")
+            if not cudnn:
+                missing.append("cuDNN")
+            raise RuntimeError(", ".join(missing) + " DLLs missing")
         return True
     except Exception as exc:
         log.warning(
-            "CUDA detected, but ctranslate2 cannot load cuBLAS (%s); "
-            "falling back to CPU transcription. Install nvidia-cublas-cu12 "
-            "and nvidia-cudnn-cu12 in the ClipForge venv to enable GPU ASR.",
+            "CUDA detected, but ctranslate2 cannot load its NVIDIA runtime "
+            "(%s); falling back to CPU transcription. Install "
+            "nvidia-cublas-cu12 and nvidia-cudnn-cu12>=9 in the ClipForge "
+            "venv to enable GPU ASR.",
             exc,
         )
         return False

@@ -25,9 +25,10 @@ silero-vad>=5.1             # pins captions to exact speech — drops Whisper
 # from them. Auto-detected when installed. Enable with:
 #   pip install -r backend/requirements-ocr.txt   (EasyOCR / PaddleOCR / Tesseract)
 
-# GPU transcription (NVIDIA): ctranslate2 needs cuBLAS + cuDNN at runtime.
-# setup.bat/setup.sh install these automatically when nvidia-smi is present:
-#   pip install nvidia-cublas-cu12 nvidia-cudnn-cu12
+# GPU transcription (NVIDIA): current faster-whisper/CTranslate2 builds use
+# CUDA 12 + cuDNN 9. setup.bat installs the matching PyTorch CUDA wheels plus
+# pip-provided NVIDIA runtime DLLs when nvidia-smi is present:
+#   pip install nvidia-cublas-cu12 "nvidia-cudnn-cu12>=9" nvidia-cuda-runtime-cu12
 
 # Opt-in, higher-quality transcription: whisperX adds forced word-level
 # alignment (tighter caption timing) and speaker diarization. It is heavy

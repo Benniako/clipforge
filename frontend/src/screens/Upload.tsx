@@ -35,7 +35,7 @@ export default function Upload({ health }: { health: Health | null }) {
   const nav = useNavigate();
   const fileRef = useRef<HTMLInputElement>(null);
   const [drag, setDrag] = useState(false);
-  const [file, setFile] = useState<File | null>(null);
+  const [files, setFiles] = useState<File[]>([]);
   const [url, setUrl] = useState("");
   const [platform, setPlatform] = useState("tiktok");
   const [powerMode, setPowerMode] = useState("balanced");
@@ -80,6 +80,7 @@ export default function Upload({ health }: { health: Health | null }) {
   const [cues, setCues] = useState<CuesStatus | null>(null);
   const [busy, setBusy] = useState(false);
   const [pct, setPct] = useState(0);
+  const [batchUpload, setBatchUpload] = useState<{ index: number; total: number; name: string } | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [capDefaultsApplied, setCapDefaultsApplied] = useState(false);
@@ -88,6 +89,8 @@ export default function Upload({ health }: { health: Health | null }) {
   const vlmAvailable = Boolean(caps?.vlm);
   const audioEventsAvailable = Boolean(caps?.audio_events);
   const detectorEnabled = (enabled: boolean, available: boolean) => enabled && available;
+  const file = files[0] ?? null;
+  const totalSelectedSizeMb = files.reduce((sum, f) => sum + f.size, 0) / 1024 / 1024;
 
   // Auto-dismiss the error toast (no CSS animation drives it).
   useEffect(() => {
@@ -122,18 +125,22 @@ export default function Upload({ health }: { health: Health | null }) {
   const refreshProjects = () =>
     api.listProjects().then(setProjects).catch(() => {});
 
+  const selectFiles = useCallback((list: FileList | File[] | null) => {
+    const next = Array.from(list ?? []);
+    if (!next.length) return;
+    setFiles(next);
+    setUrl("");
+    if (fileRef.current) fileRef.current.value = "";
+  }, []);
+
   const onDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     setDrag(false);
-    const f = e.dataTransfer.files?.[0];
-    if (f) {
-      setFile(f);
-      setUrl("");
-    }
-  }, []);
+    selectFiles(e.dataTransfer.files);
+  }, [selectFiles]);
 
   const submit = async () => {
-    if (!file && !url.trim()) {
+    if (!files.length && !url.trim()) {
       setErr(t("up.errNoSource"));
       return;
     }
@@ -144,6 +151,7 @@ export default function Upload({ health }: { health: Health | null }) {
     setErr(null);
     setBusy(true);
     setPct(0);
+    setBatchUpload(null);
     try {
       const len = LENGTHS[lenIdx];
       const splitCues = (s: string) =>
@@ -165,9 +173,9 @@ export default function Upload({ health }: { health: Health | null }) {
               vlm_visual_prompts: vlmPrompts,
             }
           : undefined;
-      const project = await api.createProject({
-        file: file ?? undefined,
-        url: url.trim() || undefined,
+      const createProjectInput = (currentFile?: File) => ({
+        file: currentFile,
+        url: currentFile ? undefined : url.trim() || undefined,
         platform,
         power_mode: powerMode,
         min_len: len.min,
@@ -195,12 +203,40 @@ export default function Upload({ health }: { health: Health | null }) {
         lead_seconds: manualContext ? leadSeconds : null,
         tail_seconds: manualContext ? tailSeconds : null,
         game_config: gameConfig,
+      });
+
+      if (files.length) {
+        const created = [];
+        for (let i = 0; i < files.length; i += 1) {
+          const current = files[i];
+          setBatchUpload({ index: i + 1, total: files.length, name: current.name });
+          const project = await api.createProject({
+            ...createProjectInput(current),
+            onProgress: (nextPct) => {
+              const aggregate = Math.round(((i + nextPct / 100) / files.length) * 100);
+              setPct(files.length > 1 ? aggregate : nextPct);
+            },
+          });
+          created.push(project);
+        }
+        await refreshProjects();
+        setBusy(false);
+        setPct(0);
+        setBatchUpload(null);
+        setFiles([]);
+        if (created.length === 1) nav(`/p/${created[0].id}`);
+        return;
+      }
+
+      const project = await api.createProject({
+        ...createProjectInput(),
         onProgress: setPct,
       });
       nav(`/p/${project.id}`);
     } catch (e: any) {
       setErr(e.message ?? t("up.errGeneric"));
       setBusy(false);
+      setBatchUpload(null);
     }
   };
 
@@ -259,11 +295,23 @@ export default function Upload({ health }: { health: Health | null }) {
       >
         {file ? (
           <div className="col" style={{ alignItems: "center", gap: 8 }}>
-            <div className="big">{t("up.videoLabel", { name: file.name })}</div>
-            <div className="muted tiny">
-              {t("up.fileReady", { size: (file.size / 1024 / 1024).toFixed(1) })}
+            <div className="big">
+              {files.length > 1
+                ? t("up.batchVideoLabel", { count: files.length })
+                : t("up.videoLabel", { name: file.name })}
             </div>
-            <button className="btn ghost sm" onClick={() => setFile(null)}>
+            <div className="muted tiny">
+              {files.length > 1
+                ? t("up.batchFileReady", { size: totalSelectedSizeMb.toFixed(1) })
+                : t("up.fileReady", { size: (file.size / 1024 / 1024).toFixed(1) })}
+            </div>
+            {files.length > 1 && (
+              <div className="muted tiny" style={{ maxWidth: 680, textAlign: "center" }}>
+                {files.slice(0, 4).map((f) => f.name).join(" • ")}
+                {files.length > 4 && ` ${t("up.batchMore", { count: files.length - 4 })}`}
+              </div>
+            )}
+            <button className="btn ghost sm" onClick={() => setFiles([])}>
               {t("up.chooseOtherFile")}
             </button>
           </div>
@@ -296,14 +344,9 @@ export default function Upload({ health }: { health: Health | null }) {
           ref={fileRef}
           type="file"
           accept="video/*"
+          multiple
           hidden
-          onChange={(e) => {
-            const f = e.target.files?.[0];
-            if (f) {
-              setFile(f);
-              setUrl("");
-            }
-          }}
+          onChange={(e) => selectFiles(e.target.files)}
         />
       </div>
 
@@ -725,8 +768,16 @@ export default function Upload({ health }: { health: Health | null }) {
       <div style={{ marginTop: 22, display: "flex", justifyContent: "center" }}>
         <button className="btn primary" onClick={submit} disabled={busy} style={{ minWidth: 240, justifyContent: "center" }}>
           {busy ? (
-            pct < 100 && file ? (
-              <>{t("up.uploading", { pct })}</>
+            pct < 100 && files.length ? (
+              <>
+                {batchUpload && batchUpload.total > 1
+                  ? t("up.uploadingBatch", {
+                      current: batchUpload.index,
+                      total: batchUpload.total,
+                      pct,
+                    })
+                  : t("up.uploading", { pct })}
+              </>
             ) : url ? (
               <>
                 <span className="spinner" /> {t("up.downloading")}
@@ -737,7 +788,7 @@ export default function Upload({ health }: { health: Health | null }) {
               </>
             )
           ) : (
-            <>{t("up.generateClips")}</>
+            <>{files.length > 1 ? t("up.generateBatch", { count: files.length }) : t("up.generateClips")}</>
           )}
         </button>
       </div>

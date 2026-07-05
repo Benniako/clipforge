@@ -23,12 +23,20 @@ if [ -f .venv/Scripts/python.exe ]; then VPY=.venv/Scripts/python.exe; else VPY=
 "$VPY" -m pip install --upgrade pip
 "$VPY" -m pip install -r backend/requirements.txt
 
-# 2b. NVIDIA GPU runtime (auto-detected): Whisper-on-GPU needs cuBLAS/cuDNN;
-#     the pip wheels provide them without a system CUDA install.
+# 2b. NVIDIA GPU runtime (auto-detected): current faster-whisper/CTranslate2
+#     builds use CUDA 12 + cuDNN 9. Prefer current PyTorch CUDA wheels, but
+#     keep CPU fallbacks so optional acceleration never blocks the app.
 if command -v nvidia-smi >/dev/null 2>&1; then
-  echo "NVIDIA GPU detected - installing CUDA runtime libraries for GPU transcription..."
-  "$VPY" -m pip install nvidia-cublas-cu12 nvidia-cudnn-cu12 \
-    || echo "[!] CUDA libraries failed to install - transcription will run on CPU."
+  echo "NVIDIA GPU detected - installing PyTorch CUDA + NVIDIA runtime wheels..."
+  "$VPY" -m pip install --upgrade 'torch~=2.8.0' 'torchvision~=0.23.0' 'torchaudio~=2.8.0' --index-url https://download.pytorch.org/whl/cu128 \
+    || "$VPY" -m pip install --upgrade 'torch~=2.8.0' 'torchvision~=0.23.0' 'torchaudio~=2.8.0' --index-url https://download.pytorch.org/whl/cu126 \
+    || "$VPY" -m pip install --upgrade 'torch~=2.8.0' 'torchvision~=0.23.0' 'torchaudio~=2.8.0' --index-url https://download.pytorch.org/whl/cpu \
+    || echo "[!] PyTorch install failed; optional torch engines may stay off."
+  "$VPY" -m pip install --upgrade nvidia-cublas-cu12 'nvidia-cudnn-cu12>=9' nvidia-cuda-runtime-cu12 nvidia-cuda-nvrtc-cu12 \
+    || echo "[!] CUDA runtime libraries failed to install - ASR will run on CPU."
+else
+  "$VPY" -m pip install --upgrade 'torch~=2.8.0' 'torchvision~=0.23.0' 'torchaudio~=2.8.0' --index-url https://download.pytorch.org/whl/cpu \
+    || echo "[!] CPU PyTorch install failed; optional torch engines may stay off."
 fi
 
 # 2c. Optional AI power-ups (VAD captions, OCR, scene detect, emotion, YOLO
@@ -40,6 +48,19 @@ while IFS= read -r pkg; do
   echo "  -> $pkg"
   "$VPY" -m pip install "$pkg" || echo "  [..] skipped $pkg (install failed/conflict)"
 done < backend/requirements-extras.txt
+
+# Optional packages can pull CPU PyTorch wheels from PyPI. Re-apply the
+# hardware-matched acceleration stack after extras so the final environment is
+# the one ClipForge will actually run with.
+if command -v nvidia-smi >/dev/null 2>&1; then
+  echo "Re-validating PyTorch CUDA + NVIDIA runtime wheels after optional installs..."
+  "$VPY" -m pip install --upgrade 'torch~=2.8.0' 'torchvision~=0.23.0' 'torchaudio~=2.8.0' --index-url https://download.pytorch.org/whl/cu128 \
+    || "$VPY" -m pip install --upgrade 'torch~=2.8.0' 'torchvision~=0.23.0' 'torchaudio~=2.8.0' --index-url https://download.pytorch.org/whl/cu126 \
+    || "$VPY" -m pip install --upgrade 'torch~=2.8.0' 'torchvision~=0.23.0' 'torchaudio~=2.8.0' --index-url https://download.pytorch.org/whl/cpu \
+    || echo "[!] Final PyTorch acceleration check failed; optional torch engines may stay off."
+  "$VPY" -m pip install --upgrade nvidia-cublas-cu12 'nvidia-cudnn-cu12>=9' nvidia-cuda-runtime-cu12 nvidia-cuda-nvrtc-cu12 \
+    || echo "[!] Final CUDA runtime check failed - ASR will run on CPU."
+fi
 
 # 3. (optional) YuNet face model — much better facecam/face detection than the
 #    Haar fallback. Skipped silently when offline; everything still works.
