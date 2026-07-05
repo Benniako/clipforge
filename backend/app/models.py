@@ -265,6 +265,9 @@ class Clip(BaseModel):
     # Jump-cut segments (absolute source times) when silence-tightening applied;
     # empty = render the plain start..end span.
     segments: list[list[float]] = Field(default_factory=list)
+    # Optional loopability preview: prepend the final N seconds of the rendered
+    # clip before the full clip starts. 0 disables it; editor offers 3-5s.
+    loop_preview_seconds: float = 0.0
     # Absolute source spans whose words are kept OUT of captions — in-game
     # announcer/agent lines located by audio-cue matches.
     caption_mute: list[list[float]] = Field(default_factory=list)

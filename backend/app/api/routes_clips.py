@@ -60,6 +60,8 @@ class ClipEdit(BaseModel):
     reframe_cx: float | None = None                 # static manual crop centre [0,1]
     layout: str | None = None                       # "center"|"split"|"framed"
     facecam: Rect | None = None                     # facecam region override
+    # Seconds of rendered tail to prepend for a loopability preview. 0 disables.
+    loop_preview_seconds: float | None = None
     # Per-clip output aspect: an ASPECTS key, or "" to return to the
     # project default.
     aspect: str | None = None
@@ -239,6 +241,11 @@ def edit_clip(project_id: str, clip_id: str, edit: ClipEdit) -> Clip:
 
     if edit.aspect is not None:
         clip.aspect = edit.aspect if edit.aspect in ASPECTS else None
+
+    if edit.loop_preview_seconds is not None:
+        seconds = float(edit.loop_preview_seconds)
+        clip.loop_preview_seconds = 0.0 if seconds <= 0 else round(
+            max(3.0, min(5.0, seconds)), 1)
 
     if edit.layout is not None:
         try:

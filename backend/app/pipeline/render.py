@@ -50,6 +50,71 @@ def _even(x: float) -> int:
     return int(x) // 2 * 2
 
 
+def _effective_duration(clip: Clip) -> float:
+    segments = [(a, b) for a, b in (clip.segments or []) if b > a]
+    return sum(b - a for a, b in segments) if len(segments) >= 2 else clip.duration
+
+
+def _loop_preview_seconds(clip: Clip, eff_dur: float | None = None) -> float:
+    """Usable loop-preview seconds for this rendered clip."""
+    raw = max(float(getattr(clip, "loop_preview_seconds", 0.0) or 0.0), 0.0)
+    if raw <= 0.0:
+        return 0.0
+    dur = _effective_duration(clip) if eff_dur is None else max(eff_dur, 0.0)
+    return round(min(raw, 5.0, max(dur - 0.25, 0.0)), 3)
+
+
+def _prepend_loop_preview(base_path: Path, out_path: Path, *,
+                          preview_s: float, base_duration: float,
+                          fps: float, has_audio: bool) -> None:
+    """Write out_path as the rendered tail followed by the full rendered clip."""
+    start = max(base_duration - preview_s, 0.0)
+    base_abs = os.path.abspath(str(base_path))
+    out_abs = os.path.abspath(str(out_path))
+    with tempfile.TemporaryDirectory() as tmp:
+        graph = Path(tmp) / "loop.txt"
+        if has_audio:
+            graph.write_text(
+                "[0:v]setpts=PTS-STARTPTS[v0];"
+                "[0:a]asetpts=PTS-STARTPTS[a0];"
+                "[1:v]setpts=PTS-STARTPTS[v1];"
+                "[1:a]asetpts=PTS-STARTPTS[a1];"
+                "[v0][a0][v1][a1]concat=n=2:v=1:a=1[vo][ao]",
+                encoding="utf-8",
+            )
+            audio = ["-map", "[ao]", "-c:a", "aac", "-b:a", "128k", "-ac", "2"]
+        else:
+            graph.write_text(
+                "[0:v]setpts=PTS-STARTPTS[v0];"
+                "[1:v]setpts=PTS-STARTPTS[v1];"
+                "[v0][v1]concat=n=2:v=1:a=0[vo]",
+                encoding="utf-8",
+            )
+            audio = ["-an"]
+
+        base = ["-ss", f"{start:.3f}", "-t", f"{preview_s:.3f}", "-i", base_abs,
+                "-i", base_abs, "-filter_complex_script", "loop.txt",
+                "-map", "[vo]"]
+        tail = ["-r", f"{fps:.3f}", "-movflags", "+faststart", out_abs]
+        s = get_settings()
+        encoders: list[list[str]] = [s.video_encoder_args()]
+        if s.use_nvenc:
+            encoders.append(_X264)
+        last: Exception | None = None
+        for enc in encoders:
+            try:
+                with _RENDER_SEMAPHORE:
+                    ffmpeg.run([*base, *enc, *audio, *tail], timeout=900, cwd=tmp)
+                last = None
+                break
+            except ffmpeg.FFmpegError as e:
+                last = e
+                log.warning("loop preview encode failed with %s; trying fallback",
+                            enc[1] if len(enc) > 1 else enc)
+        if last is not None:
+            raise last
+
+
 def build_crop(clip: Clip, src_w: int, src_h: int,
                out_w: int = 1080, out_h: int = 1920) -> tuple[int, int, str]:
     """Return (crop_w, crop_h, x_arg) for the target aspect out_w:out_h.
@@ -238,9 +303,28 @@ def render_clip(clip: Clip, src_path: str, info: MediaInfo, style: StyleTemplate
     src_abs = os.path.abspath(str(src_path))
     out_abs = os.path.abspath(str(out_path))
     fps = min(info.fps or 30, 60)
+    eff_dur = _effective_duration(clip)
+    preview_s = _loop_preview_seconds(clip, eff_dur)
+    if preview_s > 0.0:
+        with tempfile.TemporaryDirectory() as loop_tmp:
+            base_out = Path(loop_tmp) / "base.mp4"
+            base_thumb = Path(loop_tmp) / "base.jpg"
+            base_clip = clip.model_copy(update={"loop_preview_seconds": 0.0})
+            render_clip(base_clip, src_path, info, style, base_out, base_thumb,
+                        out_w=out_w, out_h=out_h,
+                        burn_captions=burn_captions, motion=motion,
+                        background_music=background_music, ai_boost=ai_boost)
+            _prepend_loop_preview(base_out, out_path, preview_s=preview_s,
+                                  base_duration=eff_dur, fps=fps,
+                                  has_audio=info.has_audio)
+        final_dur = eff_dur + preview_s
+        at = min(max(final_dur * 0.35, 0.5), max(final_dur - 0.1, 0.0))
+        _make_thumbnail(out_path, thumb_path, at=at, width=540,
+                        duration=final_dur, title=getattr(clip, "title", None))
+        return
     segments = [(a, b) for a, b in (clip.segments or []) if b > a]
     tightened = len(segments) >= 2
-    eff_dur = sum(b - a for a, b in segments) if tightened else clip.duration
+    eff_dur = _effective_duration(clip)
     # Facecam layouts (gameplay): cam + gameplay composed on a vertical canvas.
     cam = clip.reframe.facecam
     composed = (clip.reframe.layout in (LayoutType.split, LayoutType.framed)
