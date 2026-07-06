@@ -10,20 +10,20 @@
 # something breaks, install just the ones you want.
 
 # Captions that start/stop on exact speech (tiny, fast, CPU-friendly).
-silero-vad>=5.1
-onnxruntime>=1.17
+silero-vad>=6.2.1
+onnxruntime>=1.27
 
 # Better scene-cut snapping (adaptive detector). Light. Keep OpenCV pinned by
 # requirements.txt; the [opencv] extra can install opencv-python beside the
 # headless wheel, and both packages share the same cv2 namespace.
-scenedetect>=0.6.4
+scenedetect>=0.7
 
 # Gameplay on-screen text (kill banners / scorelines / VICTORY). PaddleOCR v6
 # is tried first when installed; EasyOCR remains the robust fallback.
-paddleocr>=3.2
-paddlepaddle>=3.2
-transformers>=4.45
-easyocr>=1.7
+paddleocr>=3.7
+paddlepaddle>=3.3
+transformers>=4.57
+easyocr>=1.7.2
 pytesseract>=0.3.13
 rapidfuzz>=3.0
 
@@ -33,14 +33,16 @@ modelscope>=1.15
 
 # Content-aware vertical reframe — tracks people/objects through cuts.
 # Default is YOLO11 nano. Opt into YOLO26 with CLIPFORGE_YOLO_MODEL=yolo26n.pt.
-ultralytics>=8.4
+# Ultralytics declares opencv-python; setup.bat/setup.sh normalize back to the
+# single opencv-python-headless OpenCV 5 wheel after extras finish installing.
+ultralytics>=8.4.89
 
 # Stronger face detection for speaker-aware reframing than the OpenCV fallback.
 scrfd>=0.3.0
 
 # Higher-quality transcription: forced word alignment + speaker diarization.
 # Diarization also needs a Hugging Face token (HF_TOKEN).
-whisperx>=3.1
+whisperx>=3.8.6
 
 # Audio-event detection (PANNs / CNN14 on AudioSet) — score cheering, laughter,
 # applause, explosions as an explainable virality signal. Zero-shot (no per-game

@@ -28,6 +28,13 @@ _OPENCV_DISTRIBUTIONS = (
     "opencv-contrib-python-headless",
     "opencv-contrib-python",
 )
+_OCR_DISTRIBUTIONS = (
+    "paddleocr",
+    "paddlepaddle",
+    "easyocr",
+    "pytesseract",
+    "rapidfuzz",
+)
 
 
 def _repo_root() -> Path:
@@ -494,6 +501,7 @@ class Settings:
     has_nvidia: bool        # an NVIDIA GPU + driver is actually present
     has_av1_nvenc: bool = False  # ffmpeg has av1_nvenc (RTX 40/50 series)
     ocr_engine: str = ""    # on-screen text OCR: "easyocr"|"paddleocr"|""
+    ocr_packages: tuple[str, ...] = ()  # detected OCR-related package versions
     # --- optional power-ups (graceful: no-op when absent) ---------------
     has_vad: bool = False        # Silero VAD — snap captions to exact speech
     has_scenedetect: bool = False  # PySceneDetect — better scene-cut snapping
@@ -609,6 +617,17 @@ class Settings:
                 "so the imported runtime matches the intended OpenCV 5 build."
             )
 
+        def pkg_label(label: str, package: str) -> str:
+            prefix = f"{package}=="
+            for entry in self.ocr_packages:
+                if entry.startswith(prefix):
+                    return f"{label} {entry.removeprefix(prefix)}"
+            return label
+
+        ocr_inventory = ""
+        if self.ocr_packages:
+            ocr_inventory = f" Installed OCR wheels: {', '.join(self.ocr_packages)}."
+
         return {"categories": [
             {"name": "core", "items": [
                 item("ffmpeg", bool(self.ffmpeg),
@@ -652,14 +671,20 @@ class Settings:
             ]},
             {"name": "ocr", "items": [
                 item("paddleocr", self.has_paddleocr,
-                     "PaddleOCR", "Best overall OCR accuracy for in-game HUD text."),
+                     pkg_label("PaddleOCR", "paddleocr"),
+                     "Best overall OCR accuracy for in-game HUD text. "
+                     "PP-OCRv6 improves digital display and small overlay text."
+                     + ocr_inventory),
                 item("easyocr", self.has_easyocr,
-                     "EasyOCR", "Better than PaddleOCR on noisy/bitrate-starved frames."),
+                     pkg_label("EasyOCR", "easyocr"),
+                     "Better than PaddleOCR on noisy/bitrate-starved frames."),
                 item("tesseract", self.has_tesseract,
-                     "Tesseract", "CPU OCR fallback for sparse text when deep OCR engines are absent."),
+                     pkg_label("Tesseract", "pytesseract"),
+                     "CPU OCR fallback for sparse text when deep OCR engines are absent."),
                 item("ocr_selected", bool(self.ocr_engine),
                      f"Active OCR: {self.ocr_engine or 'none'}",
-                     "Selected automatically from the engines above. None = OCR detection skipped."),
+                     "Selected automatically from the engines above. None = OCR detection skipped."
+                     + ocr_inventory),
             ]},
             {"name": "audio", "items": [
                 item("clap", self.has_clap,
@@ -830,6 +855,7 @@ class Settings:
             "paddleocr": self.has_paddleocr,
             "easyocr": self.has_easyocr,
             "tesseract": self.has_tesseract,
+            "ocr_packages": list(self.ocr_packages),
             "scrfd": self.has_scrfd,
         }
 
@@ -879,6 +905,7 @@ def get_settings() -> Settings:
         opencv_packages=opencv_packages,
         has_ytdlp=_has_module("yt_dlp"),
         ocr_engine=_detect_ocr(has_any_cuda or has_nvidia),
+        ocr_packages=_installed_distributions(_OCR_DISTRIBUTIONS),
         has_vad=_has_module("silero_vad"),
         has_scenedetect=_has_module("scenedetect"),
         has_emotion=_has_module("funasr"),

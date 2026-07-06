@@ -43,6 +43,7 @@ const baseCaps: Health["capabilities"] = {
   paddleocr: false,
   easyocr: false,
   tesseract: false,
+  ocr_packages: [],
 };
 
 describe("capability badge helpers", () => {

@@ -313,6 +313,7 @@ export interface Health {
     paddleocr: boolean;
     easyocr: boolean;
     tesseract: boolean;
+    ocr_packages: string[];
   };
   output: { width: number; height: number };
 }

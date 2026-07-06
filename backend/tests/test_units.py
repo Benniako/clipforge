@@ -3042,6 +3042,7 @@ def test_capability_report_includes_new_detector_fields():
     assert "opencv_version" in flat
     assert "opencv_packages" in flat and isinstance(flat["opencv_packages"], list)
     assert isinstance(flat["opencv_package_conflict"], bool)
+    assert "ocr_packages" in flat and isinstance(flat["ocr_packages"], list)
 
 
 def test_capabilities_endpoint_returns_both_views():

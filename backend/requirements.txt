@@ -1,8 +1,8 @@
 # ClipForge backend dependencies
-fastapi>=0.110
+fastapi>=0.139
 uvicorn[standard]>=0.29
-python-multipart>=0.0.9      # multipart/form-data uploads
-pydantic>=2.6
+python-multipart>=0.0.32     # multipart/form-data uploads; includes 2026 DoS hardening
+pydantic>=2.13.4
 
 # Media engine (a static ffmpeg/ffprobe is bundled by these wheels, so no
 # system install is required to run the pipeline end-to-end).
@@ -11,11 +11,11 @@ imageio-ffmpeg>=0.4.9        # fallback source for a static ffmpeg binary
 
 # Optional, auto-detected at runtime. The pipeline degrades gracefully when
 # these are absent (synthetic transcript / smart-center reframe).
-faster-whisper>=1.0          # real word-timed transcription (Whisper)
+faster-whisper>=1.2.1        # real word-timed transcription (Whisper)
 opencv-python-headless>=5.0,<6  # OpenCV 5 server build for face/reframe/OCR helpers
 numpy>=1.26
-yt-dlp>=2024.0              # optional: import from a pasted video URL
-silero-vad>=5.1             # pins captions to exact speech — drops Whisper
+yt-dlp>=2026.7.4            # optional: import from a pasted video URL
+silero-vad>=6.2.1           # pins captions to exact speech — drops Whisper
                             # hallucinations and breaths that land in silence.
                             # Required for accurate captions; the pipeline still
                             # runs without it but captions may drift.
@@ -36,4 +36,4 @@ silero-vad>=5.1             # pins captions to exact speech — drops Whisper
 # needs a Hugging Face token (set HF_TOKEN). When installed it is used
 # automatically, falling back to faster-whisper otherwise. Enable with:
 #   pip install whisperx
-# whisperx>=3.1
+# whisperx>=3.8.6
