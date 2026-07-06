@@ -49,6 +49,14 @@ while IFS= read -r pkg; do
   "$VPY" -m pip install "$pkg" || echo "  [..] skipped $pkg (install failed/conflict)"
 done < backend/requirements-extras.txt
 
+# Optional packages such as ultralytics may install opencv-python. OpenCV's
+# Python wheels all share the cv2 namespace, so normalize back to the single
+# headless OpenCV 5 wheel that ClipForge expects.
+echo "Normalizing OpenCV 5 runtime..."
+"$VPY" -m pip uninstall -y opencv-python opencv-contrib-python opencv-contrib-python-headless >/dev/null 2>&1 || true
+"$VPY" -m pip install --force-reinstall --no-deps 'opencv-python-headless>=5.0,<6' \
+  || echo "[!] OpenCV 5 normalization failed - face tracking may be unavailable."
+
 # Optional packages can pull CPU PyTorch wheels from PyPI. Re-apply the
 # hardware-matched acceleration stack after extras so the final environment is
 # the one ClipForge will actually run with.
@@ -62,15 +70,15 @@ if command -v nvidia-smi >/dev/null 2>&1; then
     || echo "[!] Final CUDA runtime check failed - ASR will run on CPU."
 fi
 
-# 3. (optional) YuNet face model — much better facecam/face detection than the
-#    Haar fallback. Skipped silently when offline; everything still works.
+# 3. (optional) YuNet face model — improves facecam/face detection when YOLO is
+#    absent. Skipped silently when offline; OpenCV fallbacks/center crop remain.
 MODEL=backend/data/models/face_detection_yunet_2023mar.onnx
 if [ ! -f "$MODEL" ] && command -v curl >/dev/null 2>&1; then
   mkdir -p backend/data/models
   curl -fsSL --max-time 30 -o "$MODEL" \
     "https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx" \
     && echo "[OK] YuNet face model" \
-    || { rm -f "$MODEL"; echo "[..] YuNet model skipped (offline?) - using Haar fallback"; }
+    || { rm -f "$MODEL"; echo "[..] YuNet model skipped (offline?) - using available OpenCV fallback"; }
 fi
 
 # 4. Optional Ollama models (best hardware-fit defaults when Ollama exists)

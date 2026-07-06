@@ -73,6 +73,13 @@ for /f "usebackq eol=# tokens=*" %%P in ("backend\requirements-extras.txt") do (
     "%VPY%" -m pip install %%P || echo   [..] skipped %%P ^(install failed/conflict^)
 )
 
+REM Optional packages such as ultralytics may install opencv-python. OpenCV's
+REM Python wheels all share the cv2 namespace, so normalize back to the single
+REM headless OpenCV 5 wheel that ClipForge expects.
+echo Normalizing OpenCV 5 runtime...
+"%VPY%" -m pip uninstall -y opencv-python opencv-contrib-python opencv-contrib-python-headless >nul 2>&1
+"%VPY%" -m pip install --force-reinstall --no-deps "opencv-python-headless>=5.0,<6" || echo [!] OpenCV 5 normalization failed - face tracking may be unavailable.
+
 REM Optional packages can pull CPU PyTorch wheels from PyPI. Re-apply the
 REM hardware-matched acceleration stack after extras so the final environment
 REM is the one ClipForge will actually run with.
@@ -93,14 +100,14 @@ REM Optional: clones the local active-speaker model adapter and records its path
 powershell -ExecutionPolicy Bypass -NoProfile -File "%~dp0scripts\setup_active_speaker.ps1" -PythonExe "%VPY%"
 
 REM --- 4c. YuNet face model (optional, better facecam detection) --------
-REM Skipped silently when offline; the Haar fallback still works.
+REM Skipped silently when offline; YOLO/OpenCV fallbacks and center crop still work.
 if not exist "backend\data\models\face_detection_yunet_2023mar.onnx" (
     mkdir backend\data\models 2>nul
     curl -fsSL --max-time 30 -o "backend\data\models\face_detection_yunet_2023mar.onnx" "https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx" >nul 2>&1 && (
         echo [OK] YuNet face model
     ) || (
         del /q "backend\data\models\face_detection_yunet_2023mar.onnx" 2>nul
-        echo [..] YuNet model skipped - using Haar fallback
+        echo [..] YuNet model skipped - using available OpenCV fallback
     )
 )
 

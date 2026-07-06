@@ -12,7 +12,7 @@ imageio-ffmpeg>=0.4.9        # fallback source for a static ffmpeg binary
 # Optional, auto-detected at runtime. The pipeline degrades gracefully when
 # these are absent (synthetic transcript / smart-center reframe).
 faster-whisper>=1.0          # real word-timed transcription (Whisper)
-opencv-python-headless>=4.9  # face tracking for speaker-aware 9:16 reframe
+opencv-python-headless>=5.0,<6  # OpenCV 5 server build for face/reframe/OCR helpers
 numpy>=1.26
 yt-dlp>=2024.0              # optional: import from a pasted video URL
 silero-vad>=5.1             # pins captions to exact speech — drops Whisper

@@ -16,10 +16,18 @@ import shutil
 import time
 from dataclasses import dataclass, field
 from functools import lru_cache
+from importlib import metadata as importlib_metadata
 from pathlib import Path
 
 
 log = logging.getLogger("clipforge.config")
+
+_OPENCV_DISTRIBUTIONS = (
+    "opencv-python-headless",
+    "opencv-python",
+    "opencv-contrib-python-headless",
+    "opencv-contrib-python",
+)
 
 
 def _repo_root() -> Path:
@@ -121,6 +129,30 @@ def _has_module(name: str) -> bool:
         return False
 
 
+def _installed_distributions(names: tuple[str, ...]) -> tuple[str, ...]:
+    found: list[str] = []
+    for name in names:
+        try:
+            found.append(f"{name}=={importlib_metadata.version(name)}")
+        except importlib_metadata.PackageNotFoundError:
+            pass
+    return tuple(found)
+
+
+def _detect_opencv_runtime() -> tuple[bool, str | None, tuple[str, ...]]:
+    """Import cv2, report its runtime version, and expose package conflicts."""
+    packages = _installed_distributions(_OPENCV_DISTRIBUTIONS)
+    try:
+        import cv2
+
+        version = str(getattr(cv2, "__version__", "") or "") or None
+        return True, version, packages
+    except Exception as exc:
+        if packages:
+            log.warning("OpenCV wheels are installed but cv2 failed to import: %s", exc)
+        return False, None, packages
+
+
 def _detect_ocr(has_gpu: bool | None = None) -> str:
     """Best available OCR backend for on-screen game text, or "" if none.
 
@@ -211,7 +243,7 @@ def _detect_reframe_engine() -> str:
     """Best installed subject-tracking backend for content-aware 9:16 reframe.
 
     ultralytics (YOLO) tracks people/objects through cuts > mediapipe pose/face
-    > the built-in OpenCV Haar/YuNet face crop (always available). Optional.
+    > the built-in OpenCV YuNet/legacy Haar face crop when available. Optional.
     """
     if _has_module("ultralytics"):
         return "yolo"
@@ -454,6 +486,8 @@ class Settings:
     has_whisper: bool       # faster-whisper
     has_whisperx: bool      # whisperX (word alignment + diarization)
     has_opencv: bool
+    opencv_version: str | None
+    opencv_packages: tuple[str, ...]
     has_ytdlp: bool
     has_cuda: bool          # CUDA available for ML (ctranslate2/torch)
     has_nvenc: bool         # ffmpeg has the h264_nvenc encoder compiled in
@@ -544,6 +578,10 @@ class Settings:
     def has_ocr(self) -> bool:
         return bool(self.ocr_engine)
 
+    @property
+    def opencv_package_conflict(self) -> bool:
+        return len(self.opencv_packages) > 1
+
     # ---------------------------------------------------------------- #
     # Capability detail — a structured, human-readable inventory of what
     # ClipForge found installed. Used by /api/capabilities and the UI's
@@ -560,6 +598,16 @@ class Settings:
         def item(key: str, available: bool, label: str, impact: str) -> dict:
             return {"key": key, "available": available,
                     "label": label, "impact": impact}
+
+        opencv_label = "OpenCV" + (f" {self.opencv_version}" if self.opencv_version else "")
+        opencv_impact = "Face tracking for speaker-aware 9:16 reframing."
+        if self.opencv_packages:
+            opencv_impact += f" Installed wheels: {', '.join(self.opencv_packages)}."
+        if self.opencv_package_conflict:
+            opencv_impact += (
+                " Multiple OpenCV wheels share the cv2 namespace; remove duplicates "
+                "so the imported runtime matches the intended OpenCV 5 build."
+            )
 
         return {"categories": [
             {"name": "core", "items": [
@@ -594,10 +642,10 @@ class Settings:
             ]},
             {"name": "vision", "items": [
                 item("opencv", self.has_opencv,
-                     "OpenCV", "Face tracking for speaker-aware 9:16 reframing."),
+                     opencv_label, opencv_impact),
                 item("reframe_engine", True,
                      f"Reframe backend: {self.reframe_engine}",
-                     "yolo (best) > mediapipe > haar/YuNet (always available)."),
+                     "yolo (best) > mediapipe > YuNet/OpenCV fallback when available."),
                 item("scrfd", self.has_scrfd,
                      "SCRFD face detection",
                      "Improved face detection. Replaces YuNet. ONNX GPU-accelerated."),
@@ -754,6 +802,9 @@ class Settings:
             "clap_audio": self.has_clap,
             "reframe_engine": self.reframe_engine,
             "face_tracking": self.has_opencv,
+            "opencv_version": self.opencv_version,
+            "opencv_packages": list(self.opencv_packages),
+            "opencv_package_conflict": self.opencv_package_conflict,
             "url_import": self.has_ytdlp,
             "gpu": self.has_cuda,
             "gpu_detected": self.has_nvidia,
@@ -813,6 +864,7 @@ def get_settings() -> Settings:
     render_workers = int(workers_env) if workers_env else _auto_workers(cpu)
 
     deno_path = _find_executable("deno", env_var="CLIPFORGE_DENO_BIN")
+    has_opencv, opencv_version, opencv_packages = _detect_opencv_runtime()
 
     return Settings(
         data_dir=data_dir,
@@ -822,7 +874,9 @@ def get_settings() -> Settings:
         ffprobe=ffprobe,
         has_whisper=_has_module("faster_whisper"),
         has_whisperx=_has_module("whisperx"),
-        has_opencv=_has_module("cv2"),
+        has_opencv=has_opencv,
+        opencv_version=opencv_version,
+        opencv_packages=opencv_packages,
         has_ytdlp=_has_module("yt_dlp"),
         ocr_engine=_detect_ocr(has_any_cuda or has_nvidia),
         has_vad=_has_module("silero_vad"),

@@ -411,7 +411,8 @@ def _settings(**kw):
     from app.config import Settings
     base = dict(data_dir=Path("/tmp"), db_path=Path("/tmp/x.db"), media_dir=Path("/tmp"),
                 ffmpeg="ff", ffprobe="fp", has_whisper=True, has_whisperx=False,
-                has_opencv=True, has_ytdlp=True, has_cuda=False, has_nvenc=False,
+                has_opencv=True, opencv_version="5.0.0", opencv_packages=(),
+                has_ytdlp=True, has_cuda=False, has_nvenc=False,
                 has_nvidia=False)
     base.update(kw)
     return Settings(**base)
@@ -2941,6 +2942,34 @@ def test_reframe_face_helpers_are_pure_and_consistent():
         pass  # cv2 absent — the helper's contract is still defined.
 
 
+def test_detect_faces_tolerates_missing_haar_fallback():
+    """OpenCV 5 builds may not ship the legacy Haar cascade data."""
+    import numpy as np
+    import cv2
+    from app.media import faces
+
+    old_yolo = faces._get_yolo_face
+    old_yunet = faces._get_yunet
+    old_haar = faces._get_haar
+    old_cvt = cv2.cvtColor
+
+    def fail_cvt(*_args, **_kwargs):
+        raise AssertionError("cvtColor should not run when Haar is unavailable")
+
+    faces._get_yolo_face = lambda: None
+    faces._get_yunet = lambda: None
+    faces._get_haar = lambda: None
+    cv2.cvtColor = fail_cvt
+    try:
+        img = np.zeros((20, 20, 3), dtype=np.uint8)
+        assert faces.detect_faces(img) == []
+    finally:
+        faces._get_yolo_face = old_yolo
+        faces._get_yunet = old_yunet
+        faces._get_haar = old_haar
+        cv2.cvtColor = old_cvt
+
+
 def test_reframe_switch_decision_requires_margin_and_dwell():
     """The switch rule: incumbent kept unless challenger wins by margin for N frames.
 
@@ -3009,6 +3038,10 @@ def test_capability_report_includes_new_detector_fields():
                 "gpu_detected", "llm", "vlm"):
         assert key in flat, f"flat report missing new field '{key}'"
         assert isinstance(flat[key], bool), f"{key} should be bool"
+
+    assert "opencv_version" in flat
+    assert "opencv_packages" in flat and isinstance(flat["opencv_packages"], list)
+    assert isinstance(flat["opencv_package_conflict"], bool)
 
 
 def test_capabilities_endpoint_returns_both_views():

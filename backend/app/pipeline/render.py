@@ -586,7 +586,7 @@ def _pick_thumbnail_at(out_path: Path, duration: float, default_at: float,
                        width: int) -> float:
     """Sample frames across the clip and pick the one with the most face presence.
 
-    Uses OpenCV + face detection (YOLOv8-face / YuNet / Haar cascade). Returns
+    Uses OpenCV + face detection (YOLOv8-face / YuNet / legacy Haar if present). Returns
     the center frame when face detection is unavailable or no faces are found.
     """
     if duration <= 0.5:

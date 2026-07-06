@@ -54,7 +54,7 @@ Tesseract, whichever is installed) catches on-screen viral markers — a
 and opens a clip on that guaranteed beat. Matched audio cues and OCR hits are
 **saved on the project** so you can see exactly what each highlight keyed off.
 A streamer **facecam** is found automatically (the one face that never moves —
-YuNet when available, Haar fallback); clips then use the TikTok-standard
+YOLO/YuNet when available, legacy OpenCV fallback if present); clips then use the TikTok-standard
 **stacked layout** (cam strip on top, gameplay below) or a **PiP overlay**, the
 cam's **reaction energy** feeds the virality score ("streamer reacts hard"), and
 the gameplay crop follows the **motion centroid** instead of blindly centering —
@@ -106,7 +106,7 @@ fully transparent (`/api/learning` shows what it learned), and resettable.
 
 - **Backend** — Python 3.11, FastAPI, SQLite (stdlib), a static **ffmpeg/ffprobe**
   (bundled via `static-ffmpeg`, no system install needed).
-- **AI/media** — `faster-whisper` (word-timed transcription), OpenCV (face
+- **AI/media** — `faster-whisper` (word-timed transcription), OpenCV 5 (face
   tracking), ffmpeg + **libass** (crop/scale/caption burn-in/H.264 encode).
 - **Frontend** — React 18 + TypeScript + Vite.
 
@@ -212,6 +212,11 @@ setup scripts install the whole set best-effort (a failed wheel is skipped):
 ```bash
 pip install -r backend/requirements-extras.txt
 ```
+
+ClipForge uses `opencv-python-headless>=5,<6` from the core backend
+requirements. Keep only one OpenCV wheel in the environment; if diagnostics show
+multiple `opencv-*` packages, uninstall the duplicate GUI/contrib wheels so
+`cv2` imports the intended OpenCV 5 runtime.
 
 | Power-up | What it adds | How |
 | --- | --- | --- |

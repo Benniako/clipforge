@@ -67,7 +67,7 @@ ingest → transcribe → detect → score → caption → render
   retried with EasyOCR (noisy VODs). Learned cues persist per game profile.
 - **Active-speaker attribution** — optional LR-ASD ties transcript words to the
   on-screen speaker for multi-person content.
-- **Facecam detection** — YuNet/OpenCV; stable-face clustering finds a static
+- **Facecam detection** — YOLO/YuNet/OpenCV; stable-face clustering finds a static
   streamer-cam overlay once for the whole source.
 
 ### 4. Scoring & personalization

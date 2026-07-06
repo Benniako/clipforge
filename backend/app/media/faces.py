@@ -1,11 +1,11 @@
-"""Unified face detection — YuNet (CNN) when available, Haar cascade otherwise.
+"""Unified face detection — YOLO/YuNet first, optional OpenCV fallback last.
 
 YuNet is a 337KB ONNX model that detects faces down to ~10x10px, including side
 faces and partial occlusion — exactly the regime where a streamer's small corner
-facecam lives and where the Haar cascade fails. opencv-python ships the
+facecam lives and where the old Haar cascade fails. opencv-python ships the
 ``cv2.FaceDetectorYN`` runtime but not the model file, so we look for it in the
 data dir (or ``CLIPFORGE_YUNET_PATH``) and make one best-effort download attempt;
-everything degrades to the Haar cascade if neither works.
+everything degrades to no face boxes if the legacy cascade is not present.
 """
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ _YUNET_MIN_BYTES = 100_000          # sanity floor for a complete download
 
 _lock = threading.Lock()            # FaceDetectorYN instances aren't thread-safe
 _yunet = None                       # cached detector ("unavailable" = gave up)
-_haar = None
+_haar = None                       # cached CascadeClassifier, or False if absent
 _yolo_face = None                   # cached ultralytics YOLO model or False
 
 
@@ -45,7 +45,7 @@ def _get_yolo_face():
             _yolo_face.to(get_settings().device)
         return _yolo_face
     except Exception as e:
-        log.info("YOLOv8-face unavailable (%s); using YuNet/Haar", e)
+        log.info("YOLOv8-face unavailable (%s); using YuNet/OpenCV fallback", e)
         _yolo_face = False
         return None
 
@@ -58,7 +58,7 @@ def _yunet_path() -> Path:
 
 
 def _fetch_yunet(dst: Path) -> bool:
-    """One best-effort model download (offline installs just use Haar)."""
+    """One best-effort model download (offline installs skip this detector)."""
     try:
         dst.parent.mkdir(parents=True, exist_ok=True)
         tmp = dst.with_suffix(".part")
@@ -70,7 +70,7 @@ def _fetch_yunet(dst: Path) -> bool:
         log.info("downloaded YuNet face model -> %s", dst)
         return True
     except Exception as e:
-        log.info("YuNet model unavailable (%s); using Haar cascade", e)
+        log.info("YuNet model unavailable (%s); using OpenCV fallback", e)
         return False
 
 
@@ -92,18 +92,43 @@ def _get_yunet():
                                            score_threshold=0.6)
         return _yunet
     except Exception as e:
-        log.warning("YuNet load failed (%s); using Haar cascade", e)
+        log.warning("YuNet load failed (%s); using OpenCV fallback", e)
         _yunet = "unavailable"
         return None
 
 
 def _get_haar():
     global _haar
+    if _haar is False:
+        return None
     if _haar is None:
-        import cv2
+        try:
+            import cv2
 
-        _haar = cv2.CascadeClassifier(
-            cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+            cascade_cls = getattr(cv2, "CascadeClassifier", None)
+            data = getattr(cv2, "data", None)
+            cascade_dir = getattr(data, "haarcascades", "")
+            if cascade_cls is None or not cascade_dir:
+                log.info("OpenCV Haar cascade runtime is unavailable")
+                _haar = False
+                return None
+
+            cascade_path = Path(cascade_dir) / "haarcascade_frontalface_default.xml"
+            if not cascade_path.is_file():
+                log.info("OpenCV Haar cascade file is unavailable: %s", cascade_path)
+                _haar = False
+                return None
+
+            cascade = cascade_cls(str(cascade_path))
+            if hasattr(cascade, "empty") and cascade.empty():
+                log.info("OpenCV Haar cascade failed to load: %s", cascade_path)
+                _haar = False
+                return None
+            _haar = cascade
+        except Exception as exc:
+            log.info("OpenCV Haar cascade unavailable (%s)", exc)
+            _haar = False
+            return None
     return _haar
 
 
@@ -113,7 +138,9 @@ def detect_faces(img_bgr, *, min_size_frac: float = 0.03) -> list[tuple[int, int
     ``min_size_frac`` is the minimum face width as a fraction of frame width —
     keeps tiny in-game character faces from registering.
 
-    Detection priority: YOLOv8-face (best, GPU) → YuNet (ONNX, GPU) → Haar (CPU).
+    Detection priority: YOLOv8-face (best, GPU) → YuNet (ONNX) → Haar if the
+    installed OpenCV build still ships it. OpenCV 5 moved Haar/HOG detectors
+    out of the main package, so the final fallback may be absent.
     """
     import cv2
 
@@ -152,9 +179,12 @@ def detect_faces(img_bgr, *, min_size_frac: float = 0.03) -> list[tuple[int, int
             if out:
                 return out
 
-    # 3. Haar cascade (CPU, fallback).
-    gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+    # 3. Haar cascade (CPU, legacy fallback; absent in some OpenCV 5 builds).
     with _lock:
-        faces = _get_haar().detectMultiScale(gray, scaleFactor=1.15, minNeighbors=5,
-                                             minSize=(max(min_px, 30), max(min_px, 30)))
+        haar = _get_haar()
+        if haar is None:
+            return []
+        gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+        faces = haar.detectMultiScale(gray, scaleFactor=1.15, minNeighbors=5,
+                                      minSize=(max(min_px, 30), max(min_px, 30)))
     return [tuple(int(v) for v in f) for f in faces]

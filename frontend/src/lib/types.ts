@@ -287,6 +287,9 @@ export interface Health {
     reframe_engine: string;
     active_speaker: boolean;
     face_tracking: boolean;
+    opencv_version: string | null;
+    opencv_packages: string[];
+    opencv_package_conflict: boolean;
     url_import: boolean;
     gpu: boolean;
     gpu_detected: boolean;

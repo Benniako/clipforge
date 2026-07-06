@@ -13,8 +13,10 @@
 silero-vad>=5.1
 onnxruntime>=1.17
 
-# Better scene-cut snapping (adaptive detector). Light.
-scenedetect[opencv]>=0.6.4
+# Better scene-cut snapping (adaptive detector). Light. Keep OpenCV pinned by
+# requirements.txt; the [opencv] extra can install opencv-python beside the
+# headless wheel, and both packages share the same cv2 namespace.
+scenedetect>=0.6.4
 
 # Gameplay on-screen text (kill banners / scorelines / VICTORY). PaddleOCR v6
 # is tried first when installed; EasyOCR remains the robust fallback.

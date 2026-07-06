@@ -1,4 +1,4 @@
-"""Content-aware subject centre for 9:16 reframe — optional upgrade over Haar.
+"""Content-aware subject centre for 9:16 reframe — optional upgrade over face-only tracking.
 
 The built-in reframe follows the dominant *face*. That misses the subject when
 the face is turned, tiny, or absent (a player's back, a car, a pet). With

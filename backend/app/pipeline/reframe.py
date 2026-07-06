@@ -1,6 +1,6 @@
 """Vertical reframing (16:9 → 9:16) with speaker-aware cropping.
 
-We sample frames across the clip, detect faces (OpenCV Haar cascade), and follow
+We sample frames across the clip, detect faces (YOLO/YuNet/OpenCV fallback), and follow
 the dominant face to build a horizontal crop path. The path is then *smoothed*
 and velocity-limited so the camera glides instead of jittering — the PRD calls
 out that jittery or constantly-panning crops read as cheap.
