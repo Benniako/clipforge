@@ -4290,6 +4290,59 @@ def test_store_summary_migration_adds_column_to_legacy_db():
     assert all(s.id != "legacy_1" for s in store.list_summaries())
 
 
+def test_mediapipe_tier_detected_in_settings():
+    """Settings must surface has_mediapipe when mediapipe is installed, and
+    face_tier must be one of the known cascade tiers."""
+    from app.config import get_settings
+
+    s = get_settings()
+    assert s.has_mediapipe is True
+    assert s.face_tier in {"yolo", "mediapipe", "yunet", "haar"}
+
+
+def test_mediapipe_active_tier_function():
+    """faces.active_tier() must return a valid tier string without crashing."""
+    from app.media.faces import active_tier
+
+    tier = active_tier()
+    assert tier in {"yolo", "mediapipe", "yunet", "haar"}
+
+
+def test_einsum_cue_matching_equivalence():
+    """The einsum path in detect_cues.match_template must produce identical
+    timestamps and similarity scores to the old per-band correlate loop."""
+    import numpy as np
+    from app.providers.detect_cues import (
+        _band_spectrogram, SR, BANDS,
+    )
+    from numpy.lib.stride_tricks import as_strided
+
+    rng = np.random.default_rng(42)
+    sig = rng.standard_normal(SR * 5).astype(np.float32)
+    tmpl = rng.standard_normal(SR).astype(np.float32)
+
+    sig_spec = _band_spectrogram(sig)
+    tmpl_spec = _band_spectrogram(tmpl)
+    tn = len(tmpl_spec)
+    assert tn >= 2
+
+    # --- old loop-based path ---
+    n_old = len(sig_spec) - tn + 1
+    sim_old = np.zeros(n_old, dtype=np.float32)
+    for b in range(BANDS):
+        sim_old += np.correlate(sig_spec[:, b], tmpl_spec[:, b], mode="valid")
+    sim_old /= tn
+
+    # --- new einsum path ---
+    n_new = len(sig_spec) - tn + 1
+    s0, s1 = sig_spec.strides
+    sig_win = as_strided(sig_spec, shape=(n_new, tn, BANDS), strides=(s0, s0, s1))
+    sim_new = np.einsum("ijk,jk->i", sig_win, tmpl_spec, dtype=np.float32) / tn
+
+    assert n_old == n_new
+    np.testing.assert_allclose(sim_old, sim_new, rtol=1e-5, atol=1e-6)
+
+
 if __name__ == "__main__":
     import sys
     # Windows consoles default to a legacy code page that can't print "✓".

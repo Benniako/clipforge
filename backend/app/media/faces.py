@@ -1,4 +1,17 @@
-"""Unified face detection — YOLO/YuNet first, optional OpenCV fallback last.
+"""Unified face detection — YOLO/MediaPipe/YuNet/Haar cascade.
+
+Detection runs in priority order, returning the first tier that produces boxes:
+
+1. **YOLOv8-face** (best, GPU via ultralytics) — best accuracy, handles profile
+   faces. Opt-in (``pip install ultralytics``).
+2. **MediaPipe BlazeFace** (opt-in, ``pip install mediapipe``) — 30-70 FPS CPU,
+   handles side-profiles better than YuNet/Haar, Apache 2.0 / commercial-safe.
+   One ~230 KB model download on first use (same pattern as YuNet).
+3. **YuNet** (default with OpenCV) — 337KB ONNX model via
+   ``cv2.FaceDetectorYN``; excellent at small boxes and partial occlusion
+   (streamer facecam corner). One best-effort download; degrades to Haar.
+4. **Haar cascade** (final fallback) — fast, CPU-only, frontal faces only.
+   Absent in some OpenCV 5 builds (handled gracefully).
 
 YuNet is a 337KB ONNX model that detects faces down to ~10x10px, including side
 faces and partial occlusion — exactly the regime where a streamer's small corner
@@ -23,10 +36,17 @@ YUNET_URL = ("https://github.com/opencv/opencv_zoo/raw/main/models/"
              "face_detection_yunet/face_detection_yunet_2023mar.onnx")
 _YUNET_MIN_BYTES = 100_000          # sanity floor for a complete download
 
+# MediaPipe BlazeFace short-range TFLite model (~230 KB). Tasks API requires a
+# real model_asset_path (None fails at runtime); download once on first use.
+_MP_MODEL_URL = ("https://storage.googleapis.com/mediapipe-models/face_detector/"
+                 "blaze_face_short_range/float16/latest/blaze_face_short_range.tflite")
+_MP_MIN_BYTES = 100_000
+
 _lock = threading.Lock()            # FaceDetectorYN instances aren't thread-safe
 _yunet = None                       # cached detector ("unavailable" = gave up)
 _haar = None                       # cached CascadeClassifier, or False if absent
 _yolo_face = None                   # cached ultralytics YOLO model or False
+_mediapipe = None                   # cached MediaPipe FaceDetector or "unavailable"
 
 
 def _get_yolo_face():
@@ -47,6 +67,61 @@ def _get_yolo_face():
     except Exception as e:
         log.info("YOLOv8-face unavailable (%s); using YuNet/OpenCV fallback", e)
         _yolo_face = False
+        return None
+
+
+def _mp_model_path() -> Path:
+    env = os.environ.get("CLIPFORGE_MP_FACE_MODEL")
+    if env:
+        return Path(env)
+    return get_settings().data_dir / "models" / "blaze_face_short_range.tflite"
+
+
+def _fetch_mp_model(dst: Path) -> bool:
+    """One best-effort download of the BlazeFace TFLite model (~230 KB)."""
+    try:
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        tmp = dst.with_suffix(".part")
+        http_download(_MP_MODEL_URL, tmp, timeout=15)
+        if tmp.stat().st_size < _MP_MIN_BYTES:
+            tmp.unlink(missing_ok=True)
+            return False
+        tmp.replace(dst)
+        log.info("downloaded MediaPipe BlazeFace model -> %s", dst)
+        return True
+    except Exception as e:
+        log.info("MediaPipe model unavailable (%s); using YuNet/Haar", e)
+        return False
+
+
+def _get_mediapipe():
+    """MediaPipe BlazeFace detector (tier 2, opt-in).
+
+    30-70 FPS on CPU, handles side-profiles, Apache 2.0. Requires a one-time
+    ~230 KB model download (same pattern as YuNet). Returns the detector or
+    None when mediapipe isn't installed or the model can't be fetched.
+    """
+    global _mediapipe
+    if _mediapipe is not None:
+        return None if _mediapipe == "unavailable" else _mediapipe
+    try:
+        import mediapipe as mp
+
+        path = _mp_model_path()
+        if not path.exists() and not _fetch_mp_model(path):
+            _mediapipe = "unavailable"
+            return None
+        opts = mp.tasks.vision.FaceDetectorOptions(
+            base_options=mp.tasks.BaseOptions(model_asset_path=str(path)),
+            running_mode=mp.tasks.vision.RunningMode.IMAGE,
+            min_detection_confidence=0.5,
+        )
+        _mediapipe = mp.tasks.vision.FaceDetector.create_from_options(opts)
+        log.info("face detection: MediaPipe BlazeFace loaded (tier 2)")
+        return _mediapipe
+    except Exception as e:
+        log.info("MediaPipe unavailable (%s); using YuNet/Haar", e)
+        _mediapipe = "unavailable"
         return None
 
 
@@ -138,9 +213,10 @@ def detect_faces(img_bgr, *, min_size_frac: float = 0.03) -> list[tuple[int, int
     ``min_size_frac`` is the minimum face width as a fraction of frame width —
     keeps tiny in-game character faces from registering.
 
-    Detection priority: YOLOv8-face (best, GPU) → YuNet (ONNX) → Haar if the
-    installed OpenCV build still ships it. OpenCV 5 moved Haar/HOG detectors
-    out of the main package, so the final fallback may be absent.
+    Detection priority: YOLOv8-face (best, GPU) → MediaPipe BlazeFace (CPU,
+    side-profiles, opt-in) → YuNet (ONNX) → Haar if the installed OpenCV build
+    still ships it. OpenCV 5 moved Haar/HOG detectors out of the main package,
+    so the final fallback may be absent.
     """
     import cv2
 
@@ -162,9 +238,32 @@ def detect_faces(img_bgr, *, min_size_frac: float = 0.03) -> list[tuple[int, int
             if out:
                 return out
         except Exception:
-            log.debug("YOLO face detection failed; falling through to YuNet")
+            log.debug("YOLO face detection failed; falling through to MediaPipe")
 
-    # 2. YuNet (ONNX, OpenCV DNN).
+    # 2. MediaPipe BlazeFace (opt-in, CPU, handles side-profiles).
+    mp_det = _get_mediapipe()
+    if mp_det is not None:
+        try:
+            import mediapipe as mp
+
+            mp_img = mp.Image(image_format=mp.ImageFormat.SRGB,
+                              data=img_bgr[..., ::-1].copy())  # BGR -> RGB
+            with _lock:
+                result = mp_det.detect(mp_img)
+            out = []
+            for det in result.detections:
+                bb = det.bounding_box
+                fx, fy, fw, fh = bb.origin_x, bb.origin_y, bb.width, bb.height
+                if fw >= min_px and fh >= min_px:
+                    out.append((max(int(fx), 0), max(int(fy), 0),
+                                min(int(fw), w - int(fx)),
+                                min(int(fh), h - int(fy))))
+            if out:
+                return out
+        except Exception as e:
+            log.debug("MediaPipe inference failed (%s); falling back", e)
+
+    # 3. YuNet (ONNX, OpenCV DNN).
     with _lock:
         det = _get_yunet()
         if det is not None:
@@ -179,7 +278,7 @@ def detect_faces(img_bgr, *, min_size_frac: float = 0.03) -> list[tuple[int, int
             if out:
                 return out
 
-    # 3. Haar cascade (CPU, legacy fallback; absent in some OpenCV 5 builds).
+    # 4. Haar cascade (CPU, legacy fallback; absent in some OpenCV 5 builds).
     with _lock:
         haar = _get_haar()
         if haar is None:
@@ -188,3 +287,19 @@ def detect_faces(img_bgr, *, min_size_frac: float = 0.03) -> list[tuple[int, int
         faces = haar.detectMultiScale(gray, scaleFactor=1.15, minNeighbors=5,
                                       minSize=(max(min_px, 30), max(min_px, 30)))
     return [tuple(int(v) for v in f) for f in faces]
+
+
+def active_tier() -> str:
+    """Which face-detection tier is currently loaded.
+
+    Returns one of ``"yolo"``, ``"mediapipe"``, ``"yunet"``, ``"haar"`` — the
+    first tier (in priority order) that is actually available. Surfaced in
+    /api/health so the UI can show which engine is driving face tracking.
+    """
+    if _yolo_face and _yolo_face is not False:
+        return "yolo"
+    if _mediapipe and _mediapipe != "unavailable":
+        return "mediapipe"
+    if _yunet and _yunet != "unavailable":
+        return "yunet"
+    return "haar"

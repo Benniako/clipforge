@@ -524,6 +524,8 @@ class Settings:
     has_easyocr: bool = False    # OCR engine (best on noisy frames)
     has_tesseract: bool = False  # OCR fallback via pytesseract + tesseract binary
     has_scrfd: bool = False      # SCRFD face detection (upgrade from YuNet)
+    has_mediapipe: bool = False  # MediaPipe BlazeFace face detection (Apache 2.0)
+    face_tier: str = "haar"      # active face-detection engine: yolo/mediapipe/yunet/haar
 
     # --- pipeline tunables ----------------------------------------------
     whisper_model: str = os.environ.get("CLIPFORGE_WHISPER_MODEL", "tiny")
@@ -857,6 +859,11 @@ class Settings:
             "tesseract": self.has_tesseract,
             "ocr_packages": list(self.ocr_packages),
             "scrfd": self.has_scrfd,
+            # Which face-detection engine is actually loaded (yolo/mediapipe/
+            # yunet/haar). Distinct from reframe_engine: reframe tracks any
+            # subject via YOLO/pose; face_tier is the cascade in media.faces
+            # that speaker-aware crop + facecam detection use.
+            "face_tier": self.face_tier,
         }
 
 
@@ -931,6 +938,16 @@ def get_settings() -> Settings:
         has_easyocr=_has_module("easyocr"),
         has_tesseract=_has_module("pytesseract") and bool(_find_executable("tesseract")),
         has_scrfd=_has_module("scrfd"),
+        has_mediapipe=_has_module("mediapipe"),
+        # Resolve the active face-detection tier from what's installed. YOLO is
+        # already configured above (ultralytics loads on first use); mirror the
+        # media.faces priority so /api/health reports the engine that will run.
+        face_tier=(
+            "yolo" if _has_module("ultralytics") else
+            "mediapipe" if _has_module("mediapipe") else
+            "yunet" if has_opencv else
+            "haar"
+        ),
         device=device,
         whisper_model=whisper_model,
         whisper_batch_size=whisper_batch_size,

@@ -40,6 +40,11 @@ ultralytics>=8.4.89
 # Stronger face detection for speaker-aware reframing than the OpenCV fallback.
 scrfd>=0.3.0
 
+# MediaPipe BlazeFace face detection (tier 2, opt-in). 30-70 FPS CPU, handles
+# side-profiles, Apache 2.0 / commercial-safe. One ~230 KB model download on
+# first use. Degrades to YuNet -> Haar when absent.
+mediapipe>=0.10
+
 # Higher-quality transcription: forced word alignment + speaker diarization.
 # Diarization also needs a Hugging Face token (HF_TOKEN).
 whisperx>=3.8.6
