@@ -646,6 +646,101 @@ def get_project(project_id: str) -> Project:
     return p
 
 
+@router.get("/{project_id}/timeline")
+def project_timeline(project_id: str) -> dict:
+    """Peaks.js-style timeline data for the waveform + word viewer.
+
+    Returns words with timing, speech intervals, scene cuts, an emotion
+    curve (per-word excitement), and the clip list with scores.
+    """
+    p = store.get(project_id)
+    if not p:
+        raise HTTPException(404, "project not found")
+    if not p.transcript:
+        raise HTTPException(409, "project hasn't been transcribed yet")
+
+    transcript = p.transcript
+    src_dur = max(p.source.duration, 0.0) if p.source else 0.0
+
+    # Words with timing
+    words = [
+        {"t": round(w.t, 3), "d": round(w.d, 3), "text": w.text,
+         "speaker": w.speaker or 0}
+        for w in transcript.words
+    ]
+
+    # Speech intervals — from VAD or derived from transcript gaps
+    speech_intervals = None
+    if p.source and transcript.provider != "synthetic":
+        try:
+            from ..pipeline import captionize as _cap
+            raw = _cap.compute_tight_segments(transcript, 0.0, src_dur)
+            speech_intervals = [[round(a, 3), round(b, 3)] for a, b in raw]
+        except Exception:
+            pass
+    if speech_intervals is None:
+        # Fallback: derive from word spans with >0.4s gaps as boundaries
+        speech_intervals = []
+        if transcript.words:
+            seg_start = transcript.words[0].t
+            prev_end = transcript.words[0].end
+            for w in transcript.words[1:]:
+                if w.t - prev_end > 0.4:
+                    speech_intervals.append([round(seg_start, 3), round(prev_end, 3)])
+                    seg_start = w.t
+                prev_end = w.end
+            speech_intervals.append([round(seg_start, 3), round(prev_end, 3)])
+
+    # Scene cuts
+    scene_cuts: list[float] = []
+    if p.source and p.source.path:
+        try:
+            from ..providers import scenes as _scenes
+            settings = get_settings()
+            src_path = str(settings.media_dir / p.source.path)
+            scene_cuts = [round(t, 3) for t in _scenes.scene_cuts(src_path, 0.0, src_dur)]
+        except Exception:
+            pass
+
+    # Emotion curve — per-word excitement score from signals
+    from ..providers import signals as _sig
+    from ..models import Word as _Word
+    emotion_curve = []
+    if transcript.words:
+        # Build excitement time series at ~1s resolution
+        bin_size = max(src_dur / max(len(transcript.words), 1), 0.25)
+        n_bins = max(int(src_dur / bin_size) + 1, 1)
+        bins = [0.0] * n_bins
+        counts = [0] * n_bins
+        for w in transcript.words:
+            idx = min(int(w.t / max(bin_size, 0.01)), n_bins - 1)
+            lex = _sig.get_lexicon(transcript.language)
+            emo_val = _sig.emotional_payoff([_Word(t=w.t, d=w.d, text=w.text)], lex)[0]
+            pace_val = _sig.pace_energy([_Word(t=w.t, d=w.d, text=w.text)], w.d)[0]
+            hook_val = _sig.hook_strength([_Word(t=w.t, d=w.d, text=w.text)], lex)[0]
+            bins[idx] += 0.4 * emo_val + 0.35 * pace_val + 0.25 * hook_val
+            counts[idx] += 1
+        for i in range(n_bins):
+            avg = bins[i] / max(counts[i], 1)
+            emotion_curve.append(round(min(avg, 1.0), 3))
+
+    # Clips with scores
+    clips = [
+        {"id": c.id, "start": round(c.start, 3), "end": round(c.end, 3),
+         "score": round(c.score, 1)}
+        for c in p.clips
+    ]
+
+    return {
+        "duration": round(src_dur, 3),
+        "words": words,
+        "speech_intervals": speech_intervals,
+        "scene_cuts": scene_cuts,
+        "emotion_curve": emotion_curve,
+        "clips": clips,
+    }
+
+
 def _progress_timing(p) -> dict:
     """Elapsed + estimated-remaining seconds for the live processing UI.
 

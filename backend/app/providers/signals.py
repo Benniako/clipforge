@@ -756,4 +756,96 @@ _SV = Lexicon(
 )
 
 _LEXICONS: dict[str, Lexicon] = {"en": _EN, "de": _DE, "fr": _FR, "es": _ES, "pt": _PT, "it": _IT,
-	                                  "tr": _TR, "jp": _JP, "nl": _NL, "pl": _PL, "sv": _SV}
+                                  "tr": _TR, "jp": _JP, "nl": _NL, "pl": _PL, "sv": _SV}
+
+
+# --------------------------------------------------------------------------- #
+# Temporal context — lightweight sequence-awareness for bag-of-words features
+# --------------------------------------------------------------------------- #
+def temporal_context(words: list[Word], window: int = 5) -> list[tuple[int, float]]:
+    """Per-word context scores capturing sequence-aware features.
+
+    For each word at index *i*, returns ``(i, score)`` where *score* in [0, 1]
+    encodes three lightweight temporal signals:
+
+    * **Sentence position** — words near the start or end of a sentence score
+      higher (hooks land early, buttons land late).
+    * **Proximity to emotion peaks** — words within *window* of a lexicon
+      emotion word inherit a boosted score.
+    * **Speech pace change** — words in a speeding-up region score higher
+      (faster delivery = more excitement).
+
+    This is a pure heuristic — no ML model, no heavy compute — that gives the
+    bag-of-words salience a sequence-aware nudge without replacing it.
+    """
+    if not words:
+        return []
+
+    lex = get_lexicon(None)  # language-agnostic emotion set for peak detection
+    n = len(words)
+
+    # --- pre-compute per-word emotion hits ---
+    emotion_hit = [False] * n
+    for i, w in enumerate(words):
+        toks = _WORD_RE.findall(w.text.lower())
+        emotion_hit[i] = any(t in lex.emotion for t in toks)
+
+    # --- per-word inter-onset intervals for pace ---
+    ioi: list[float] = [0.35] * n  # default ~2.8 wps
+    for i in range(1, n):
+        gap = words[i].t - words[i - 1].t
+        ioi[i] = max(gap, 0.05)
+
+    # --- build raw scores ---
+    scores: list[float] = []
+    for i in range(n):
+        w = words[i]
+
+        # 1. Sentence position: first/last word in a sentence-like boundary
+        is_first = (i == 0 or words[i - 1].text.rstrip().endswith((".", "!", "?")))
+        is_last = w.text.rstrip().endswith((".", "!", "?"))
+        pos_score = 0.0
+        if is_first:
+            pos_score = 0.7  # hooks land early
+        elif is_last:
+            pos_score = 0.6  # buttons land late
+        else:
+            # Normalised position within current sentence
+            sent_start = i
+            for j in range(i - 1, -1, -1):
+                if words[j].text.rstrip().endswith((".", "!", "?")):
+                    sent_start = j + 1
+                    break
+            sent_end = n
+            for j in range(i + 1, n):
+                if words[j].text.rstrip().endswith((".", "!", "?")):
+                    sent_end = j + 1
+                    break
+            span = max(sent_end - sent_start, 1)
+            local_pos = (i - sent_start) / span
+            pos_score = 0.3 + 0.2 * (1.0 - abs(local_pos - 0.5) * 2.0)
+
+        # 2. Emotion-peak proximity
+        lo = max(0, i - window)
+        hi = min(n, i + window + 1)
+        peak_bonus = 0.0
+        for j in range(lo, hi):
+            if emotion_hit[j]:
+                dist = abs(j - i)
+                peak_bonus = max(peak_bonus, 1.0 - dist / (window + 1))
+        emo_score = peak_bonus * 0.8
+
+        # 3. Pace change: acceleration (lower IOI → higher score)
+        pace_score = 0.0
+        if i >= 2:
+            recent = sum(ioi[max(0, i - 2):i + 1]) / min(3, i + 1)
+            prior = sum(ioi[max(0, i - 5):max(0, i - 2)]) / max(1, min(5, i) - max(0, i - 5))
+            if prior > 0.05:
+                ratio = prior / max(recent, 0.05)
+                pace_score = _clamp((ratio - 0.8) / 1.5)
+
+        # Weighted blend
+        score = 0.35 * pos_score + 0.35 * emo_score + 0.30 * pace_score
+        scores.append(_clamp(score))
+
+    return [(i, s) for i, s in enumerate(scores)]

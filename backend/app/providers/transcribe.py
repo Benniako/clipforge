@@ -243,14 +243,21 @@ def transcribe(audio_path: str, *, language: str | None = None,
                 return _whisperx_transcribe(audio_path, lang, progress, batch_size)
         except Exception as e:
             log.warning("whisperX failed (%s); falling back", e)
-            engine = "whisper" if s.has_whisper else "synthetic"
+            engine = "whisper" if s.has_whisper else "sherpa" if sherpa_available() else "synthetic"
 
     if engine == "whisper":
         try:
             with _asr_lock:
                 return _whisper_transcribe(audio_path, lang, progress, batch_size)
         except Exception as e:  # model download blocked, etc. — degrade.
-            log.warning("whisper failed (%s); using synthetic transcript", e)
+            log.warning("whisper failed (%s); trying sherpa-onnx", e)
+            engine = "sherpa" if sherpa_available() else "synthetic"
+
+    if engine == "sherpa":
+        try:
+            return transcribe_with_sherpa(audio_path, language=lang or "en", progress=progress)
+        except Exception as e:
+            log.warning("sherpa-onnx failed (%s); using synthetic transcript", e)
 
     return synthetic_transcript(audio_path, lang=lang)
 
@@ -456,6 +463,155 @@ def _whisper_transcribe(audio_path, language, progress, batch_size: int) -> Tran
         log.debug("forced-alignment refinement skipped: %s", e)
     return Transcript(words=words, language=detected_lang,
                       speakers=1, provider="whisper")
+
+
+# --------------------------------------------------------------------------- #
+# sherpa-onnx: lightweight, cross-platform ASR (no GPU required)
+# --------------------------------------------------------------------------- #
+
+def sherpa_available() -> bool:
+    """True when the ``sherpa_onnx`` package can be imported."""
+    try:
+        import sherpa_onnx  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+def _sherpa_model_for_lang(language: str) -> str | None:
+    """Pick a sherpa-onnx pre-trained model based on language.
+
+    CJK languages use SenseVoice; everything else defaults to Parakeet
+    (English-centric but decent for many European languages).
+    """
+    code = (language or "en").lower()[:2]
+    cjk = {"zh", "ja", "ko"}
+    if code in cjk:
+        return "sensevoice"
+    return "parakeet"
+
+
+def transcribe_with_sherpa(audio_path: str, *, language: str = "en",
+                           progress=None) -> Transcript:
+    """Transcribe using sherpa-onnx (SenseVoice or Parakeet models).
+
+    Returns a :class:`Transcript` matching the existing format.  Raises on
+    import failure so the caller can fall back to synthetic.
+    """
+    import sherpa_onnx  # type: ignore
+
+    lang_code = (language or "en").lower()[:2]
+    model_tag = _sherpa_model_for_lang(lang_code)
+
+    if progress:
+        progress(0.05)
+
+    log.info("sherpa-onnx: loading %s model for lang=%s", model_tag, lang_code)
+    if model_tag == "sensevoice":
+        recognizer = sherpa_onnx.OfflineRecognizer.from_sensevoice(
+            sensevoice="sherpa-onnx-models/sense-voice-small",
+            tokens="sherpa-onnx-models/sense-voice-small/tokens.txt",
+            num_threads=4,
+            debug=False,
+        )
+    else:
+        recognizer = sherpa_onnx.OfflineRecognizer.from_paraformer(
+            paraformer="sherpa-onnx-models/parakeet-ctc-0.6b-en",
+            tokens="sherpa-onnx-models/parakeet-ctc-0.6b-en/tokens.txt",
+            num_threads=4,
+            debug=False,
+        )
+
+    if progress:
+        progress(0.10)
+
+    # Read audio as float32 mono 16 kHz
+    import numpy as np
+
+    try:
+        import soundfile as sf
+        audio_data, sr = sf.read(audio_path, dtype="float32", always_2d=False)
+    except ImportError:
+        # Fallback: use ffmpeg to decode
+        import subprocess as _sp, io as _io, wave as _wave_mod
+
+        proc = _sp.run(
+            ["ffmpeg", "-i", audio_path, "-f", "wav", "-acodec", "pcm_s16le",
+             "-ar", "16000", "-ac", "1", "-"],
+            capture_output=True, timeout=120,
+        )
+        if proc.returncode != 0:
+            raise RuntimeError(f"ffmpeg decode failed for sherpa-onnx: {proc.stderr[:200]}")
+        raw = _io.BytesIO(proc.stdout)
+        with _wave_mod.open(raw, "rb") as wf:
+            sr = wf.getframerate()
+            frames = wf.readframes(wf.getnframes())
+            audio_data = np.frombuffer(frames, dtype=np.int16).astype(np.float32) / 32768.0
+
+    # Resample to 16 kHz if needed
+    if sr != 16000:
+        try:
+            import torch
+            import torchaudio
+            audio_tensor = torch.from_numpy(audio_data).unsqueeze(0)  # type: ignore
+            resampler = torchaudio.transforms.Resample(sr, 16000)
+            audio_data = resampler(audio_tensor).squeeze(0).numpy()
+        except Exception:
+            # Simple linear interpolation resample
+            ratio = 16000 / sr
+            new_len = int(len(audio_data) * ratio)
+            indices = np.linspace(0, len(audio_data) - 1, new_len)
+            audio_data = np.interp(indices, np.arange(len(audio_data)), audio_data).astype(np.float32)
+
+    if progress:
+        progress(0.30)
+
+    stream = recognizer.create_stream()
+    stream.accept_waveform(16000, audio_data.tolist())
+    recognizer.decode_stream(stream)
+    result = stream.result
+
+    if progress:
+        progress(0.80)
+
+    # Parse result into Word objects
+    words: list[Word] = []
+    if hasattr(result, "timestamps") and result.timestamps:
+        # Timestamps are typically character/word-level with start/end pairs
+        for item in result.timestamps:
+            if isinstance(item, (list, tuple)) and len(item) >= 3:
+                text = str(item[0]).strip()
+                start_s = float(item[1])
+                end_s = float(item[2])
+            elif hasattr(item, "start") and hasattr(item, "end"):
+                text = str(getattr(item, "text", getattr(item, "word", ""))).strip()
+                start_s = float(item.start)
+                end_s = float(item.end)
+            else:
+                continue
+            if not text:
+                continue
+            dur = end_s - start_s
+            if dur < 0.02:
+                continue
+            words.append(Word(t=start_s, d=max(dur, 0.01), text=text, speaker=0))
+    else:
+        # No word-level timestamps — split on whitespace and spread evenly
+        text_out = result.text.strip() if hasattr(result, "text") else ""
+        if text_out:
+            tokens = text_out.split()
+            total_dur = len(audio_data) / 16000
+            per = total_dur / max(len(tokens), 1)
+            for i, tok in enumerate(tokens):
+                words.append(Word(t=round(i * per, 3), d=round(per * 0.9, 3),
+                                  text=tok, speaker=0))
+
+    if not words:
+        raise RuntimeError("sherpa-onnx returned no words")
+
+    if progress:
+        progress(1.0)
+    return Transcript(words=words, language=lang_code, speakers=1, provider="sherpa-onnx")
 
 
 # --------------------------------------------------------------------------- #

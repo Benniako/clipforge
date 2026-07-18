@@ -526,6 +526,7 @@ class Settings:
     has_scrfd: bool = False      # SCRFD face detection (upgrade from YuNet)
     has_mediapipe: bool = False  # MediaPipe BlazeFace face detection (Apache 2.0)
     has_sam2: bool = False       # SAM2 subject segmentation (highest priority)
+    has_sherpa: bool = False     # sherpa-onnx cross-platform ASR
     face_tier: str = "haar"      # active face-detection engine: sam2/yolo/mediapipe/yunet/haar
 
     # --- pipeline tunables ----------------------------------------------
@@ -734,13 +735,17 @@ class Settings:
             return "whisperx"
         if pref == "faster" and self.has_whisper:
             return "whisper"
+        if pref == "sherpa" and self.has_sherpa:
+            return "sherpa"
         if pref == "synthetic":
             return "synthetic"
-        # auto
+        # auto: whisperX > faster-whisper > sherpa-onnx > synthetic
         if self.has_whisperx:
             return "whisperx"
         if self.has_whisper:
             return "whisper"
+        if self.has_sherpa:
+            return "sherpa"
         return "synthetic"
 
     @property
@@ -946,6 +951,7 @@ def get_settings() -> Settings:
         has_scrfd=_has_module("scrfd"),
         has_mediapipe=_has_module("mediapipe"),
         has_sam2=_has_module("sam2") or _has_module("segment_anything_2"),
+        has_sherpa=_has_module("sherpa_onnx"),
         # Resolve the active face-detection tier from what's installed. SAM2 is
         # the highest priority (best subject segmentation); YOLO is already
         # configured above (ultralytics loads on first use); mirror the

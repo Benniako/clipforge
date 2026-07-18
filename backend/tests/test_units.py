@@ -4323,6 +4323,83 @@ def test_einsum_cue_matching_equivalence():
     np.testing.assert_allclose(sim_old, sim_new, rtol=1e-5, atol=1e-6)
 
 
+# --------------------------------------------------------------------------- #
+# Cross-modal fusion scorer (fusion.py)
+# --------------------------------------------------------------------------- #
+def test_fusion_three_moderate_signals_beat_single_high():
+    from app.providers.fusion import FusionScorer
+
+    scorer = FusionScorer()
+    # Three moderate signals: cue, ocr, reaction all at 0.6
+    multi_score, _ = scorer.score({"cue": 0.6, "ocr": 0.6, "reaction": 0.6})
+    # Single high signal: cue at 0.95 only
+    single_score, _ = scorer.score({"cue": 0.95})
+    assert multi_score > single_score, (
+        f"3x0.6 ({multi_score}) should beat 1x0.95 ({single_score})"
+    )
+
+
+def test_fusion_missing_features_score_gracefully():
+    from app.providers.fusion import FusionScorer
+
+    scorer = FusionScorer()
+    score, factors = scorer.score({})
+    assert 1 <= score <= 99
+    # Partial features — no crash, score is valid
+    score2, _ = scorer.score({"instant_hook": 0.8, "emotion": 0.7})
+    assert 1 <= score2 <= 99
+
+
+def test_fusion_score_always_in_range():
+    from app.providers.fusion import FusionScorer
+
+    scorer = FusionScorer()
+    # Extremes: everything zero
+    s0, _ = scorer.score({})
+    assert 1 <= s0 <= 99
+    # Everything maxed out
+    s_max, _ = scorer.score({k: 1.0 for k in scorer._weights})
+    assert 1 <= s_max <= 99
+
+
+def test_fusion_from_weights_respects_personalisation():
+    from app.providers.fusion import FusionScorer
+
+    # Weight hook heavily
+    w1 = {"hook": 0.90, "emotion": 0.10}
+    s1, _ = FusionScorer.from_weights(w1).score({"hook": 1.0, "emotion": 0.0})
+    # Weight emotion heavily
+    w2 = {"hook": 0.10, "emotion": 0.90}
+    s2, _ = FusionScorer.from_weights(w2).score({"hook": 1.0, "emotion": 0.0})
+    assert s1 > s2  # hook-heavy weights + hook feature wins
+
+
+def test_fusion_confirmation_bonus_requires_two_signals():
+    from app.providers.fusion import FusionScorer
+
+    scorer = FusionScorer()
+    # One signal above threshold -> no confirmation bonus
+    _, f1 = scorer.score({"cue": 0.7})
+    assert not any("confirm" in f.label.lower() for f in f1)
+    # Two signals -> confirmation factor appears
+    _, f2 = scorer.score({"cue": 0.7, "ocr": 0.7})
+    assert any("confirm" in f.label.lower() for f in f2)
+
+
+def test_fusion_factors_are_explainable():
+    from app.providers.fusion import FusionScorer
+
+    score, factors = FusionScorer().score({
+        "cue": 0.8, "ocr": 0.6, "reaction": 0.7,
+        "instant_hook": 0.9, "emotion": 0.5,
+    })
+    assert 1 <= score <= 99
+    assert len(factors) >= 2
+    for f in factors:
+        assert f.label  # every factor has a human-readable label
+        assert isinstance(f.weight, float)
+
+
 if __name__ == "__main__":
     import sys
     # Windows consoles default to a legacy code page that can't print "✓".

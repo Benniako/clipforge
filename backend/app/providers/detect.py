@@ -86,15 +86,19 @@ def _salience(words: list[Word], duration: float, st: ImportSettings,
         "controversy": signals.controversy(words, lex)[0],
         "qa": signals.qa_pattern(words, lex)[0],
     }
+    # Temporal context: average of per-word context scores as a sequence-aware
+    # feature that complements the bag-of-words signals above.
+    ctx = signals.temporal_context(words)
+    vals["temporal"] = sum(s for _, s in ctx) / max(len(ctx), 1) if ctx else 0.0
     if weights:  # personalised ranking — same weights as scoring
         vals["list"] = signals.list_payoff(words, lex)[0]
         return sum(v * weights.get(k, 0.0) for k, v in vals.items())
-    return (0.18 * vals["instant_hook"] + 0.12 * vals["swipe"]
-            + 0.16 * vals["hook"] + 0.12 * vals["emotion"]
-            + 0.14 * vals["clarity"] + 0.08 * vals["quote"]
-            + 0.04 * vals["length"] + 0.04 * vals["pace"]
-            + 0.06 * vals["list"] + 0.03 * vals["controversy"]
-            + 0.03 * vals["qa"])
+    return (0.16 * vals["instant_hook"] + 0.11 * vals["swipe"]
+            + 0.14 * vals["hook"] + 0.11 * vals["emotion"]
+            + 0.12 * vals["clarity"] + 0.07 * vals["quote"]
+            + 0.03 * vals["length"] + 0.03 * vals["pace"]
+            + 0.05 * vals["list"] + 0.03 * vals["controversy"]
+            + 0.03 * vals["qa"] + 0.12 * vals["temporal"])
 
 
 def _make_title(words: list[Word]) -> str:
