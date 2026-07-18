@@ -924,11 +924,6 @@ class Engine:
                 ae_pos = getattr(aecfg, "audio_prompts", None) if aecfg else None
                 ae_neg = getattr(aecfg, "audio_negative_prompts", None) if aecfg else None
                 for clip in clips:
-                    # Skip clips born from an audio event already — they carry
-                    # the CLAP signal in their baseline score, so a second
-                    # apply_event_bonus would double-count the same evidence.
-                    if clip.features.get("audio_event", 0.0) > 0.0:
-                        continue
                     res = ae_mod.event_score(
                         wav_path, clip.start, clip.end,
                         profile=project.settings.game_profile,

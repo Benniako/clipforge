@@ -462,6 +462,7 @@ class Project(BaseModel):
     # Raw detector candidates stay internal so the UI does not overstate proof.
     events: list[DetectedEvent] = Field(default_factory=list)
     warnings: list[Notice] = Field(default_factory=list)  # non-fatal issues for the UI
+    speaker_names: dict[int, str] = Field(default_factory=dict)  # {0: "Host", 1: "Guest"}
     error: str | None = None
     created_at: float = Field(default_factory=now)
     updated_at: float = Field(default_factory=now)

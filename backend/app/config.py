@@ -525,7 +525,8 @@ class Settings:
     has_tesseract: bool = False  # OCR fallback via pytesseract + tesseract binary
     has_scrfd: bool = False      # SCRFD face detection (upgrade from YuNet)
     has_mediapipe: bool = False  # MediaPipe BlazeFace face detection (Apache 2.0)
-    face_tier: str = "haar"      # active face-detection engine: yolo/mediapipe/yunet/haar
+    has_sam2: bool = False       # SAM2 subject segmentation (highest priority)
+    face_tier: str = "haar"      # active face-detection engine: sam2/yolo/mediapipe/yunet/haar
 
     # --- pipeline tunables ----------------------------------------------
     whisper_model: str = os.environ.get("CLIPFORGE_WHISPER_MODEL", "tiny")
@@ -670,6 +671,10 @@ class Settings:
                 item("scrfd", self.has_scrfd,
                      "SCRFD face detection",
                      "Improved face detection. Replaces YuNet. ONNX GPU-accelerated."),
+                item("sam2", self.has_sam2,
+                     "SAM2 subject segmentation",
+                     "Meta's Segment Anything Model 2. Highest-priority subject/face "
+                     "detector when installed. GPU-accelerated."),
             ]},
             {"name": "ocr", "items": [
                 item("paddleocr", self.has_paddleocr,
@@ -859,7 +864,8 @@ class Settings:
             "tesseract": self.has_tesseract,
             "ocr_packages": list(self.ocr_packages),
             "scrfd": self.has_scrfd,
-            # Which face-detection engine is actually loaded (yolo/mediapipe/
+            "sam2": self.has_sam2,
+            # Which face-detection engine is actually loaded (sam2/yolo/mediapipe/
             # yunet/haar). Distinct from reframe_engine: reframe tracks any
             # subject via YOLO/pose; face_tier is the cascade in media.faces
             # that speaker-aware crop + facecam detection use.
@@ -939,10 +945,13 @@ def get_settings() -> Settings:
         has_tesseract=_has_module("pytesseract") and bool(_find_executable("tesseract")),
         has_scrfd=_has_module("scrfd"),
         has_mediapipe=_has_module("mediapipe"),
-        # Resolve the active face-detection tier from what's installed. YOLO is
-        # already configured above (ultralytics loads on first use); mirror the
+        has_sam2=_has_module("sam2") or _has_module("segment_anything_2"),
+        # Resolve the active face-detection tier from what's installed. SAM2 is
+        # the highest priority (best subject segmentation); YOLO is already
+        # configured above (ultralytics loads on first use); mirror the
         # media.faces priority so /api/health reports the engine that will run.
         face_tier=(
+            "sam2" if (_has_module("sam2") or _has_module("segment_anything_2")) else
             "yolo" if _has_module("ultralytics") else
             "mediapipe" if _has_module("mediapipe") else
             "yunet" if has_opencv else

@@ -1,16 +1,19 @@
-"""Unified face detection — YOLO/MediaPipe/YuNet/Haar cascade.
+"""Unified face detection — SAM2/YOLO/MediaPipe/YuNet/Haar cascade.
 
 Detection runs in priority order, returning the first tier that produces boxes:
 
-1. **YOLOv8-face** (best, GPU via ultralytics) — best accuracy, handles profile
+1. **SAM2** (best, GPU via segment-anything-2) — Meta's Segment Anything Model 2
+   for subject segmentation; produces accurate bounding boxes around any detected
+   subject. Opt-in (``pip install segment-anything-2``).
+2. **YOLOv8-face** (GPU via ultralytics) — best face accuracy, handles profile
    faces. Opt-in (``pip install ultralytics``).
-2. **MediaPipe BlazeFace** (opt-in, ``pip install mediapipe``) — 30-70 FPS CPU,
+3. **MediaPipe BlazeFace** (opt-in, ``pip install mediapipe``) — 30-70 FPS CPU,
    handles side-profiles better than YuNet/Haar, Apache 2.0 / commercial-safe.
    One ~230 KB model download on first use (same pattern as YuNet).
-3. **YuNet** (default with OpenCV) — 337KB ONNX model via
+4. **YuNet** (default with OpenCV) — 337KB ONNX model via
    ``cv2.FaceDetectorYN``; excellent at small boxes and partial occlusion
    (streamer facecam corner). One best-effort download; degrades to Haar.
-4. **Haar cascade** (final fallback) — fast, CPU-only, frontal faces only.
+5. **Haar cascade** (final fallback) — fast, CPU-only, frontal faces only.
    Absent in some OpenCV 5 builds (handled gracefully).
 
 YuNet is a 337KB ONNX model that detects faces down to ~10x10px, including side
@@ -47,6 +50,13 @@ _yunet = None                       # cached detector ("unavailable" = gave up)
 _haar = None                       # cached CascadeClassifier, or False if absent
 _yolo_face = None                   # cached ultralytics YOLO model or False
 _mediapipe = None                   # cached MediaPipe FaceDetector or "unavailable"
+_sam2 = None                        # cached SAM2 predictor or "unavailable"
+
+# SAM2 — Segment Anything Model 2 (highest priority, opt-in).
+# ~2.4 GB for the large model; downloaded once on first use.
+_SAM2_MODEL_URL = ("https://dl.fbaipublicfiles.com/segment_anything_2/"
+                   "092824/sam2.1_hiera_large.pt")
+_SAM2_MIN_BYTES = 1_000_000
 
 
 def _get_yolo_face():
@@ -95,7 +105,7 @@ def _fetch_mp_model(dst: Path) -> bool:
 
 
 def _get_mediapipe():
-    """MediaPipe BlazeFace detector (tier 2, opt-in).
+    """MediaPipe BlazeFace detector (tier 3, opt-in).
 
     30-70 FPS on CPU, handles side-profiles, Apache 2.0. Requires a one-time
     ~230 KB model download (same pattern as YuNet). Returns the detector or
@@ -117,11 +127,83 @@ def _get_mediapipe():
             min_detection_confidence=0.5,
         )
         _mediapipe = mp.tasks.vision.FaceDetector.create_from_options(opts)
-        log.info("face detection: MediaPipe BlazeFace loaded (tier 2)")
+        log.info("face detection: MediaPipe BlazeFace loaded (tier 3)")
         return _mediapipe
     except Exception as e:
         log.info("MediaPipe unavailable (%s); using YuNet/Haar", e)
         _mediapipe = "unavailable"
+        return None
+
+
+# ---------------------------------------------------------------------------
+# SAM2 — Segment Anything Model 2 (tier 1, highest priority, opt-in)
+# ---------------------------------------------------------------------------
+
+def _sam2_model_path() -> Path:
+    """Resolve the SAM2 checkpoint path.
+
+    Checks ``CLIPFORGE_SAM2_MODEL`` env var first, then the data dir.
+    """
+    env = os.environ.get("CLIPFORGE_SAM2_MODEL")
+    if env:
+        return Path(env)
+    return get_settings().data_dir / "models" / "sam2.1_hiera_large.pt"
+
+
+def _fetch_sam2(dst: Path) -> bool:
+    """One best-effort download of the SAM2 checkpoint (~2.4 GB)."""
+    try:
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        tmp = dst.with_suffix(".part")
+        http_download(_SAM2_MODEL_URL, tmp, timeout=30)
+        if tmp.stat().st_size < _SAM2_MIN_BYTES:
+            tmp.unlink(missing_ok=True)
+            return False
+        tmp.replace(dst)
+        log.info("downloaded SAM2 model -> %s", dst)
+        return True
+    except Exception as e:
+        log.info("SAM2 model download failed (%s); falling back to YOLO", e)
+        return False
+
+
+def _get_sam2():
+    """SAM2 predictor (tier 1, highest priority, opt-in).
+
+    Returns a ``Sam2ImagePredictor`` or ``None`` when ``segment-anything-2``
+    (or ``sam2``) isn't installed or the model can't be loaded.
+    """
+    global _sam2
+    if _sam2 is not None:
+        return None if _sam2 == "unavailable" else _sam2
+    try:
+        from sam2.build_sam import build_sam2
+        from sam2.sam2_image_predictor import SAM2ImagePredictor
+    except ImportError:
+        try:
+            from segment_anything_2.build_sam import build_sam2
+            from segment_anything_2.sam2_image_predictor import SAM2ImagePredictor
+        except ImportError:
+            _sam2 = "unavailable"
+            return None
+
+    path = _sam2_model_path()
+    if not path.exists() and not _fetch_sam2(path):
+        _sam2 = "unavailable"
+        return None
+    try:
+        device = get_settings().device
+        sam2_model = build_sam2(
+            model_cfg="sam2.1_hiera_l.yaml",
+            ckpt=str(path),
+            device=device,
+        )
+        _sam2 = SAM2ImagePredictor(sam2_model)
+        log.info("face detection: SAM2 loaded (tier 1)")
+        return _sam2
+    except Exception as e:
+        log.info("SAM2 unavailable (%s); falling back to YOLO", e)
+        _sam2 = "unavailable"
         return None
 
 
@@ -213,17 +295,56 @@ def detect_faces(img_bgr, *, min_size_frac: float = 0.03) -> list[tuple[int, int
     ``min_size_frac`` is the minimum face width as a fraction of frame width —
     keeps tiny in-game character faces from registering.
 
-    Detection priority: YOLOv8-face (best, GPU) → MediaPipe BlazeFace (CPU,
-    side-profiles, opt-in) → YuNet (ONNX) → Haar if the installed OpenCV build
-    still ships it. OpenCV 5 moved Haar/HOG detectors out of the main package,
-    so the final fallback may be absent.
+    Detection priority: SAM2 (best, GPU subject segmentation) → YOLOv8-face
+    (GPU) → MediaPipe BlazeFace (CPU, side-profiles, opt-in) → YuNet (ONNX) →
+    Haar if the installed OpenCV build still ships it. OpenCV 5 moved Haar/HOG
+    detectors out of the main package, so the final fallback may be absent.
     """
     import cv2
 
     h, w = img_bgr.shape[:2]
     min_px = max(int(w * min_size_frac), 10)
 
-    # 1. YOLOv8-face (GPU via ultralytics) — best accuracy, handles profile faces.
+    # 1. SAM2 (Segment Anything 2) — best subject segmentation, GPU via
+    #    segment-anything-2. Produces accurate bounding boxes around any
+    #    detected subject (person/face).
+    sam2 = _get_sam2()
+    if sam2 is not None:
+        try:
+            import numpy as np
+
+            rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+            sam2.set_image(rgb)
+            # Use a grid of foreground points to prompt automatic detection.
+            n_pts = 16
+            grid_x = np.linspace(0, w - 1, n_pts, dtype=np.float32)
+            grid_y = np.linspace(0, h - 1, n_pts, dtype=np.float32)
+            gx, gy = np.meshgrid(grid_x, grid_y)
+            point_coords = np.stack([gx.ravel(), gy.ravel()], axis=-1)
+            point_labels = np.ones(len(point_coords), dtype=np.int32)
+            masks, scores, _ = sam2.predict(
+                point_coords=point_coords,
+                point_labels=point_labels,
+                multimask_output=True,
+            )
+            out = []
+            for mask, score in zip(masks, scores):
+                if score < 0.5:
+                    continue
+                ys, xs = np.where(mask)
+                if len(xs) < 10:
+                    continue
+                fx, fy = int(xs.min()), int(ys.min())
+                fw, fh = int(xs.max() - fx), int(ys.max() - fy)
+                if fw >= min_px and fh >= min_px:
+                    out.append((max(fx, 0), max(fy, 0),
+                                min(fw, w - fx), min(fh, h - fy)))
+            if out:
+                return out
+        except Exception as e:
+            log.debug("SAM2 inference failed (%s); falling through to YOLO", e)
+
+    # 2. YOLOv8-face (GPU via ultralytics) — best accuracy, handles profile faces.
     yolo = _get_yolo_face()
     if yolo is not None:
         try:
@@ -240,7 +361,7 @@ def detect_faces(img_bgr, *, min_size_frac: float = 0.03) -> list[tuple[int, int
         except Exception:
             log.debug("YOLO face detection failed; falling through to MediaPipe")
 
-    # 2. MediaPipe BlazeFace (opt-in, CPU, handles side-profiles).
+    # 3. MediaPipe BlazeFace (opt-in, CPU, handles side-profiles).
     mp_det = _get_mediapipe()
     if mp_det is not None:
         try:
@@ -263,7 +384,7 @@ def detect_faces(img_bgr, *, min_size_frac: float = 0.03) -> list[tuple[int, int
         except Exception as e:
             log.debug("MediaPipe inference failed (%s); falling back", e)
 
-    # 3. YuNet (ONNX, OpenCV DNN).
+    # 4. YuNet (ONNX, OpenCV DNN).
     with _lock:
         det = _get_yunet()
         if det is not None:
@@ -278,7 +399,7 @@ def detect_faces(img_bgr, *, min_size_frac: float = 0.03) -> list[tuple[int, int
             if out:
                 return out
 
-    # 4. Haar cascade (CPU, legacy fallback; absent in some OpenCV 5 builds).
+    # 5. Haar cascade (CPU, legacy fallback; absent in some OpenCV 5 builds).
     with _lock:
         haar = _get_haar()
         if haar is None:
@@ -292,10 +413,13 @@ def detect_faces(img_bgr, *, min_size_frac: float = 0.03) -> list[tuple[int, int
 def active_tier() -> str:
     """Which face-detection tier is currently loaded.
 
-    Returns one of ``"yolo"``, ``"mediapipe"``, ``"yunet"``, ``"haar"`` — the
-    first tier (in priority order) that is actually available. Surfaced in
-    /api/health so the UI can show which engine is driving face tracking.
+    Returns one of ``"sam2"``, ``"yolo"``, ``"mediapipe"``, ``"yunet"``,
+    ``"haar"`` — the first tier (in priority order) that is actually
+    available. Surfaced in /api/health so the UI can show which engine is
+    driving face tracking.
     """
+    if _sam2 and _sam2 is not False and _sam2 != "unavailable":
+        return "sam2"
     if _yolo_face and _yolo_face is not False:
         return "yolo"
     if _mediapipe and _mediapipe != "unavailable":

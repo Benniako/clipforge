@@ -209,3 +209,43 @@ def apply_viral_boost(score: int, factors: list[ScoreFactor], viral: float,
                                detail=f"Local model rated virality {int(viral*100)}/100"),
                    *factors]
     return new_score, factors
+
+
+def suggest_hook_rewrite(transcript_excerpt: str, *, lang: str = "en"
+                         ) -> ScoreFactor | None:
+    """Use a local LLM (Ollama) to rewrite the first 3s of a clip.
+
+    Returns a ``ScoreFactor`` with the suggested opener, or ``None`` when
+    Ollama is unavailable or the excerpt is too short to rewrite.
+    """
+    from . import llm as _llm_mod
+    from . import ollama_client as _oc
+
+    if not _llm_mod.available() or not transcript_excerpt.strip():
+        return None
+    model = _llm_mod.active_model()
+    if not model:
+        return None
+    excerpt = transcript_excerpt.strip()[:300]
+    if len(excerpt.split()) < 3:
+        return None
+    lang_hint = ("German" if lang.startswith("de") else "English")
+    prompt = (
+        f"You are a short-form video editor. Rewrite the opening 3 seconds "
+        f"of this {lang_hint} transcript excerpt to be more scroll-stopping "
+        f"and engaging. Keep it under 15 words, natural speech, no hashtags. "
+        f"Return ONLY the rewritten text, nothing else.\n\n"
+        f"Transcript: {excerpt}"
+    )
+    raw = _oc.generate(model=model, prompt=prompt, timeout=20.0,
+                       temperature=0.8, num_predict=40)
+    if not raw:
+        return None
+    suggestion = raw.strip().strip('"').strip("'")
+    if not suggestion or len(suggestion) < 5:
+        return None
+    return ScoreFactor(
+        label="AI Hook Rewrite",
+        weight=0.0,
+        detail=suggestion,
+    )
