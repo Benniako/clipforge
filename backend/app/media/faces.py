@@ -27,6 +27,54 @@ _lock = threading.Lock()            # FaceDetectorYN instances aren't thread-saf
 _yunet = None                       # cached detector ("unavailable" = gave up)
 _haar = None                       # cached CascadeClassifier, or False if absent
 _yolo_face = None                   # cached ultralytics YOLO model or False
+_scrfd = None                       # cached SCRFD session or False
+
+_SCRFD_URL = ("https://huggingface.co/hsuyabc/scrfd_2.5g_bnkps.onnx/"
+              "resolve/main/scrfd_2.5g_bnkps.onnx")
+_SCRFD_MIN_BYTES = 1_000_000        # real model is ~3.3 MB
+
+
+def _scrfd_path() -> Path:
+    env = os.environ.get("CLIPFORGE_SCRFD_PATH")
+    if env:
+        return Path(env)
+    return get_settings().data_dir / "models" / "scrfd_2.5g_bnkps.onnx"
+
+
+def _get_scrfd():
+    """SCRFD 2.5G face detector (ONNX, GPU via onnxruntime when available).
+
+    Better accuracy than YuNet on small/profile faces (WIDER FACE hard set:
+    77.9 vs ~70 for YuNet) and runs on CUDA when the onnxruntime-gpu build is
+    installed. Falls back to CPU execution transparently.
+    """
+    global _scrfd
+    if _scrfd is not None:
+        return None if _scrfd is False else _scrfd
+    try:
+        path = _scrfd_path()
+        if not path.exists():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix(".part")
+            http_download(_SCRFD_URL, tmp, timeout=30)
+            if tmp.stat().st_size < _SCRFD_MIN_BYTES:
+                tmp.unlink(missing_ok=True)
+                raise RuntimeError("SCRFD download truncated")
+            tmp.replace(path)
+            log.info("downloaded SCRFD face model -> %s", path)
+        from scrfd import SCRFD
+
+        providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+        if get_settings().device != "cuda":
+            providers = ["CPUExecutionProvider"]
+        _scrfd = SCRFD.from_path(str(path), providers=providers)
+        used = _scrfd._inner.session.get_providers()
+        log.info("SCRFD face detector loaded (%s)", used[0])
+        return _scrfd
+    except Exception as e:
+        log.info("SCRFD unavailable (%s); using YuNet/OpenCV fallback", e)
+        _scrfd = False
+        return None
 
 
 def _get_yolo_face():
@@ -138,9 +186,10 @@ def detect_faces(img_bgr, *, min_size_frac: float = 0.03) -> list[tuple[int, int
     ``min_size_frac`` is the minimum face width as a fraction of frame width —
     keeps tiny in-game character faces from registering.
 
-    Detection priority: YOLOv8-face (best, GPU) → YuNet (ONNX) → Haar if the
-    installed OpenCV build still ships it. OpenCV 5 moved Haar/HOG detectors
-    out of the main package, so the final fallback may be absent.
+    Detection priority: YOLOv8-face (best, GPU) → SCRFD (ONNX, GPU/CPU) →
+    YuNet (ONNX) → Haar if the installed OpenCV build still ships it. OpenCV 5
+    moved Haar/HOG detectors out of the main package, so the final fallback may
+    be absent.
     """
     import cv2
 
@@ -162,9 +211,32 @@ def detect_faces(img_bgr, *, min_size_frac: float = 0.03) -> list[tuple[int, int
             if out:
                 return out
         except Exception:
-            log.debug("YOLO face detection failed; falling through to YuNet")
+            log.debug("YOLO face detection failed; falling through to SCRFD")
 
-    # 2. YuNet (ONNX, OpenCV DNN).
+    # 2. SCRFD (ONNX; CUDA when onnxruntime-gpu + cuFFT are present).
+    scrfd = _get_scrfd()
+    if scrfd is not None:
+        try:
+            from scrfd import Threshold
+
+            rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+            from PIL import Image
+
+            det = scrfd.detect(Image.fromarray(rgb),
+                               threshold=Threshold(probability=0.4))
+            out = []
+            for f in det or []:
+                fx, fy = int(f.bbox.upper_left.x), int(f.bbox.upper_left.y)
+                fw, fh = int(f.bbox.width()), int(f.bbox.height())
+                if fw >= min_px and fh >= min_px:
+                    fx, fy = max(fx, 0), max(fy, 0)
+                    out.append((fx, fy, min(fw, w - fx), min(fh, h - fy)))
+            if out:
+                return out
+        except Exception:
+            log.debug("SCRFD detection failed; falling through to YuNet")
+
+    # 3. YuNet (ONNX, OpenCV DNN).
     with _lock:
         det = _get_yunet()
         if det is not None:
@@ -179,7 +251,7 @@ def detect_faces(img_bgr, *, min_size_frac: float = 0.03) -> list[tuple[int, int
             if out:
                 return out
 
-    # 3. Haar cascade (CPU, legacy fallback; absent in some OpenCV 5 builds).
+    # 4. Haar cascade (CPU, legacy fallback; absent in some OpenCV 5 builds).
     with _lock:
         haar = _get_haar()
         if haar is None:

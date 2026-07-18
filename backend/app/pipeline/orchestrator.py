@@ -1108,10 +1108,26 @@ class Engine:
             _preserve_user_clip_edits(clips, p.clips)
             p.clips = clips
 
+        # Optional Demucs vocal isolation: separate the voice once and render
+        # from a denoised copy (video stream copied, untouched) so every clip
+        # gets studio-clean speech. Falls back to the original on any failure.
+        render_src = src_path
+        if project.settings.denoise and settings.has_demucs and info.has_audio:
+            self._advance(project_id, 5, "Isolating voice (Demucs)…")
+            try:
+                from ..providers import separate as sep_mod
+                dst_path = ingest.project_dir(project_id) / "source.denoised.mp4"
+                dst = str(dst_path)
+                cleaned = dst if dst_path.exists() else sep_mod.denoise_source(src_path, dst)
+                if cleaned:
+                    render_src = cleaned
+            except Exception as e:
+                log.warning("denoise failed: %s", e)
+
         # 6. render (parallel per clip) ----------------------------------
         out_w, out_h = project.settings.dims()
         self._advance(project_id, 5, "Rendering clips…")
-        self._render_all(project_id, clips, src_path, info, out_w, out_h,
+        self._render_all(project_id, clips, render_src, info, out_w, out_h,
                          project.settings.burn_captions, project.settings.motion,
                          project.settings.power_mode.value,
                          ai_boost=project.settings.ai_boost)

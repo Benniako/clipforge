@@ -281,6 +281,20 @@ def _track_faces(src: str, start: float, end: float,
         if use_subject:
             from ..providers.subject import subject_center  # noqa: F811
 
+        # SAM2 upgrade: one temporally-consistent mask track for the whole clip
+        # instead of independent per-frame YOLO boxes. Falls back to per-frame
+        # detection when SAM2/checkpoint is unavailable.
+        sam2_centers: dict[int, float] | None = None
+        if use_subject:
+            try:
+                from ..providers.subject import subject_centers_sam2
+                sam2_centers = subject_centers_sam2(frames, SAMPLE_WIDTH)
+                if sam2_centers:
+                    log.info("SAM2 subject track: %d/%d frames covered",
+                             len(sam2_centers), len(frames))
+            except Exception as e:
+                log.debug("SAM2 subject track skipped: %s", e)
+
         centers: list[tuple[float, float]] = []
         last_cx: float | None = None
         # Target tracking: remember WHICH face we're following so we only switch
@@ -367,7 +381,10 @@ def _track_faces(src: str, start: float, end: float,
                     last_cx = (face[0] + face[2] / 2) / w
                 cx = last_cx
             else:
-                sc = subject_center(img) if use_subject else None
+                # SAM2 track wins over per-frame YOLO when it covers this frame.
+                sc = (sam2_centers.get(i) if sam2_centers else None)
+                if sc is None and use_subject:
+                    sc = subject_center(img)
                 if sc is not None:
                     hits += 1
                     if last_cx is None or _speech_active(t_rel, speech):

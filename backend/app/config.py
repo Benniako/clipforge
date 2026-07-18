@@ -506,6 +506,7 @@ class Settings:
     has_vad: bool = False        # Silero VAD — snap captions to exact speech
     has_scenedetect: bool = False  # PySceneDetect — better scene-cut snapping
     has_emotion: bool = False    # emotion2vec/FunASR — excitement virality signal
+    has_demucs: bool = False     # Demucs — isolate voice from music/game audio
     has_audio_events: bool = False  # PANNs — cheering/laughter/explosion detection
     has_clap: bool = False       # CLAP zero-shot audio cue detection
     reframe_engine: str = "haar"  # "yolo" | "mediapipe" | "haar"
@@ -693,6 +694,8 @@ class Settings:
                      "PANNs", "Cheering/laughter/explosion detection as a virality signal."),
                 item("emotion", self.has_emotion,
                      "emotion2vec/FunASR", "Excitement/intensity virality signal from voice."),
+                item("demucs", self.has_demucs,
+                     "Demucs", "Isolates voice from music/game audio for cleaner transcription."),
             ]},
             {"name": "gpu", "items": [
                 item("nvidia", self.has_nvidia,
@@ -822,6 +825,7 @@ class Settings:
             "vad": self.has_vad,
             "scene_detect": self.has_scenedetect,
             "emotion": self.has_emotion,
+            "denoise": self.has_demucs,
             "audio_events": self.has_audio_events or self.has_clap,
             "panns_audio": self.has_audio_events,
             "clap_audio": self.has_clap,
@@ -909,6 +913,7 @@ def get_settings() -> Settings:
         has_vad=_has_module("silero_vad"),
         has_scenedetect=_has_module("scenedetect"),
         has_emotion=_has_module("funasr"),
+        has_demucs=_has_module("demucs"),
         has_audio_events=_has_module("panns_inference"),
         has_clap=_has_module("laion_clap"),
         reframe_engine=_detect_reframe_engine(),
