@@ -35,7 +35,6 @@ _FACE_CACHE: OrderedDict[tuple[str, int, int], list[tuple[float, float]] | None]
 # podcast) would otherwise extract + detect faces on the same frames 20 times.
 # The cache avoids redundant ffmpeg calls and YOLO/SCRFD/YuNet inference.
 # BUCKET_SIZE=0.5 means two clips whose starts differ by <0.5s share a cache entry.
-_FACE_CACHE: dict[tuple[str, int, int], list[tuple[float, float]] | None] = {}
 _FACE_CACHE_LOCK = threading.Lock()
 _FACE_CACHE_BUCKET = 2  # 1/bucket = 0.5s resolution
 _FACE_CACHE_MAX = 200   # max entries before eviction (LRU-style oldest-first)

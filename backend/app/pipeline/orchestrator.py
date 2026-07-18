@@ -161,37 +161,6 @@ def _speech_intervals(transcript, start: float, end: float
     return [(a - start, b - start) for a, b in segs]
 
 
-# Cache for pre-computed full-timeline speech intervals.
-_full_speech_intervals: list[tuple[float, float]] | None = None
-_full_speech_transcript_id: int = 0
-# Lock protects the read-modify-write of the cache across pipeline worker
-# threads (engine._asr_loop can set values from one project while another
-# worker reads for a different project).
-_full_speech_lock = threading.Lock()
-
-
-def _precompute_speech_intervals(transcript) -> None:
-    """Compute speech intervals for the entire timeline once.
-
-    Subsequent per-clip calls to ``_speech_intervals`` still rebase the
-    intervals (subtract clip start), but the full-timeline scan of the
-    transcript is done here once instead of per-clip.
-    """
-    with _full_speech_lock:
-        global _full_speech_intervals, _full_speech_transcript_id
-        if transcript is None or transcript.provider == "synthetic":
-            _full_speech_intervals = None
-            return
-        # Cheap identity check — skip if already computed for this transcript.
-        tid = id(transcript)
-        if tid == _full_speech_transcript_id and _full_speech_intervals is not None:
-            return
-        _full_speech_transcript_id = tid
-        _full_speech_intervals = transcript.words  # store words list for filtering
-    log.debug("pre-computed speech intervals for transcript (%d words)",
-              len(transcript.words))
-
-
 def _score_visual_reads(src_path: str, clips: list[Clip], *,
                         power_mode: str | None = None,
                         lang: str | None = None,
@@ -741,10 +710,6 @@ class Engine:
                     "speech and include hallucinated words in quiet sections. "
                     "Install it (pip install silero-vad) and re-process for "
                     "accurate captions.", severity="warning")
-
-        # Pre-compute speech intervals for the full timeline so each clip
-        # doesn't re-scan the transcript word list.
-        _precompute_speech_intervals(transcript)
 
         # Decide talking vs gameplay (auto-detect unless forced).
         forced = project.settings.content_type

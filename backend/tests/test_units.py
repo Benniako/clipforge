@@ -3603,19 +3603,6 @@ def test_adaptive_binarization_checks_monotone_rois():
     assert "THRESH_BINARY" in src  # fallback threshold method
 
 
-if __name__ == "__main__":
-    import sys
-    # Windows consoles default to a legacy code page that can't print "✓".
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
-    passed = 0
-    for fn in fns:
-        fn()
-        print(f"  ✓ {fn.__name__}")
-        passed += 1
-    print(f"\n{passed}/{len(fns)} unit tests passed")
-
-
 # --------------------------------------------------------------------------- #
 # Plugin base class
 # --------------------------------------------------------------------------- #
@@ -3867,3 +3854,314 @@ def test_watcher_skips_growing_files():
         f.write_text("still growing")  # same size
         poller._poll_once()  # should be discovered
         assert "growing.mp4" in poller._seen
+
+
+# --------------------------------------------------------------------------- #
+# Regression tests for bugs found in the 2026-07 backend audit.
+# --------------------------------------------------------------------------- #
+def test_regression_reframe_face_cache_is_ordered_dict_and_lru_works():
+    """Bug #1 (CRITICAL): _FACE_CACHE was redeclared as a plain dict, so
+    move_to_end()/popitem(last=False) raised AttributeError on the first
+    horizontal-source clip when OpenCV was installed — crashing the pipeline
+    for the most common case (16:9 -> 9:16)."""
+    from collections import OrderedDict
+    from app.pipeline import reframe as RF
+
+    assert isinstance(RF._FACE_CACHE, OrderedDict)
+    assert hasattr(RF._FACE_CACHE, "move_to_end")
+
+    # Isolate the cache so other tests are unaffected.
+    RF._FACE_CACHE.clear()
+    saved_track = RF._track_faces
+    RF._track_faces = lambda src, start, end, speech: [(0.0, 0.5), (1.0, 0.52)]
+    try:
+        # Horizontal source (16:9) so the vertical early-return is skipped.
+        rf = RF.compute_reframe("/nonexistent.mp4", 0.0, 5.0, src_aspect=16 / 9)
+        assert rf.tracked is True
+        assert len(RF._FACE_CACHE) == 1
+        # Second call hits the move_to_end cache path without crashing.
+        rf2 = RF.compute_reframe("/nonexistent.mp4", 0.0, 5.0, src_aspect=16 / 9)
+        assert rf2.tracked is True
+        # LRU eviction (popitem(last=False)) must not raise on a real OrderedDict.
+        rf3 = RF.compute_reframe("/nonexistent.mp4", 6.0, 11.0, src_aspect=16 / 9)
+        assert rf3.tracked is True
+    finally:
+        RF._track_faces = saved_track
+        RF._FACE_CACHE.clear()
+
+
+def test_regression_webvtt_timestamp_rolls_over_at_1000ms():
+    """Bug #3 (MEDIUM): _webvtt_ts used float math for the ms field, so a
+    fractional second rounding up to 1000ms produced the invalid '.1000'
+    instead of rolling into the seconds field. SRT already used int divmod."""
+    from app.pipeline.captions import _webvtt_ts, _srt_ts
+    # Values whose sub-second part rounds up to 1000ms.
+    for t in (0.9996, 1.9995, 2.9999, 59.9996):
+        v = _webvtt_ts(t)
+        assert ".1000" not in v, f"invalid WebVTT ts for {t}: {v!r}"
+        assert v.count(".") == 1
+        ms = int(v.split(".")[1])
+        assert 0 <= ms <= 999
+    # Rollover correctness: 0.9996s -> 00:00:01.000 (not 00:00:00.1000).
+    assert _webvtt_ts(0.9996) == "00:00:01.000"
+    assert _webvtt_ts(59.9996) == "00:01:00.000"
+    # Negative/zero clamp matches the SRT helper's behaviour.
+    assert _webvtt_ts(0.0) == "00:00:00.000"
+    assert _webvtt_ts(-1.0) == "00:00:00.000"
+    # WebVTT and SRT agree on the rolled-over value (modulo separator).
+    assert _webvtt_ts(0.9996).replace(".", ",") == _srt_ts(0.9996)
+
+
+def test_regression_webvtt_build_produces_valid_timestamps():
+    """The public build_webvtt path must never emit '.1000' either."""
+    from app.models import CaptionSet, CaptionWord
+    from app.pipeline.captions import build_vtt
+    # Word at 0.9996s forces the rollover edge through the line timestamp.
+    cs = CaptionSet(words=[CaptionWord(t=0.9996, d=0.4, text="edge"),
+                           CaptionWord(t=1.4, d=0.4, text="case")],
+                    max_words_per_line=2)
+    vtt = build_vtt(cs)
+    assert vtt.startswith("WEBVTT")
+    for line in vtt.splitlines():
+        if " --> " in line:
+            for ts in line.split(" --> "):
+                assert ".1000" not in ts
+                assert ts.count(".") == 1
+                assert 0 <= int(ts.split(".")[1]) <= 999
+
+
+def test_regression_export_tiktok_resolves_url_to_filesystem_path():
+    """Bug #2 (HIGH): export_tiktok passed clip.export_url (a '/media/...' URL
+    path) straight to FileResponse, which expects a filesystem path — so the
+    endpoint 404/500'd on every call. It must resolve the URL like
+    download_clip does."""
+    from starlette.testclient import TestClient
+    from app import store
+    from app.config import get_settings
+    from app.main import create_app
+
+    store.init_db()
+    pid = "proj_tiktok_export"
+    p = Project(
+        id=pid, status=ProjectStatus.ready,
+        source=SourceMedia(filename="src.mp4", path=f"{pid}/src.mp4", duration=60.0),
+        clips=[Clip(id="clip_a", start=0.0, end=5.0, title="A", score=80,
+                    export_url=f"/media/{pid}/clip_a.mp4")],
+    )
+    store.save(p)
+    media = get_settings().media_dir / pid
+    media.mkdir(parents=True, exist_ok=True)
+    clip_file = media / "clip_a.mp4"
+    clip_file.write_bytes(b"\x00\x00\x00\x1cftypisom\x00\x00\x02\x00mp42")  # tiny mp4 header
+
+    c = TestClient(create_app(), raise_server_exceptions=False)
+    r = c.get(f"/api/projects/{pid}/export/tiktok/clip_a")
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "video/mp4"
+    assert r.content.startswith(b"\x00\x00\x00\x1cftyp")
+
+    # File missing on disk -> 404, not 500.
+    clip_file.unlink()
+    assert c.get(f"/api/projects/{pid}/export/tiktok/clip_a").status_code == 404
+
+    # Unrendered clip -> 409.
+    p2 = Project(id="proj_tiktok_unrendered", status=ProjectStatus.ready,
+                 source=SourceMedia(filename="s.mp4", path="proj_tiktok_unrendered/s.mp4"),
+                 clips=[Clip(id="clip_b", start=0.0, end=5.0, title="B", score=70)])
+    store.save(p2)
+    assert c.get("/api/projects/proj_tiktok_unrendered/export/tiktok/clip_b").status_code == 409
+
+
+def test_regression_mark_highlight_rejects_bad_timestamp_and_duration():
+    """Bug #5 (MEDIUM): mark_highlight accepted a negative timestamp, producing
+    a clip with end < start that ffmpeg could not render (and on Windows,
+    time.gmtime(negative) raised OSError). It must validate inputs and guard
+    end > start."""
+    from starlette.testclient import TestClient
+    from app import store
+    from app.main import create_app
+    from app.api import routes_projects
+    from app.models import Transcript, Word
+
+    class FakeEngine:
+        def rerender_clip(self, project_id, clip_id):
+            self.rendered = (project_id, clip_id)
+
+    store.init_db()
+    pid = "proj_mark_hl"
+    p = Project(
+        id=pid, status=ProjectStatus.processing,
+        source=SourceMedia(filename="src.mp4", path=f"{pid}/src.mp4", duration=60.0),
+        transcript=Transcript(provider="whisper", language="en",
+                              words=[Word(t=0.0, d=0.5, text="hi")]),
+    )
+    store.save(p)
+
+    fake = FakeEngine()
+    orig = routes_projects.engine
+    routes_projects.engine = fake
+    c = TestClient(create_app(), raise_server_exceptions=False)
+    try:
+        # Negative timestamp -> 400 (not a broken clip, not a 500).
+        assert c.post(f"/api/projects/{pid}/mark-highlight?timestamp=-100&duration=30").status_code == 400
+        # Non-positive duration -> 400.
+        assert c.post(f"/api/projects/{pid}/mark-highlight?timestamp=10&duration=0").status_code == 400
+        assert c.post(f"/api/projects/{pid}/mark-highlight?timestamp=10&duration=-5").status_code == 400
+        # Timestamp past the end is clamped to a valid window at the source's
+        # tail (never end < start, never a 500). 9999s on a 60s source -> the
+        # last valid 10s window.
+        past = c.post(f"/api/projects/{pid}/mark-highlight?timestamp=9999&duration=2")
+        assert past.status_code == 200, past.text
+        pb = past.json()
+        assert pb["end"] > pb["start"]
+        assert pb["end"] <= 60.0
+        assert pb["start"] >= 0.0
+
+        # Valid timestamp -> 200 and a clip with end > start.
+        r = c.post(f"/api/projects/{pid}/mark-highlight?timestamp=30&duration=20")
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["ok"] is True
+        assert body["end"] > body["start"]
+        assert body["duration"] > 0
+        # Two clips saved (past-end + valid), all with end > start.
+        reloaded = store.get(pid)
+        assert len(reloaded.clips) == 2
+        for cl in reloaded.clips:
+            assert cl.end > cl.start
+    finally:
+        routes_projects.engine = orig
+
+
+def test_regression_download_montage_handles_non_media_url_without_500():
+    """Bug #7 (LOW): download_montage's ternary bound the '/' operator outside
+    the conditional, so a non-/media/ export_url left `path` as a str and
+    path.exists() raised AttributeError (500) instead of a clean 404."""
+    from starlette.testclient import TestClient
+    from app import store
+    from app.config import get_settings
+    from app.main import create_app
+    from app.models import Montage
+
+    store.init_db()
+    pid = "proj_mtg_dl"
+    media = get_settings().media_dir / pid
+    media.mkdir(parents=True, exist_ok=True)
+    (media / "mtg_ok.mp4").write_bytes(b"\x00\x00\x00\x18ftypmp42")
+
+    p = Project(
+        id=pid, status=ProjectStatus.ready,
+        source=SourceMedia(filename="src.mp4", path=f"{pid}/src.mp4", duration=60.0),
+        montages=[
+            Montage(id="mtg_ok", title="OK Montage", status=ClipStatus.ready,
+                    export_url=f"/media/{pid}/mtg_ok.mp4"),
+            # Malformed export_url that does NOT start with /media/ — this used
+            # to raise AttributeError on the .exists() call.
+            Montage(id="mtg_bad", title="Bad Montage", status=ClipStatus.ready,
+                    export_url="C:/not/a/media/path.mp4"),
+        ],
+    )
+    store.save(p)
+    c = TestClient(create_app(), raise_server_exceptions=False)
+
+    ok = c.get(f"/api/projects/{pid}/montages/mtg_ok/download")
+    assert ok.status_code == 200
+    assert ok.headers["content-type"] == "video/mp4"
+
+    # The malformed export_url must yield a 404, never a 500 AttributeError.
+    bad = c.get(f"/api/projects/{pid}/montages/mtg_bad/download")
+    assert bad.status_code == 404
+
+
+def test_regression_orchestrator_has_no_dead_speech_precompute():
+    """Bug #6 (LOW): _precompute_speech_intervals cached a value that
+    _speech_intervals never read (dead code + a type-annotated variable
+    holding the wrong type). The dead globals/function must be gone, and
+    _speech_intervals must still work."""
+    from app.pipeline import orchestrator as orch
+
+    assert not hasattr(orch, "_precompute_speech_intervals")
+    assert not hasattr(orch, "_full_speech_intervals")
+    assert not hasattr(orch, "_full_speech_lock")
+    # _speech_intervals still returns None for synthetic/None transcripts.
+    assert orch._speech_intervals(None, 0.0, 5.0) is None
+    from app.models import Transcript
+    synth = Transcript(provider="synthetic", language="en", words=[])
+    assert orch._speech_intervals(synth, 0.0, 5.0) is None
+
+
+def test_caption_download_supports_ass_and_rejects_unknown_format():
+    """Feature + hardening: the caption sidecar endpoint now offers ASS (the
+    exact burn-in styling libass uses) and rejects unknown formats with 400
+    instead of silently falling back to SRT (a typo'd format used to return
+    SRT and confuse NLE pipelines)."""
+    from starlette.testclient import TestClient
+    from app import store
+    from app.main import create_app
+    from app.models import CaptionSet, CaptionWord
+
+    store.init_db()
+    pid = "proj_caps_dl"
+    caps = CaptionSet(words=[CaptionWord(t=0.0, d=0.5, text="hello"),
+                             CaptionWord(t=0.6, d=0.5, text="world")],
+                      style_id="bold-pop")
+    p = Project(
+        id=pid, status=ProjectStatus.ready,
+        source=SourceMedia(filename="src.mp4", path=f"{pid}/src.mp4", duration=10.0),
+        clips=[Clip(id="c1", start=0.0, end=5.0, title="Clip One", score=80,
+                    captions=caps)],
+    )
+    store.save(p)
+    c = TestClient(create_app(), raise_server_exceptions=False)
+    base = f"/api/projects/{pid}/clips/c1/captions"
+
+    ass = c.get(f"{base}?format=ass")
+    assert ass.status_code == 200, ass.text
+    assert ass.text.startswith("[Script Info]")
+    assert "PlayResX: 1080" in ass.text and "PlayResY: 1920" in ass.text
+    assert "[V4+ Styles]" in ass.text
+    assert ".ass" in ass.headers["Content-Disposition"]
+
+    vtt = c.get(f"{base}?format=vtt")
+    assert vtt.status_code == 200
+    assert vtt.text.startswith("WEBVTT")
+    assert ".vtt" in vtt.headers["Content-Disposition"]
+
+    srt = c.get(f"{base}?format=srt")
+    assert srt.status_code == 200
+    assert srt.text.startswith("1\n")
+    assert ".srt" in srt.headers["Content-Disposition"]
+
+    # Unknown format -> 400, never a silent SRT fallback.
+    bad = c.get(f"{base}?format=vttt")
+    assert bad.status_code == 400
+    # Case-insensitive acceptance.
+    assert c.get(f"{base}?format=VTT").status_code == 200
+
+    # Clip with no captions -> 409.
+    p2 = Project(id="proj_caps_empty", status=ProjectStatus.ready,
+                 source=SourceMedia(filename="s.mp4", path="proj_caps_empty/s.mp4"),
+                 clips=[Clip(id="c2", start=0.0, end=5.0, title="Empty", score=70)])
+    store.save(p2)
+    assert c.get("/api/projects/proj_caps_empty/clips/c2/captions?format=ass").status_code == 409
+
+
+if __name__ == "__main__":
+    import sys
+    # Windows consoles default to a legacy code page that can't print "✓".
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
+    passed = 0
+    failed = 0
+    for fn in fns:
+        try:
+            fn()
+        except Exception as e:
+            print(f"  ✗ {fn.__name__}: {type(e).__name__}: {e}", flush=True)
+            failed += 1
+            continue
+        print(f"  ✓ {fn.__name__}", flush=True)
+        passed += 1
+    print(f"\n{passed}/{len(fns)} unit tests passed"
+          + (f", {failed} failed" if failed else ""), flush=True)
+    sys.exit(1 if failed else 0)

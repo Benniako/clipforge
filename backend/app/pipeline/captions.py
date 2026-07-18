@@ -110,11 +110,16 @@ def build_vtt(captions: CaptionSet) -> str:
 
 
 def _webvtt_ts(t: float) -> str:
-    """WebVTT timestamp: ``HH:MM:SS.mmm`` (millisecond precision)."""
-    h = int(t // 3600)
-    m = int((t % 3600) // 60)
-    s = int(t % 60)
-    ms = int(round((t - int(t)) * 1000))
+    """WebVTT timestamp: ``HH:MM:SS.mmm`` (millisecond precision).
+
+    Integer-millisecond divmod (mirroring ``_srt_ts``) so a fractional second
+    that rounds up to 1000ms rolls over into the seconds field instead of
+    emitting the invalid ``.1000``.
+    """
+    ms_total = max(int(round(t * 1000)), 0)
+    h, rem = divmod(ms_total, 3_600_000)
+    m, rem = divmod(rem, 60_000)
+    s, ms = divmod(rem, 1000)
     return f"{h:02d}:{m:02d}:{s:02d}.{ms:03d}"
 
 
