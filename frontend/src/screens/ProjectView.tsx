@@ -18,6 +18,12 @@ export default function ProjectView() {
   const [toast, setToast] = useState<ToastMsg | null>(null);
   const [viewMode, setViewMode] = useState<"grid" | "swipe">("grid");
   const timer = useRef<number | null>(null);
+  // Keep the latest t() in a ref so the polling/WS callbacks (which live for
+  // the life of the effect) always use the current language without needing
+  // t in the effect deps (which would tear down and reopen the WebSocket on
+  // every language switch).
+  const tRef = useRef(t);
+  tRef.current = t;
 
   useEffect(() => {
     if (!projectId) return;
@@ -43,7 +49,7 @@ export default function ProjectView() {
         if (await handle(s)) return;
         timer.current = window.setTimeout(poll, 1200);
       } catch (e: any) {
-        if (alive) setError(e.message ?? t("pv.loadError"));
+        if (alive) setError(e.message ?? tRef.current("pv.loadError"));
       }
     };
     const startPolling = () => {

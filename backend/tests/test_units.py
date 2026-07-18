@@ -4200,6 +4200,96 @@ def test_regression_frame_cache_evicts_oldest_when_over_budget():
         FC._cache_bytes = 0
 
 
+def test_store_summary_column_is_populated_and_used_by_list():
+    """Performance: list_summaries reads the denormalized `summary` column
+    instead of parsing each project's full JSON blob (~50 KB with transcript +
+    captions). Verifies save() writes it and list_summaries() consumes it."""
+    import sqlite3
+    from app import store
+    from app.config import get_settings
+    from app.models import (Clip, ClipStatus, ImportSettings, Platform,
+                            Project, ProjectStatus, ProjectSummary, SourceMedia)
+
+    store.init_db()
+    pid = "proj_sum_col"
+    p = Project(
+        id=pid, name="Summary Test", status=ProjectStatus.ready,
+        settings=ImportSettings(platform=Platform.tiktok),
+        source=SourceMedia(filename="src.mp4", path=f"{pid}/src.mp4",
+                           duration=123.4, fps=30),
+        clips=[Clip(id="c1", start=0.0, end=5.0, title="One", score=80,
+                    status=ClipStatus.ready),
+               Clip(id="c2", start=10.0, end=15.0, title="Two", score=70,
+                    status=ClipStatus.pending)],
+    )
+    store.save(p)
+
+    # The summary column is populated with a small JSON, distinct from data.
+    con = sqlite3.connect(str(get_settings().db_path))
+    try:
+        row = con.execute(
+            "SELECT summary, data FROM projects WHERE id=?", (pid,)
+        ).fetchone()
+    finally:
+        con.close()
+    assert row and row[0] and row[0] != "{}"
+    assert len(row[0]) < len(row[1])  # summary is much smaller than the full blob
+    summ = ProjectSummary.model_validate_json(row[0])
+    assert summ.id == pid
+    assert summ.name == "Summary Test"
+    assert summ.clip_count == 2
+    assert summ.ready_clips == 1
+    assert summ.duration == 123.4
+
+    # list_summaries returns the summary built from the column.
+    got = next(s for s in store.list_summaries() if s.id == pid)
+    assert got.clip_count == 2 and got.ready_clips == 1
+
+
+def test_store_summary_migration_adds_column_to_legacy_db():
+    """A database created before the summary column existed must be migrated
+    by init_db() so list_summaries can populate the column going forward."""
+    import sqlite3
+    from app import store
+    from app.config import get_settings
+
+    db_path = get_settings().db_path
+    # Simulate a legacy DB: drop & recreate the table WITHOUT the summary
+    # column, then insert a legacy row with the old 5-column shape.
+    con = sqlite3.connect(str(db_path))
+    try:
+        con.executescript("DROP TABLE IF EXISTS projects;")
+        con.executescript(
+            "CREATE TABLE projects (id TEXT PRIMARY KEY, status TEXT NOT NULL, "
+            "created_at REAL NOT NULL, updated_at REAL NOT NULL, data TEXT NOT NULL);"
+        )
+        con.execute(
+            "INSERT INTO projects VALUES (?,?,?,?,?)",
+            ("legacy_1", "created", 1.0, 2.0, "{}"),
+        )
+        con.commit()
+    finally:
+        con.close()
+
+    # init_db must add the missing column (idempotent migration).
+    store.init_db()
+    con = sqlite3.connect(str(db_path))
+    try:
+        cols = {r[1] for r in con.execute("PRAGMA table_info(projects)")}
+        assert "summary" in cols
+        # The legacy row's summary defaulted to '{}' -> list_summaries falls
+        # back to parsing data, which is '{}' (invalid Project) -> row skipped,
+        # never a crash.
+        row = con.execute(
+            "SELECT summary FROM projects WHERE id='legacy_1'"
+        ).fetchone()
+    finally:
+        con.close()
+    assert row and row[0] == "{}"
+    # No crash; the corrupt/empty legacy row is simply skipped.
+    assert all(s.id != "legacy_1" for s in store.list_summaries())
+
+
 if __name__ == "__main__":
     import sys
     # Windows consoles default to a legacy code page that can't print "✓".
