@@ -4146,6 +4146,60 @@ def test_caption_download_supports_ass_and_rejects_unknown_format():
     assert c.get("/api/projects/proj_caps_empty/clips/c2/captions?format=ass").status_code == 409
 
 
+def test_regression_frame_cache_byte_counter_stays_accurate_on_overwrite():
+    """The shared frame cache's byte counter used to drift upward when the
+    same (source, bucket) key was re-put: it added the new size without
+    subtracting the old entry's size. That made the cache think it was
+    fuller than it really was, evicting entries that still fit the budget."""
+    from app.media import frame_cache as FC
+
+    FC._cache.clear()
+    FC._cache_bytes = 0
+    try:
+        FC.put("src.mp4", 1.0, b"A" * 100)
+        assert FC._cache_bytes == 100
+        # Overwrite the same bucket with a smaller frame.
+        FC.put("src.mp4", 1.0, b"B" * 50)
+        assert len(FC._cache) == 1
+        assert FC._cache_bytes == 50, (
+            f"byte counter drifted to {FC._cache_bytes}; actual bytes are 50")
+        # Overwrite with a larger frame.
+        FC.put("src.mp4", 1.0, b"C" * 80)
+        assert FC._cache_bytes == 80
+        # A different bucket is a new entry — both counted.
+        FC.put("src.mp4", 2.0, b"D" * 30)
+        assert len(FC._cache) == 2
+        assert FC._cache_bytes == 110
+        # The counter always matches the real sum of stored bytes.
+        assert FC._cache_bytes == sum(len(v) for v in FC._cache.values())
+    finally:
+        FC._cache.clear()
+        FC._cache_bytes = 0
+
+
+def test_regression_frame_cache_evicts_oldest_when_over_budget():
+    """Eviction still works after the counter fix: going over the byte budget
+    pops the oldest entry and keeps the counter in sync with reality."""
+    from app.media import frame_cache as FC
+
+    FC._cache.clear()
+    FC._cache_bytes = 0
+    orig_max = FC._MAX_MEM_BYTES
+    FC._MAX_MEM_BYTES = 150  # small budget for the test
+    try:
+        FC.put("src.mp4", 1.0, b"X" * 100)   # 100
+        FC.put("src.mp4", 2.0, b"Y" * 80)    # 180 > 150 -> evict bucket 1.0
+        assert len(FC._cache) == 1
+        assert FC._cache_bytes == 80
+        assert FC.get("src.mp4", 1.0) is None      # evicted
+        assert FC.get("src.mp4", 2.0) == b"Y" * 80  # kept
+        assert FC._cache_bytes == sum(len(v) for v in FC._cache.values())
+    finally:
+        FC._MAX_MEM_BYTES = orig_max
+        FC._cache.clear()
+        FC._cache_bytes = 0
+
+
 if __name__ == "__main__":
     import sys
     # Windows consoles default to a legacy code page that can't print "✓".

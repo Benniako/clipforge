@@ -260,6 +260,7 @@ export interface StyleTemplate {
   primary: string;
   highlight: string;
   outline: string;
+  outline_w: number;
   y_frac: number;
   uppercase: boolean;
   // Caption production-value flags — whether this preset enables keyword
