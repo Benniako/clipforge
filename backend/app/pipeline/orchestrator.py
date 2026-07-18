@@ -752,6 +752,7 @@ class Engine:
         ocr_labels: list[str] = []
         ocr_texts: list[str] = []
         if kind == "gameplay":
+            from ..providers import detect_gameplay as gameplay_mod
             self._advance(project_id, 1, "Finding gameplay highlights…")
             prof = project.settings.game_profile
             gweights = feedback.learned_weights(
