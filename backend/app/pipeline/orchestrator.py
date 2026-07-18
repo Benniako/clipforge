@@ -864,8 +864,7 @@ class Engine:
             # Optional: a local LLM (Ollama) gives a second opinion on virality
             # (re-ranks within ±12 pts, explainable) and writes sharper titles —
             # concurrent, budgeted so a slow model can't stall the pipeline.
-            # When a tool-calling agent is wired (agent_virality), its multi-step
-            # read (OCR + audio + facecam) takes priority over the single-shot LLM.
+            # The LLM gives a second opinion on virality and writes sharper titles.
             if llm_mod.available():
                 self._advance(project_id, 2, "AI reading virality…")
                 reads = llm_mod.score_virals(

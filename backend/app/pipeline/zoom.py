@@ -115,3 +115,40 @@ def build_zoom_filter(spikes: list[ZoomSpike], out_w: int, out_h: int,
     # z(t) is exposed via the expression but the centred crop form is what the
     # renderer composes; reference it so the time-varying path stays available.
     return f"scale={sw}:{sh}:eval=frame,zoompan=z='{z}':d=1:s={out_w}x{out_h}:fps={fps:.3f}"
+
+
+def emotion_zoom_keyframes(
+    emotion_timeseries: list[float],
+    word_timestamps: list[float],
+    *,
+    arousal_threshold: float = 0.65,
+    peak: float = 1.12,
+    duration: float = 0.45,
+    min_gap: float = 0.8,
+) -> list[ZoomSpike]:
+    """Zoom punch-ins triggered by high-arousal emotional words.
+
+    ``emotion_timeseries`` is a per-word arousal vector (0-1 floats) aligned to
+    ``word_timestamps`` (start times in seconds).  Each emotion sample above
+    ``arousal_threshold`` whose timestamp is not closer than ``min_gap`` to an
+    earlier spike produces a ZoomSpike.  The result can be fed to
+    ``merge_spikes`` alongside emphasis or cut spikes.
+
+    Pure — no side effects; the arrays are only read.
+    """
+    if not emotion_timeseries or not word_timestamps:
+        return []
+    n = min(len(emotion_timeseries), len(word_timestamps))
+    spikes: list[ZoomSpike] = []
+    for i in range(n):
+        arousal = emotion_timeseries[i]
+        if arousal < arousal_threshold:
+            continue
+        t = float(word_timestamps[i])
+        if spikes and t - spikes[-1].t < min_gap:
+            continue
+        # Scale peak by how far above threshold the arousal sits so genuinely
+        # intense moments get a bigger punch-in than borderline ones.
+        scaled_peak = peak + (arousal - arousal_threshold) * 0.06
+        spikes.append(ZoomSpike(t=t, peak=min(scaled_peak, 1.20), duration=duration))
+    return spikes

@@ -250,7 +250,8 @@ def _composed_graph(clip: Clip, cam: Rect, info: MediaInfo,
             "setsar=1[camfg1];",
             "[cambg1][camfg1]overlay=x=(W-w)/2:y=(H-h)/2[cam1];",
             f"[game0]crop=w={gcw}:h={gch}:x={gx}:y={gy},"
-            f"scale={out_w}:{bot_h}:flags=lanczos[game1];",
+            f"scale={out_w}:{bot_h}:flags=lanczos,boxblur=12:12,"
+            "setsar=1[game1];",
             f"[cam1][game1]{','.join(tail)}[vo]",
         ]
     else:  # framed: full-bleed gameplay + PiP cam

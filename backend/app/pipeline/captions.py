@@ -51,11 +51,26 @@ LINE_GAP = 0.9
 
 def _group_lines(words, n: int, max_gap: float = LINE_GAP):
     """Group words into on-screen lines: a new line every ``n`` words OR after a
-    speech pause longer than ``max_gap`` (whichever comes first)."""
+    speech pause longer than ``max_gap``, OR at a natural sentence end
+    (terminal punctuation or long pause following a sentence-closing word).
+
+    Sentence-aware grouping makes captions break at natural linguistic
+    boundaries, matching the segmentation that drives clip detection.
+    """
+    SENTENCE_PAUSE = 0.65  # long-pause threshold — matches detect._segment_sentences
     lines: list = []
     cur: list = []
-    for w in words:
-        if cur and (len(cur) >= n or (w.t - (cur[-1].t + cur[-1].d)) > max_gap):
+    for i, w in enumerate(words):
+        # Sentence break: the previous word ended with terminal punctuation,
+        # or there is a long pause after the current word's sentence end.
+        prev = cur[-1] if cur else None
+        is_sentence_end = False
+        if prev:
+            ends_punct = prev.text.strip().endswith((".", "!", "?"))
+            gap_next = w.t - (prev.t + prev.d)
+            if ends_punct or gap_next >= SENTENCE_PAUSE:
+                is_sentence_end = True
+        if cur and (len(cur) >= n or (w.t - (cur[-1].t + cur[-1].d)) > max_gap or is_sentence_end):
             lines.append(cur)
             cur = []
         cur.append(w)
@@ -217,7 +232,16 @@ def _dialogue(line, active_idx, start, end, primary, highlight, upper) -> str:
         elif getattr(w, "emphasis", False):
             # power word: stays highlighted + slightly larger for the whole line
             # (keyword emphasis) even when it isn't the currently-spoken word.
-            parts.append(f"{{\\c{highlight}\\fscx106\\fscy106}}{token}{{\\c{primary}\\fscx100\\fscy100}}")
+            # Animated with a \t transform that fires a pop (scale+fade) when
+            # the word is first spoken, giving the "animated captions" look.
+            anim_start = _ts(start)
+            anim_end = _ts(min(start + 0.35, end))
+            t = f"{{\\t({anim_start},{anim_end},\\fscx108\\fscy108\\alpha&H40&)}}"
+            parts.append(
+                f"{{\\c{highlight}\\fscx106\\fscy106}}"
+                f"{t}{token}"
+                f"{{\\c{primary}\\fscx100\\fscy100\\alpha&H00&}}"
+            )
         else:
             parts.append(token)
     text = " ".join(parts)

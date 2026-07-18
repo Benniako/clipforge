@@ -9,7 +9,7 @@ installed, and matches the text against a per-game lexicon of viral markers.
 Backends, best-accuracy first (all optional — none installed ⇒ this returns
 nothing and the audio/cue path still works):
 
-  PaddleOCR (PP-OCRv6 -> PP-OCRv5) → EasyOCR (strong on noisy game overlays) → Tesseract.
+  PaddleOCR (PP-OCRv6 -> PP-OCRv5) → EasyOCR (strong on noisy game overlays).
 
 Only ~1 frame every couple of seconds is read, downscaled, so even a long VOD
 stays cheap. Pure helpers (keyword matching, frame-time sampling, de-dup) carry
@@ -437,20 +437,6 @@ def _make_easyocr(gpu: bool, langs: list[str] | None = None):
     return easyocr.Reader(langs or ["en"], gpu=gpu, verbose=False)
 
 
-def _make_surya():
-    """Construct a Surya OCR RecognitionPredictor (VLM-based, GPU-accelerated).
-
-    Returns a ``RecognitionPredictor`` that runs full-page OCR on images.
-    Unlike PaddleOCR/EasyOCR, Surya is a single vision-language call per page
-    and doesn't return per-character confidence scores in the same way.
-    """
-    from surya.inference import SuryaInferenceManager
-    from surya.recognition import RecognitionPredictor
-
-    manager = SuryaInferenceManager()
-    return RecognitionPredictor(manager)
-
-
 def _get_reader(engine: str, lang: str = "en"):
     global _reader
     with _reader_lock:
@@ -571,37 +557,6 @@ def _is_garbled(text: str, threshold: float = 0.40) -> bool:
     return clean / len(text) < (1.0 - threshold)
 
 
-def _surya_read(reader, path: str) -> tuple[str, float]:
-    """Read text from one image via Surya VLM (full-page OCR).
-
-    Returns ``(text, confidence)`` where confidence is the mean score across
-    detected text blocks, or 0.0 when the backend doesn't report scores.
-    """
-    from PIL import Image
-
-    try:
-        with Image.open(path) as _pil:
-            results = reader([_pil.convert("RGB")], full_page=True)
-    except Exception as e:
-        log.warning("surya read failed for %s: %s", path, e)
-        return "", 0.0
-    if not results:
-        return "", 0.0
-    blocks = results[0].blocks
-    if not blocks:
-        return "", 0.0
-    lines: list[str] = []
-    scores: list[float] = []
-    for blk in blocks:
-        if not blk.label:
-            continue
-        lines.append(blk.label)
-        if blk.confidence is not None:
-            scores.append(float(blk.confidence))
-    mean = sum(scores) / len(scores) if scores else 0.0
-    return " ".join(lines), max(0.0, min(1.0, mean))
-
-
 def _ocr_image(path: str, engine: str, lang: str = "en") -> str:
     """Read all text from one image with the active backend → one string."""
     return _ocr_image_conf(path, engine, lang)[0]
@@ -615,21 +570,7 @@ def _ocr_image_conf(path: str, engine: str, lang: str = "en") -> tuple[str, floa
             return _paddle_read(reader, path)
         if kind == "easyocr":
             return _easyocr_read(reader, path)
-        if kind == "tesseract":
-            import pytesseract
-            from PIL import Image
 
-            tesseract_lang = "deu" if (lang or "").lower().startswith("de") else "eng"
-            # --psm 11: sparse text in any order. Game HUDs are isolated words
-            # ("VICTORY", "MATCH WON") and short banners, not dense paragraphs.
-            # The default PSM 3 assumes a book page and hallucinates punctuation/
-            # garbage trying to find sentence structure where there is none.
-            with Image.open(path) as _pil:
-                return (pytesseract.image_to_string(
-                    _pil, config=f"--psm 11 --lang {tesseract_lang}"),
-                        0.0)
-        if kind == "surya":
-            return _surya_read(reader, path)
     except Exception as e:  # one bad frame mustn't sink detection
         log.warning("ocr read failed for %s: %s", path, e)
     return "", 0.0
@@ -658,7 +599,7 @@ def _ocr_batch(paths: list[str], engine: str, lang: str = "en") -> list[tuple[st
                 conf = (sum(confs) / len(confs)) if confs else 0.0
                 out.append((txt, conf))
             return out
-        # PaddleOCR batch + tesseract: fall through to sequential (their batch
+        # PaddleOCR batch: fall through to sequential (their batch
         # APIs are less stable across versions; sequential is correct everywhere).
     except Exception as e:
         log.debug("ocr batch failed (%s); sequential", e)
@@ -958,8 +899,8 @@ def find_text_events(src_path: str, info: MediaInfo,
                         roi_life[roi] = dead + 1
                 for roi, text, rconf in roi_texts:
                     # Prefer the engine's real recognition confidence; fall back
-                    # to a ROI prior only when the backend doesn't report one
-                    # (e.g. tesseract). ROI crops read a tight banner, so they
+                    # to a ROI prior only when the backend doesn't report one.
+                    # ROI crops read a tight banner, so they
                     # keep a small reliability edge over a full-frame sweep.
                     if rconf > 0.0:
                         conf = round(min(1.0, rconf * (1.0 if roi != "full" else 0.97)), 4)

@@ -17,10 +17,12 @@ from . import signals
 # Per-platform default feature weights (sum ~1.0). TikTok/Reels reward a hard
 # hook and energy; Shorts reward clarity/payoff; "generic" is balanced.
 BASE_WEIGHTS: dict[Platform, dict[str, float]] = {
-    Platform.tiktok:  {"instant_hook": 0.17, "swipe": 0.11, "hook": 0.20, "emotion": 0.15, "clarity": 0.09, "quote": 0.08, "pace": 0.07, "length": 0.03, "list": 0.02, "controversy": 0.04, "qa": 0.04},
-    Platform.reels:   {"instant_hook": 0.15, "swipe": 0.11, "hook": 0.18, "emotion": 0.17, "clarity": 0.11, "quote": 0.08, "pace": 0.07, "length": 0.03, "list": 0.02, "controversy": 0.04, "qa": 0.04},
-    Platform.shorts:  {"instant_hook": 0.13, "swipe": 0.14, "hook": 0.16, "emotion": 0.13, "clarity": 0.17, "quote": 0.07, "pace": 0.06, "length": 0.04, "list": 0.02, "controversy": 0.04, "qa": 0.04},
-    Platform.generic: {"instant_hook": 0.14, "swipe": 0.11, "hook": 0.18, "emotion": 0.15, "clarity": 0.15, "quote": 0.08, "pace": 0.06, "length": 0.03, "list": 0.02, "controversy": 0.04, "qa": 0.04},
+    # Short-form platforms weight instant_hook at ~0.30 — the first 3 seconds
+    # are disproportionately decisive for viewer retention on TikTok/Reels/Shorts.
+    Platform.tiktok:  {"instant_hook": 0.30, "swipe": 0.08, "hook": 0.16, "emotion": 0.12, "clarity": 0.07, "quote": 0.07, "pace": 0.06, "length": 0.03, "list": 0.02, "controversy": 0.05, "qa": 0.04},
+    Platform.reels:   {"instant_hook": 0.30, "swipe": 0.08, "hook": 0.14, "emotion": 0.14, "clarity": 0.09, "quote": 0.07, "pace": 0.06, "length": 0.03, "list": 0.02, "controversy": 0.05, "qa": 0.02},
+    Platform.shorts:  {"instant_hook": 0.30, "swipe": 0.10, "hook": 0.12, "emotion": 0.10, "clarity": 0.13, "quote": 0.06, "pace": 0.05, "length": 0.04, "list": 0.02, "controversy": 0.05, "qa": 0.03},
+    Platform.generic: {"instant_hook": 0.30, "swipe": 0.08, "hook": 0.14, "emotion": 0.12, "clarity": 0.12, "quote": 0.07, "pace": 0.05, "length": 0.03, "list": 0.02, "controversy": 0.05, "qa": 0.02},
 }
 
 FEATURE_LABELS = {

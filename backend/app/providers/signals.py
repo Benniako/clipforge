@@ -520,6 +520,46 @@ def qa_pattern(words: list[Word], lex: Lexicon = _EN) -> tuple[float, str]:
     has_answer = any(m in rest for m in answer_markers)
     raw = _clamp(0.8 if has_answer else 0.4)
     return raw, "Question triggers then answers — drives retention"
+
+
+def narrative_shape(excitement_timeseries: list[float]) -> tuple[float, str]:
+    """Narrative arc quality — does excitement peak in the final third and resolve?
+
+    A strong short-form clip builds tension toward a climax near the end, then
+    resolves cleanly.  Clips that peak early and trail off lose viewers; a
+    back-loaded energy curve keeps the audience watching to the end.
+
+    Takes a list of per-second (or per-word) excitement values in [0, 1]
+    aligned to the clip's timeline.  Returns a score in [0, 1] and a reason.
+    """
+    if not excitement_timeseries:
+        return 0.0, ""
+    n = len(excitement_timeseries)
+    third = max(n // 3, 1)
+    early_avg = sum(excitement_timeseries[:third]) / third
+    late_start = 2 * third
+    late_avg = sum(excitement_timeseries[late_start:]) / max(n - late_start, 1)
+    # Trail-off check: compare the last quarter to the final-third average.
+    quarter = max(n // 4, 1)
+    tail = excitement_timeseries[-quarter:]
+    tail_avg = sum(tail) / len(tail)
+    trail_off = max(late_avg - tail_avg, 0.0)
+    climax_late = late_avg >= early_avg and late_avg >= 0.35
+    peaked_early = early_avg > late_avg and early_avg >= 0.40
+    raw = 0.0
+    if climax_late:
+        raw += 0.65 + 0.25 * min(late_avg, 1.0)
+    elif peaked_early:
+        raw += 0.15
+    else:
+        raw += 0.40
+    raw -= 0.30 * trail_off
+    reason = ("Climax in final third" if climax_late else
+              "Peaks early, trails off" if peaked_early else
+              "Flat or scattered energy curve")
+    return _clamp(raw), reason
+
+
 # --------------------------------------------------------------------------- #
 # Turkish lexicon
 # --------------------------------------------------------------------------- #

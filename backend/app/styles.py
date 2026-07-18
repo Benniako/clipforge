@@ -90,6 +90,46 @@ _TEMPLATES: dict[str, StyleTemplate] = {
             primary="FFFFFF", highlight="FFD166", outline="000000",
             outline_w=3, y_frac=0.84, uppercase=False, emphasis=False, emoji=False,
         ),
+        # Neon glow: bright green/cyan text with soft outline. Cyberpunk /
+        # synthwave energy — stands out over dark gameplay backgrounds.
+        StyleTemplate(
+            id="neon-glow", name="Neon Glow",
+            font="DejaVu Sans", font_size=94,
+            primary="00FF88", highlight="00FFFF", outline="003322",
+            outline_w=6, y_frac=0.76, uppercase=False, emphasis=True,
+        ),
+        # Minimal white: clean, modern, no shadow. Rides on a thin stroke
+        # alone — editorial / interview style that doesn't fight the video.
+        StyleTemplate(
+            id="minimal-white", name="Minimal White",
+            font="DejaVu Sans", font_size=80,
+            primary="FFFFFF", highlight="FFFFFF", outline="333333",
+            outline_w=2, y_frac=0.82, uppercase=False, emphasis=False,
+        ),
+        # Bold gradient: yellow-to-orange simulated with thick outline and
+        # warm highlight. High contrast, works over bright outdoor footage.
+        StyleTemplate(
+            id="bold-gradient", name="Bold Gradient",
+            font="FreeSans", font_size=106,
+            primary="FFD700", highlight="FF6600", outline="000000",
+            outline_w=10, y_frac=0.74, uppercase=True, emphasis=True, emoji=True,
+        ),
+        # Retro pixel: monospace, blocky. For gaming / tech content where a
+        # 90s terminal aesthetic is the vibe.
+        StyleTemplate(
+            id="retro-pixel", name="Retro Pixel",
+            font="FreeMono", font_size=88,
+            primary="CCFF00", highlight="00CCFF", outline="000000",
+            outline_w=5, y_frac=0.78, uppercase=True, emphasis=True,
+        ),
+        # Dramatic red: bold red text with black outline. High-drama
+        # content — true crime, hot takes, breaking-news energy.
+        StyleTemplate(
+            id="dramatic-red", name="Dramatic Red",
+            font="FreeSans", font_size=102,
+            primary="FF2222", highlight="FF0000", outline="000000",
+            outline_w=8, y_frac=0.74, uppercase=True, emphasis=True,
+        ),
     ]
 }
 

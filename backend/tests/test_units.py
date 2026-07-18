@@ -3278,9 +3278,9 @@ def test_ocr_batch_falls_back_to_sequential_on_error():
     """Batching is an optimisation: any failure must degrade to per-image reads."""
     from app.providers import detect_ocr as OCR
     # Empty list → empty result (no engine call).
-    assert OCR._ocr_batch([], "tesseract") == []
+    assert OCR._ocr_batch([], "easyocr") == []
     # Single path → sequential (no batching attempted).
-    out = OCR._ocr_batch(["/nonexistent.png"], "tesseract")
+    out = OCR._ocr_batch(["/nonexistent.png"], "easyocr")
     assert len(out) == 1 and out[0] == ("", 0.0)  # read fails gracefully
 
 
@@ -3310,16 +3310,6 @@ def test_ocr_crop_hash_is_stable_for_identical_images():
     im2.save(p2)
     h3 = OCR._crop_hash(p2)
     assert h3 is not None and h3 != h1  # perpendicular texture differs
-
-
-def test_ocr_psm_config_is_sparse_text():
-    """The tesseract path must pass --psm 11 (sparse text), not the default."""
-    from app.providers import detect_ocr as OCR
-    # Inspect the source rather than calling tesseract (not installed here) —
-    # the fix is that config='--psm 11' reaches image_to_string.
-    import inspect
-    src = inspect.getsource(OCR._ocr_image_conf)
-    assert "--psm 11" in src, "tesseract PSM 11 (sparse text) not configured"
 
 
 def test_ocr_binarization_applied_to_rois_not_full_frame():
@@ -3553,16 +3543,6 @@ def test_ocr_gpu_cpu_fallback_attempts_are_ordered():
     cpu_pos = src.find("_make_paddle(False,")
     assert easy_pos >= 0
     assert easy_pos < cpu_pos, "EasyOCR (GPU) should be tried before CPU PaddleOCR"
-
-
-def test_ocr_tesseract_german_lang_passes_config():
-    """Tesseract path includes --lang deu when the source language is German."""
-    from app.providers import detect_ocr as OCR
-    import inspect
-    src = inspect.getsource(OCR._ocr_image_conf)
-    assert "--lang deu" in src or "deu" in src
-    # The default is English when no language is specified.
-    # The config always has --psm 11 (sparse text).
 
 
 def test_ocr_language_threads_to_constructors():
