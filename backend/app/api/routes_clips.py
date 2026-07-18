@@ -409,7 +409,7 @@ def download_montage(project_id: str, montage_id: str):
     mtg = project.montage(montage_id)
     if not mtg or not mtg.export_url:
         raise HTTPException(409, "montage is not rendered yet")
-    path = get_settings().media_dir / mtg.export_url[len("/media/"):] if mtg.export_url and mtg.export_url.startswith("/media/") else mtg.export_url
+    path = get_settings().media_dir / (mtg.export_url[len("/media/"):] if mtg.export_url and mtg.export_url.startswith("/media/") else mtg.export_url)
     if not path.exists():
         raise HTTPException(404, "montage file missing")
     safe = "".join(c if c.isalnum() or c in " -_" else "_" for c in mtg.title).strip()

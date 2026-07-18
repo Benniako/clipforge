@@ -32,10 +32,11 @@ from ..models import (ASPECTS, AiBoostSettings, ContentType, GameProfileConfig,
                       ProjectStatus, ProjectSummary)
 from ..pipeline import captionize
 from ..pipeline import ingest
-from ..pipeline.captions import build_srt, build_vtt
+from ..pipeline.captions import build_ass, build_srt, build_vtt
 from ..pipeline.nle_export import build_cmx3600, ready_clips_for_edl
 from ..pipeline.orchestrator import engine
 from ..providers.detect_gameplay import KNOWN_PROFILES
+from ..user_styles import get_style
 
 log = logging.getLogger("clipforge.api")
 
@@ -1033,6 +1034,10 @@ def mark_highlight(project_id: str, timestamp: float, duration: float = 30.0):
     HTTP request action:
     ``POST http://localhost:8000/api/projects/{project_id}/mark-highlight?timestamp=1234.5&duration=30``
     """
+    if not (timestamp == timestamp and timestamp >= 0):  # NaN-safe non-negative
+        raise HTTPException(400, "timestamp must be a non-negative number of seconds")
+    if not (duration > 0 and duration == duration):
+        raise HTTPException(400, "duration must be a positive number of seconds")
     project = store.get(project_id)
     if not project:
         raise HTTPException(404, "project not found")
@@ -1042,20 +1047,29 @@ def mark_highlight(project_id: str, timestamp: float, duration: float = 30.0):
         raise HTTPException(409, "project hasn't been transcribed yet")
 
     from ..models import Clip, ClipStatus, CaptionSet, Reframe, LayoutType, ReframeKeyframe
+    src_dur = max(project.source.duration, 0.0)
     clip = Clip(
         id=uuid.uuid4().hex[:12],
-        start=round(max(timestamp - duration / 2, 0), 3),
-        end=round(min(timestamp + duration / 2, project.source.duration), 3),
-        title=f"Highlight @ {time.strftime('%H:%M:%S', time.gmtime(timestamp))}",
+        start=round(max(timestamp - duration / 2, 0.0), 3),
+        end=round(min(timestamp + duration / 2, src_dur), 3),
+        title=f"Highlight @ {time.strftime('%H:%M:%S', time.gmtime(max(timestamp, 0.0)))}",
         kind="talking", status=ClipStatus.pending,
         captions=CaptionSet(),
         reframe=Reframe(layout=LayoutType.fill, keyframes=[ReframeKeyframe(t=0.0, cx=0.5)]),
     )
-    dur = clip.end - clip.start
-    if dur < 5:
-        clip.start = max(clip.end - 10, 0)
+    # Guard the degenerate case where a timestamp past the end (or a very short
+    # source) leaves end <= start — grow the window backward from end, and if
+    # that still can't produce a valid span, reject instead of saving a clip
+    # with end <= start that ffmpeg can't render.
+    if clip.end <= clip.start:
+        clip.start = max(clip.end - min(duration, 10.0), 0.0)
+    if clip.end - clip.start < 5:
+        clip.start = max(clip.end - 10.0, 0.0)
     if clip.end - clip.start > 120:
-        clip.end = min(clip.start + 120, project.source.duration)
+        clip.end = min(clip.start + 120, src_dur)
+    if clip.end <= clip.start:
+        raise HTTPException(
+            400, "timestamp is outside the source duration; no valid clip window")
 
     with store.mutate(project_id) as p:
         p.clips.append(clip)
@@ -1125,12 +1139,24 @@ def export_tiktok(project_id: str, clip_id: str) -> FileResponse:
         raise HTTPException(404, "clip not found")
     if not clip.export_url:
         raise HTTPException(409, "clip has not been rendered yet")
-    return FileResponse(clip.export_url, media_type="video/mp4")
+    # clip.export_url is a browser URL path ("/media/..."); resolve it to the
+    # on-disk file the same way download_clip does, or FileResponse 404s.
+    rel = clip.export_url[7:] if clip.export_url.startswith("/media/") else clip.export_url
+    path = get_settings().media_dir / rel
+    if not path.exists():
+        raise HTTPException(404, "clip file missing")
+    return FileResponse(path, media_type="video/mp4")
 
 
 def _download_captions(project_id: str, clip_id: str,
                         format: str = "srt") -> PlainTextResponse:
-    """Download caption sidecar for a single clip in SRT or WebVTT format."""
+    """Download caption sidecar for a single clip in SRT, WebVTT, or ASS format.
+
+    ``ass`` is the exact burn-in styling libass uses to render the clip's
+    captions — handy for importing the on-model look into an NLE. Unknown
+    formats are rejected with 400 instead of silently falling back to SRT
+    (a typo like ``format=vttt`` used to return SRT and confuse NLE pipelines).
+    """
     p = store.get(project_id)
     if not p:
         raise HTTPException(404, "project not found")
@@ -1140,15 +1166,24 @@ def _download_captions(project_id: str, clip_id: str,
     if not clip.captions or not clip.captions.words:
         raise HTTPException(409, "clip has no captions yet")
 
+    fmt = (format or "").lower()
+    if fmt not in {"srt", "vtt", "ass"}:
+        raise HTTPException(400, "format must be one of: srt, vtt, ass")
+
     preview = max(float(getattr(clip, "loop_preview_seconds", 0.0) or 0.0), 0.0)
     duration = float(clip.tightened_duration or clip.duration)
     captions = (captionize.with_loop_preview(clip.captions, preview, duration)
                 if preview > 0.0 else clip.captions)
 
-    if format == "vtt":
+    if fmt == "vtt":
         body = build_vtt(captions)
         ext = ".vtt"
         media = "text/vtt"
+    elif fmt == "ass":
+        out_w, out_h = p.settings.dims()
+        body = build_ass(captions, get_style(clip.captions.style_id), out_w, out_h)
+        ext = ".ass"
+        media = "text/plain"
     else:
         body = build_srt(captions)
         ext = ".srt"

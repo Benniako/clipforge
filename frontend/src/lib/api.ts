@@ -181,6 +181,14 @@ export const api = {
 
   styles: () => fetchWithTimeout("/api/styles").then((r) => json<StyleTemplate[]>(r)),
 
+  /** Create a custom caption style template (POST /styles -> 201). */
+  createStyle: (style: StyleTemplate) =>
+    fetchWithTimeout("/api/styles", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(style),
+    }).then((r) => json<StyleTemplate>(r)),
+
   cues: () => fetchWithTimeout("/api/cues").then((r) => json<CuesStatus>(r)),
 
   addCue: (game: string, event: string, opts: { url?: string; file?: File }) => {
@@ -306,7 +314,7 @@ export const api = {
     fetchWithTimeout(`/api/projects/${id}`, { method: "DELETE" }).then((r) => json(r)),
 
   purgeProject: (id: string) =>
-    fetch(`/api/projects/${id}/purge`, { method: "DELETE" }).then((r) => json(r)),
+    fetchWithTimeout(`/api/projects/${id}/purge`, { method: "DELETE" }).then((r) => json(r)),
 
   reprocess: (id: string, overrides: Partial<ImportSettings> = {}) =>
     fetchWithTimeout(`/api/projects/${id}/reprocess`, {
@@ -334,7 +342,7 @@ export const api = {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(bounds),
-    }).then((r) => { if (!r.ok) throw new Error(`trim failed (${r.status})`); }),
+    }).then((r) => json<Clip>(r)).then(() => undefined),
 
   // Uses XHR so we can report real upload progress for large files.
   createProject: (input: CreateProjectInput) =>

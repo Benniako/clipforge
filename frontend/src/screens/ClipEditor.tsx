@@ -561,21 +561,20 @@ export default function ClipEditor() {
                   const name = prompt("Template name:", "My Template");
                   if (!name) return;
                   try {
-                    // Save current style as a new template
+                    // Save current style as a new template via the typed api
+                    // client (timeout + error-detail parsing). The raw fetch
+                    // here used to swallow failures with console.error only,
+                    // so a 400 (e.g. duplicate id) silently did nothing.
                     const style = styles.find(s => s.id === styleId);
                     if (!style) return;
                     const id = "custom_" + name.toLowerCase().replace(/[^a-z0-9]+/g, "_").slice(0, 30);
-                    await fetch("/api/styles", {
-                      method: "POST",
-                      headers: { "Content-Type": "application/json" },
-                      body: JSON.stringify({ ...style, id, name }),
-                    });
-                    // Refresh style list
-                    const updated = await (await fetch("/api/styles")).json();
+                    await api.createStyle({ ...style, id, name });
+                    const updated = await api.styles();
                     setStyles(updated);
                     setStyleId(id);
+                    setMsg({ text: t("ce.templateSaved"), type: "success", duration: 2000 });
                   } catch (e) {
-                    console.error("Failed to save template", e);
+                    setMsg({ text: (e as Error).message ?? "Failed to save template", type: "error" });
                   }
                 }}>
                 💾 {t("ce.saveAsTemplate")}

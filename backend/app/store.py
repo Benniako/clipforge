@@ -26,10 +26,15 @@ CREATE TABLE IF NOT EXISTS projects (
     status      TEXT NOT NULL,
     created_at  REAL NOT NULL,
     updated_at  REAL NOT NULL,
-    data        TEXT NOT NULL
+    data        TEXT NOT NULL,
+    summary     TEXT NOT NULL DEFAULT '{}'
 );
 CREATE INDEX IF NOT EXISTS idx_projects_created ON projects(created_at);
 """
+
+# Column added in a later migration; older databases don't have it yet.
+# SQLite has no ADD COLUMN IF NOT EXISTS, so we check pragma table_info.
+_SUMMARY_COLUMN = "summary"
 
 # Serialise read-modify-write cycles on a single project. v1 is single-user, so
 # one process-wide lock is simpler than per-id locks and plenty fast.
@@ -44,6 +49,15 @@ log = logging.getLogger("clipforge.store")
 def init_db() -> None:
     with _connect() as con:
         con.executescript(_SCHEMA)
+        # Migrate pre-summary-column databases: add the column if missing so
+        # list_summaries can read the denormalized summary without parsing the
+        # full project blob (clips + transcript + captions can be ~50 KB each).
+        cols = {row[1] for row in con.execute("PRAGMA table_info(projects)")}
+        if _SUMMARY_COLUMN not in cols:
+            con.execute(
+                f"ALTER TABLE projects ADD COLUMN {_SUMMARY_COLUMN} "
+                "TEXT NOT NULL DEFAULT '{}'"
+            )
 
 
 def _get_conn() -> sqlite3.Connection:
@@ -85,17 +99,19 @@ def _connect():
 
 
 def save(project: Project) -> Project:
-    from .models import now
+    from .models import ProjectSummary, now
 
     project.updated_at = now()
+    summary_json = ProjectSummary.of(project).model_dump_json()
     with _write_lock, _connect() as con:
         con.execute(
-            "INSERT INTO projects (id, status, created_at, updated_at, data) "
-            "VALUES (?,?,?,?,?) "
+            "INSERT INTO projects (id, status, created_at, updated_at, data, summary) "
+            "VALUES (?,?,?,?,?,?) "
             "ON CONFLICT(id) DO UPDATE SET status=excluded.status, "
-            "updated_at=excluded.updated_at, data=excluded.data",
+            "updated_at=excluded.updated_at, data=excluded.data, "
+            "summary=excluded.summary",
             (project.id, project.status.value, project.created_at,
-             project.updated_at, project.model_dump_json()),
+             project.updated_at, project.model_dump_json(), summary_json),
         )
     return project
 
@@ -115,11 +131,35 @@ def get(project_id: str) -> Project | None:
 
 
 def list_summaries(limit: int = 100) -> list[ProjectSummary]:
+    """Return recent project summaries, cheapest path first.
+
+    The ``summary`` column holds a small denormalized JSON blob written at
+    save() time, so listing 100 projects doesn't parse 100 full project
+    documents (each can be ~50 KB with transcript + captions). Rows written
+    before the migration (or with a corrupt summary) fall back to parsing the
+    full ``data`` blob so the list never breaks on old data.
+    """
     with _connect() as con:
         rows = con.execute(
-            "SELECT data FROM projects ORDER BY created_at DESC LIMIT ?", (limit,)
+            "SELECT summary, data FROM projects ORDER BY created_at DESC LIMIT ?",
+            (limit,),
         ).fetchall()
-    return [ProjectSummary.of(Project.model_validate_json(r[0])) for r in rows]
+    out: list[ProjectSummary] = []
+    for summary_json, data_json in rows:
+        parsed = None
+        if summary_json and summary_json != "{}":
+            try:
+                parsed = ProjectSummary.model_validate_json(summary_json)
+            except Exception:
+                parsed = None  # fall through to the full-blob path
+        if parsed is None:
+            try:
+                parsed = ProjectSummary.of(Project.model_validate_json(data_json))
+            except Exception as exc:
+                log.warning("corrupted project row dropped from summary list: %s", exc)
+                continue
+        out.append(parsed)
+    return out
 
 
 def delete(project_id: str) -> bool:

@@ -14,4 +14,9 @@ export default defineConfig({
     },
   },
   build: { outDir: "dist", sourcemap: false },
+  test: {
+    // happy-dom gives renderHook/DOM tests a lightweight window; pure-logic
+    // tests (capabilities, reviewOrder) are unaffected.
+    environment: "happy-dom",
+  },
 });

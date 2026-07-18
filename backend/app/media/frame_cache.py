@@ -58,9 +58,16 @@ def put(source_path: str, timestamp: float, data: bytes) -> None:
     """Store JPEG bytes, evicting oldest entries if over budget."""
     key = (source_path, _bucket(timestamp))
     with _cache_lock:
+        global _cache_bytes
+        # If the key already exists, account for the bytes we're about to
+        # overwrite before adding the new size — otherwise _cache_bytes drifts
+        # upward on every re-put of the same bucket and evicts entries that
+        # still fit the budget.
+        prev = _cache.get(key)
+        if prev is not None:
+            _cache_bytes -= len(prev)
         _cache[key] = data
         _cache.move_to_end(key)
-        global _cache_bytes
         _cache_bytes += len(data)
         while _cache_bytes > _MAX_MEM_BYTES and len(_cache) > 1:
             oldest_key, oldest_data = _cache.popitem(last=False)
