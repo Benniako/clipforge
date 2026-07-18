@@ -4400,6 +4400,81 @@ def test_fusion_factors_are_explainable():
         assert isinstance(f.weight, float)
 
 
+# --------------------------------------------------------------------------- #
+# SourceFeatures precomputation (source_features.py)
+# --------------------------------------------------------------------------- #
+def test_source_features_rms_envelope_from_synthetic_wav():
+    """SourceFeatures._rms_envelope must compute a valid RMS envelope from a
+    synthetic 16-bit mono WAV file — the core decode-once path the orchestrator
+    now relies on instead of per-detector ffmpeg calls."""
+    import math
+    import struct
+    import wave as wave_mod
+
+    from app.pipeline.source_features import SourceFeatures, _rms_envelope
+
+    sr = 16000
+    dur = 2
+    fd, wav_name = tempfile.mkstemp(suffix=".wav")
+    os.close(fd)
+    with wave_mod.open(wav_name, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(sr)
+        frames = bytearray()
+        for i in range(sr * dur):
+            t = i / sr
+            # A 440 Hz sine at moderate amplitude.
+            amp = 0.5 * math.sin(2 * math.pi * 440 * t)
+            frames += struct.pack("<h", int(amp * 32767))
+        wf.writeframes(bytes(frames))
+    try:
+        rms = _rms_envelope(wav_name, sr=sr, hop_ms=20)
+        # For a constant-amplitude sine, RMS should be ~0.353 (0.5 / sqrt(2)).
+        assert rms.dtype.name == "float32"
+        assert len(rms) == (sr * dur) // (sr * 20 // 1000)
+        assert all(0.0 <= v <= 1.0 for v in rms)
+        mean_rms = float(rms.mean())
+        assert 0.25 < mean_rms < 0.50, f"unexpected mean RMS: {mean_rms}"
+
+        # SourceFeatures dataclass can be instantiated with synthetic data.
+        sf = SourceFeatures(
+            rms_envelope=rms,
+            scene_cuts=[0.5, 1.2],
+            speech_intervals=[(0.1, 0.9), (1.1, 1.8)],
+            face_tracks={},
+            duration=float(dur),
+            sample_rate=sr,
+        )
+        assert len(sf.scene_cuts) == 2
+        assert len(sf.speech_intervals) == 2
+        assert sf.duration == float(dur)
+    finally:
+        os.unlink(wav_name)
+
+
+def test_source_features_cache_round_trip():
+    """SourceFeatures can be pickled and unpickled — the on-disk cache
+    must survive serialization so re-renders skip the decode stage."""
+    import pickle
+
+    from app.pipeline.source_features import SourceFeatures
+
+    sf = SourceFeatures(
+        rms_envelope=[0.1, 0.2, 0.3],
+        scene_cuts=[1.0, 2.5],
+        speech_intervals=[(0.0, 1.5)],
+        face_tracks={"src.mp4": [(0.0, 0.5)]},
+        duration=10.0,
+        sample_rate=16000,
+    )
+    data = pickle.dumps(sf)
+    restored = pickle.loads(data)  # noqa: S301 — test only
+    assert restored.duration == 10.0
+    assert restored.scene_cuts == [1.0, 2.5]
+    assert restored.face_tracks == {"src.mp4": [(0.0, 0.5)]}
+
+
 if __name__ == "__main__":
     import sys
     # Windows consoles default to a legacy code page that can't print "✓".

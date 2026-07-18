@@ -58,6 +58,19 @@ def init_db() -> None:
                 f"ALTER TABLE projects ADD COLUMN {_SUMMARY_COLUMN} "
                 "TEXT NOT NULL DEFAULT '{}'"
             )
+        # Engagement table for external analytics feedback (views, likes, retention).
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS engagement (
+                clip_id       TEXT NOT NULL,
+                platform      TEXT NOT NULL,
+                views         INTEGER NOT NULL DEFAULT 0,
+                likes         INTEGER NOT NULL DEFAULT 0,
+                retention_pct REAL NOT NULL DEFAULT 0.0,
+                source        TEXT NOT NULL DEFAULT 'manual',
+                recorded_at   REAL NOT NULL
+            )
+        """)
+        con.execute("CREATE INDEX IF NOT EXISTS idx_engagement_clip ON engagement(clip_id)")
 
 
 def _get_conn() -> sqlite3.Connection:

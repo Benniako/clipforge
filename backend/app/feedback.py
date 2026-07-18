@@ -58,6 +58,16 @@ CREATE TABLE IF NOT EXISTS trims (
     ts    REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_trims_scope ON trims(scope);
+CREATE TABLE IF NOT EXISTS engagement (
+    clip_id       TEXT NOT NULL,
+    platform      TEXT NOT NULL,
+    views         INTEGER NOT NULL DEFAULT 0,
+    likes         INTEGER NOT NULL DEFAULT 0,
+    retention_pct REAL NOT NULL DEFAULT 0.0,
+    source        TEXT NOT NULL DEFAULT 'manual',
+    recorded_at   REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_engagement_clip ON engagement(clip_id);
 """
 
 
@@ -284,3 +294,20 @@ def reset(scope: str | None = None) -> None:
         else:
             con.execute("DELETE FROM feedback")
             con.execute("DELETE FROM trims")
+
+
+def record_engagement(clip_id: str, platform: str, views: int, likes: int,
+                      retention_pct: float, source: str = "manual") -> None:
+    """Record external engagement data for a published clip.
+
+    This feeds back into the scoring model to improve virality prediction
+    over time. retention_pct is the average watch-through percentage.
+    """
+    import time
+    with _lock, _connect() as con:
+        con.execute(
+            "INSERT INTO engagement (clip_id, platform, views, likes, retention_pct, source, recorded_at) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (clip_id, platform, int(views), int(likes), float(retention_pct),
+             source, time.time()),
+        )

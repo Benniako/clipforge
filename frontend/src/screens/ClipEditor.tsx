@@ -10,6 +10,7 @@ import Toast, { type ToastMsg } from "../components/Toast";
 import ScoreBadge from "../components/ScoreBadge";
 import PublishPanel from "../components/PublishPanel";
 import Waveform from "../components/Waveform";
+import Timeline from "../components/Timeline";
 
 type EditableCaptionWord = Pick<CaptionWord, "t" | "d" | "text" | "speaker">;
 
@@ -477,6 +478,18 @@ export default function ClipEditor() {
               <div className="empty">{t("ce.notRendered")}</div>
             )}
           </div>
+          {projectId && (
+            <div style={{ marginTop: 12 }}>
+              <Timeline
+                projectId={projectId}
+                currentTime={videoRef.current?.currentTime ?? start}
+                duration={srcDur}
+                onSeek={(t) => {
+                  if (videoRef.current) videoRef.current.currentTime = t;
+                }}
+              />
+            </div>
+          )}
           <div className="panel section" style={{ marginTop: 14 }}>
             <div className="row" style={{ justifyContent: "space-between", marginBottom: 10 }}>
               <ScoreBadge score={clip.score} />
@@ -728,6 +741,42 @@ export default function ClipEditor() {
               <span className="muted tiny">
                 {captionSpeakersDirty ? t("ce.speakersDirty") : t("ce.speakersNote")}
               </span>
+            </div>
+          )}
+
+          {clip.speakers.length > 0 && (
+            <div className="panel section">
+              <h3>Speaker Names</h3>
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                {clip.speakers.map((sp) => (
+                  <div key={sp} className="row" style={{ alignItems: "center", gap: 8 }}>
+                    <span className="muted tiny" style={{ minWidth: 80 }}>Speaker {sp}:</span>
+                    <input
+                      className="input"
+                      style={{ flex: 1, fontSize: 13, padding: "4px 8px" }}
+                      placeholder={project.speaker_names?.[String(sp)] ?? `Speaker ${sp}`}
+                      defaultValue={project.speaker_names?.[String(sp)] ?? ""}
+                      onBlur={async (e) => {
+                        const val = e.target.value.trim();
+                        const current = { ...(project.speaker_names ?? {}) } as Record<string, string>;
+                        if (val) {
+                          current[String(sp)] = val;
+                        } else {
+                          delete current[String(sp)];
+                        }
+                        try {
+                          const updated = await api.updateSpeakerNames(projectId!, Object.fromEntries(
+                            Object.entries(current).map(([k, v]) => [Number(k), v as string])
+                          ));
+                          setProject(updated);
+                        } catch {
+                          /* ignore */
+                        }
+                      }}
+                    />
+                  </div>
+                ))}
+              </div>
             </div>
           )}
 

@@ -898,6 +898,26 @@ def purge_project(project_id: str) -> dict:
     return {"ok": True}
 
 
+class SpeakerNamesBody(BaseModel):
+    speaker_names: dict[str, str]
+
+
+@router.patch("/{project_id}/speaker-names", response_model=Project)
+def update_speaker_names(project_id: str, body: SpeakerNamesBody) -> Project:
+    p = store.get(project_id)
+    if not p:
+        raise HTTPException(404, "project not found")
+    validated: dict[int, str] = {}
+    for k, v in body.speaker_names.items():
+        try:
+            validated[int(k)] = str(v)
+        except (ValueError, TypeError):
+            raise HTTPException(400, f"speaker key '{k}' must be an integer")
+    with store.mutate(project_id) as proj:
+        proj.speaker_names = validated
+    return store.get(project_id)
+
+
 class Reprocess(BaseModel):
     """Optional setting overrides applied before re-running the pipeline."""
     platform: str | None = None

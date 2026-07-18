@@ -11,6 +11,7 @@ import type {
   PublishContent,
   StatusPayload,
   StyleTemplate,
+  TimelineData,
 } from "./types";
 
 export interface CueEvent {
@@ -474,4 +475,14 @@ export const api = {
   exportBatchUrl: (projectId: string) => `/api/projects/${projectId}/export`,
 
   exportPremiereUrl: (projectId: string) => `/api/projects/${projectId}/export/premiere`,
+
+  timeline: (projectId: string) =>
+    fetchWithTimeout(`/api/projects/${projectId}/timeline`).then((r) => json<TimelineData>(r)),
+
+  updateSpeakerNames: (projectId: string, names: Record<number, string>) =>
+    fetchWithTimeout(`/api/projects/${projectId}/speaker-names`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ speaker_names: names }),
+    }).then((r) => json<Project>(r)),
 };

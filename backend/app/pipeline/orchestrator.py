@@ -39,6 +39,7 @@ from . import facecam as facecam_mod
 from . import montage as montage_mod
 from . import reframe as reframe_mod
 from . import render as render_mod
+from . import source_features as sf_mod
 
 log = logging.getLogger("clipforge.engine")
 
@@ -635,6 +636,18 @@ class Engine:
             except Exception as e:
                 log.debug("game profile auto-detect skipped: %s", e)
 
+        # Precompute source features (single decode pass) so all downstream
+        # detectors read from the tensor instead of re-decoding independently.
+        # Falls back to per-detector decoders on failure.
+        source_features: sf_mod.SourceFeatures | None = None
+        try:
+            source_features = sf_mod.precompute_all(
+                src_path, project_id, duration=info.duration)
+            log.info("source_features ready for %s", project_id)
+        except Exception as e:
+            log.warning("source_features precomputation failed, "
+                        "falling back to individual decoders: %s", e)
+
         # 1. transcribe ---------------------------------------------------
         # The wav lives in the project dir (not a TemporaryDirectory) so the
         # gameplay detector can reuse it — decoding an hour-long VOD's audio
@@ -679,7 +692,9 @@ class Engine:
         if wav_path and transcript.provider != "synthetic":
             try:
                 from ..providers import vad as vad_mod
-                speech = vad_mod.speech_intervals(wav_path)
+                speech = (source_features.speech_intervals
+                          if source_features is not None
+                          else vad_mod.speech_intervals(wav_path))
                 if speech:
                     transcript.words = vad_mod.refine_words(transcript.words, speech)
                 elif not vad_mod.available():
@@ -826,10 +841,17 @@ class Engine:
             # Snap each highlight's start to a nearby hard cut (killcam wipe,
             # replay transition) so the clip opens on a fresh shot.
             self._advance(project_id, 2, "Snapping to scene cuts…")
+            all_cuts = (source_features.scene_cuts
+                        if source_features is not None
+                        else None)
             for clip in clips:
                 try:
-                    cuts = scenes_mod.scene_cuts(
-                        src_path, max(clip.start - 2.0, 0.0), clip.start + 2.0)
+                    cuts = (all_cuts
+                             if all_cuts is not None
+                             else scenes_mod.scene_cuts(
+                                 src_path,
+                                 max(clip.start - 2.0, 0.0),
+                                 clip.start + 2.0))
                     ns = scenes_mod.snap(clip.start, cuts, window=1.5)
                     if ns != clip.start and clip.end - ns >= 3.0:
                         clip.start = round(ns, 3)
@@ -861,6 +883,12 @@ class Engine:
                 clip.score, clip.factors = score_mod.apply_replay_bonus(
                     clip.score, clip.factors, words, clip.duration,
                     lang=transcript.language)
+                # Optional LLM hook rewrite suggestion for the first clip's opener.
+                if clip == clips[0] and llm_mod.available():
+                    hook_rewrite = score_mod.suggest_hook_rewrite(
+                        clip.transcript_excerpt, lang=transcript.language)
+                    if hook_rewrite is not None:
+                        clip.factors.append(hook_rewrite)
             # Optional: a local LLM (Ollama) gives a second opinion on virality
             # (re-ranks within ±12 pts, explainable) and writes sharper titles —
             # concurrent, budgeted so a slow model can't stall the pipeline.
@@ -996,7 +1024,9 @@ class Engine:
         if kind == "talking" and settings.has_scenedetect:
             try:
                 from . import broll as broll_mod
-                all_cuts = scenes_mod.scene_cuts(src_path, 0.0, info.duration)
+                all_cuts = (source_features.scene_cuts
+                            if source_features is not None
+                            else scenes_mod.scene_cuts(src_path, 0.0, info.duration))
                 if all_cuts:
                     cands = list(broll_mod.candidates_from_cuts(
                         all_cuts, window=1.5, clip_end=info.duration))
@@ -1032,8 +1062,18 @@ class Engine:
         out_w, out_h = project.settings.dims()
         # Pre-compute face tracks for the entire source in one ffmpeg pass,
         # instead of each clip decoding its own segment separately.
+        # Use precomputed tracks from SourceFeatures when available.
         if kind != "gameplay" and info.has_video and info.duration > 0:
-            reframe_mod.precompute_face_tracks(src_path, info.duration)
+            if source_features is not None and source_features.face_tracks:
+                # Populate the reframe cache from source_features so individual
+                # clips can read from it without re-decoding.
+                from .reframe import _PRECOMPUTED_TRACKS, _PRECOMPUTED_TRACKS_LOCK
+                with _PRECOMPUTED_TRACKS_LOCK:
+                    if src_path not in _PRECOMPUTED_TRACKS:
+                        _PRECOMPUTED_TRACKS[src_path] = (
+                            source_features.face_tracks.get(src_path))
+            else:
+                reframe_mod.precompute_face_tracks(src_path, info.duration)
         for i, clip in enumerate(clips):
             if kind == "gameplay":
                 self._advance(project_id, 3, f"Framing clip {i+1}/{len(clips)}…",

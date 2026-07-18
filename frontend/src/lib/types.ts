@@ -207,6 +207,7 @@ export interface Project {
   facecam: Rect | null;
   events: DetectedEvent[];
   warnings: Notice[];
+  speaker_names: Record<string, string>;
   error: string | null;
   created_at: number;
   updated_at: number;
@@ -339,4 +340,27 @@ export interface PublishContent {
   description: string;
   hashtags: string[];
   excerpt: string;
+}
+
+export interface TimelineWord {
+  t: number;
+  d: number;
+  text: string;
+  speaker?: number;
+}
+
+export interface TimelineClip {
+  id: string;
+  start: number;
+  end: number;
+  score: number;
+}
+
+export interface TimelineData {
+  duration: number;
+  words: TimelineWord[];
+  speech_intervals: [number, number][];
+  scene_cuts: number[];
+  emotion_curve: number[];
+  clips: TimelineClip[];
 }
