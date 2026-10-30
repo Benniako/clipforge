@@ -1922,6 +1922,11 @@ def test_ocr_frame_sampling_is_bounded_and_spaced():
     assert len(focused) <= 12
 
 
+def test_ocr_scene_frame_times_skips_long_vods():
+    from app.providers import detect_ocr as O
+    assert O.scene_frame_times("unused.mp4", 901.0) == []
+
+
 def test_ocr_dedupes_persisting_banner():
     from app.providers.detect_ocr import OcrEvent, dedupe_events
     evs = [OcrEvent(t=10.0, label="victory", text="victory", confidence=0.8),
@@ -2204,6 +2209,25 @@ def test_vad_refine_clamps_and_drops_silent_words():
     assert out[0].end <= 1.1                      # clamped to the speech end (+pad)
     # no speech info -> unchanged
     assert refine_words(ws, []) == ws
+
+
+def test_vad_sanitize_word_timings_caps_overlaps_and_long_words():
+    from app.providers.vad import sanitize_word_timings
+    ws = [Word(t=1.0, d=3.0, text="alpha"),      # bad alignment hangs too long
+          Word(t=1.6, d=0.4, text="beta"),       # overlaps alpha
+          Word(t=6.0, d=2.2, text="gamma")]      # isolated long word
+    out = sanitize_word_timings(ws)
+    assert [w.text for w in out] == ["alpha", "beta", "gamma"]
+    assert out[0].end <= out[1].t - 0.015
+    assert out[2].d <= 1.35
+
+
+def test_forced_gameplay_pipeline_has_global_gameplay_provider():
+    import inspect
+    from app.pipeline import orchestrator as O
+    assert O.gameplay_mod.audio_weights("valorant")
+    src = inspect.getsource(O.Engine._process)
+    assert "from ..providers import detect_gameplay as gameplay_mod" not in src
 
 
 def test_replay_value_rewards_clean_button():
@@ -3310,6 +3334,23 @@ def test_ocr_crop_hash_is_stable_for_identical_images():
     im2.save(p2)
     h3 = OCR._crop_hash(p2)
     assert h3 is not None and h3 != h1  # perpendicular texture differs
+
+
+def test_ocr_bounds_large_images_for_paddle_stability():
+    from app.providers import detect_ocr as OCR
+    from PIL import Image
+    import tempfile, os
+
+    tmp = tempfile.mkdtemp()
+    src = os.path.join(tmp, "huge.png")
+    Image.new("RGB", (4200, 120), "white").save(src)
+    bounded, cleanup = OCR._bounded_ocr_image(src, max_side=3000)
+    try:
+        with Image.open(bounded) as im:
+            assert max(im.size) <= 3000
+    finally:
+        if cleanup is not None:
+            cleanup.unlink(missing_ok=True)
 
 
 def test_ocr_psm_config_is_sparse_text():

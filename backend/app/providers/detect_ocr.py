@@ -258,6 +258,12 @@ def scene_frame_times(src_path: str, duration: float, *,
     """Frames just after hard cuts, so OCR reads stable new shots."""
     if duration <= 0 or not get_settings().has_scenedetect:
         return []
+    if duration > 900:
+        log.info(
+            "skipping full-video PySceneDetect OCR assist for %.1fs source",
+            duration,
+        )
+        return []
     try:
         from . import scenes
 
@@ -607,14 +613,39 @@ def _ocr_image(path: str, engine: str, lang: str = "en") -> str:
     return _ocr_image_conf(path, engine, lang)[0]
 
 
+def _bounded_ocr_image(path: str, *, max_side: int = 3000) -> tuple[str, Path | None]:
+    """Return an OCR-safe image path, downscaling giant screenshots if needed."""
+    try:
+        from PIL import Image
+        import tempfile
+
+        with Image.open(path) as im:
+            w, h = im.size
+            longest = max(w, h)
+            if longest <= max_side:
+                return path, None
+            scale = max_side / float(longest)
+            resized = im.convert("RGB").resize(
+                (max(1, int(round(w * scale))), max(1, int(round(h * scale)))),
+                resample=Image.Resampling.LANCZOS)
+            with tempfile.NamedTemporaryFile(suffix=".ocr.png", delete=False) as tmp:
+                tmp_path = Path(tmp.name)
+            resized.save(tmp_path)
+            return str(tmp_path), tmp_path
+    except Exception as e:
+        log.debug("ocr image bounding skipped for %s: %s", path, e)
+        return path, None
+
+
 def _ocr_image_conf(path: str, engine: str, lang: str = "en") -> tuple[str, float]:
     """Read text and a 0..1 recognition confidence (0.0 when unknown)."""
+    ocr_path, cleanup = _bounded_ocr_image(path)
     kind, reader = _get_reader(engine, lang)
     try:
         if kind == "paddleocr":
-            return _paddle_read(reader, path)
+            return _paddle_read(reader, ocr_path)
         if kind == "easyocr":
-            return _easyocr_read(reader, path)
+            return _easyocr_read(reader, ocr_path)
         if kind == "tesseract":
             import pytesseract
             from PIL import Image
@@ -624,14 +655,22 @@ def _ocr_image_conf(path: str, engine: str, lang: str = "en") -> tuple[str, floa
             # ("VICTORY", "MATCH WON") and short banners, not dense paragraphs.
             # The default PSM 3 assumes a book page and hallucinates punctuation/
             # garbage trying to find sentence structure where there is none.
-            with Image.open(path) as _pil:
+            with Image.open(ocr_path) as _pil:
                 return (pytesseract.image_to_string(
                     _pil, config=f"--psm 11 --lang {tesseract_lang}"),
                         0.0)
         if kind == "surya":
-            return _surya_read(reader, path)
+            return _surya_read(reader, ocr_path)
     except Exception as e:  # one bad frame mustn't sink detection
         log.warning("ocr read failed for %s: %s", path, e)
+        if engine == "paddleocr" and _easyocr_available():
+            try:
+                return _ocr_image_conf(path, "easyocr", lang)
+            except Exception as e2:
+                log.debug("easyocr fallback after paddle failure failed for %s: %s", path, e2)
+    finally:
+        if cleanup is not None:
+            cleanup.unlink(missing_ok=True)
     return "", 0.0
 
 

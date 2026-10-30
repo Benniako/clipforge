@@ -28,6 +28,7 @@ from ..models import (ASPECTS, Clip, ClipStatus, ContentType, JobProgress,
                       LayoutType, ProjectStatus, Reframe, ReframeKeyframe,
                       Transcript, now)
 from ..providers import detect as detect_mod
+from ..providers import detect_gameplay as gameplay_mod
 from ..providers import hashtags as hashtags_mod
 from ..providers import llm as llm_mod
 from ..providers import scenes as scenes_mod
@@ -624,7 +625,6 @@ class Engine:
         # weights, and OCR lexicon matches are game-specific from the start).
         if project.settings.game_profile == "auto":
             try:
-                from ..providers import detect_gameplay as gameplay_mod
                 detected = gameplay_mod.auto_detect_profile(src_path)
                 if detected and detected != "generic":
                     with store.mutate(project_id) as p:
@@ -677,8 +677,8 @@ class Engine:
         # captions may drift rather than fail silently.
         vad_absent_warned = False
         if wav_path and transcript.provider != "synthetic":
+            from ..providers import vad as vad_mod
             try:
-                from ..providers import vad as vad_mod
                 speech = vad_mod.speech_intervals(wav_path)
                 if speech:
                     transcript.words = vad_mod.refine_words(transcript.words, speech)
@@ -687,6 +687,7 @@ class Engine:
                     log.warning("Silero VAD not installed — captions may drift")
             except Exception as e:
                 log.warning("VAD refine failed: %s", e)
+            transcript.words = vad_mod.sanitize_word_timings(transcript.words)
 
         # Light LLM proofread: fix individual misheard words while keeping
         # every other word's timing and speaker intact. A single Ollama call

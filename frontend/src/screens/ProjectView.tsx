@@ -17,6 +17,8 @@ export default function ProjectView() {
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<ToastMsg | null>(null);
   const [viewMode, setViewMode] = useState<"grid" | "swipe">("grid");
+  const [retrying, setRetrying] = useState(false);
+  const [retryNonce, setRetryNonce] = useState(0);
   const timer = useRef<number | null>(null);
   // Keep the latest t() in a ref so the polling/WS callbacks (which live for
   // the life of the effect) always use the current language without needing
@@ -69,7 +71,7 @@ export default function ProjectView() {
         if (!alive) return;
         let s: any;
         try { s = JSON.parse(ev.data); } catch { return; }
-        if (s.error) {
+        if (s.error && !s.status) {
           setError(s.error);
           done = true;
           return;
@@ -94,7 +96,23 @@ export default function ProjectView() {
       if (timer.current) window.clearTimeout(timer.current);
       ws?.close();
     };
-  }, [projectId]);
+  }, [projectId, retryNonce]);
+
+  const retryProject = async () => {
+    if (!projectId) return;
+    setRetrying(true);
+    setError(null);
+    try {
+      await api.reprocess(projectId);
+      setProject(null);
+      setStatus(null);
+      setRetryNonce((n) => n + 1);
+    } catch (e: any) {
+      setError(e?.message ?? t("pv.retryFailed"));
+    } finally {
+      setRetrying(false);
+    }
+  };
 
   if (error)
     return (
@@ -112,7 +130,14 @@ export default function ProjectView() {
       <div className="container">
         <EmptyState icon="💥" title={t("pv.failedTitle")}
           text={status.error ?? t("pv.failedGeneric")}
-          action={<Link className="btn" to="/">{t("pv.tryAnother")}</Link>} />
+          action={
+            <div className="row" style={{ justifyContent: "center" }}>
+              <button className="btn primary" onClick={retryProject} disabled={retrying}>
+                {retrying ? t("pv.retrying") : t("pv.retry")}
+              </button>
+              <Link className="btn ghost" to="/">{t("pv.tryAnother")}</Link>
+            </div>
+          } />
       </div>
     );
 

@@ -94,3 +94,49 @@ def refine_words(words: list[Word], speech: list[tuple[float, float]],
         out.append(Word(t=round(ns, 3), d=round(ne - ns, 3), text=w.text,
                         speaker=w.speaker))
     return out or words  # never wipe everything (defensive)
+
+
+def sanitize_word_timings(words: list[Word], *,
+                          max_word_duration: float = 1.35,
+                          min_word_duration: float = 0.04,
+                          min_gap: float = 0.02) -> list[Word]:
+    """Normalize ASR/alignment word spans before captions are derived.
+
+    Whisper-family aligners can occasionally return a word that stretches into a
+    pause, overlaps the next word, or arrives slightly out of order after a
+    skipped segment.  Rendering already clears captions after long display gaps,
+    but SRT/VTT exports and speaker filtering use the raw word spans.  This pass
+    keeps the transcript timeline monotonic and caps a single word's on-screen
+    lifetime so no caption can hang through silence because of a bad alignment.
+    """
+    if not words:
+        return words
+
+    ordered = sorted((w for w in words if w.text.strip()), key=lambda w: (w.t, w.end))
+    out: list[Word] = []
+    for i, w in enumerate(ordered):
+        start = max(float(w.t), 0.0)
+        dur = max(float(w.d), min_word_duration)
+        next_start = None
+        for nxt in ordered[i + 1:]:
+            if nxt.text.strip():
+                next_start = max(float(nxt.t), start)
+                break
+
+        cap = max(max_word_duration, min_word_duration)
+        if next_start is not None:
+            cap = min(cap, max(next_start - start - min_gap, min_word_duration))
+        dur = max(min(dur, cap), min_word_duration)
+
+        if out:
+            prev = out[-1]
+            floor = prev.t + prev.d + min_gap
+            if start < floor:
+                start = floor
+                if next_start is not None:
+                    dur = min(dur, max(next_start - start - min_gap, min_word_duration))
+
+        out.append(Word(t=round(start, 3), d=round(max(dur, min_word_duration), 3),
+                        text=w.text, speaker=w.speaker))
+
+    return out or words
