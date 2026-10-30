@@ -243,13 +243,56 @@ def _std(vals: list[float]) -> float:
 # --------------------------------------------------------------------------- #
 # Reaction energy — does the streamer react inside the cam during a window?
 # --------------------------------------------------------------------------- #
+def _compute_flow_energy(gray_a, gray_b) -> float | None:
+    """Optical flow motion magnitude [0..1] between two grayscale crops.
+
+    Prefers DIS optical flow (preserves illumination invariance while catching
+    head shakes, jaw drops, desk slams, jumping) and falls back to Farneback.
+    Returns None if OpenCV flow fails or is unavailable.
+    """
+    try:
+        import cv2
+        import numpy as np
+
+        u_a = np.clip(gray_a, 0, 255).astype(np.uint8)
+        u_b = np.clip(gray_b, 0, 255).astype(np.uint8)
+
+        if hasattr(cv2, "DISOpticalFlow_create"):
+            dis = cv2.DISOpticalFlow_create(cv2.DISOPTICAL_FLOW_PRESET_FAST)
+            flow = dis.calc(u_a, u_b, None)
+        elif hasattr(cv2, "optflow") and hasattr(cv2.optflow, "createOptFlow_DIS"):
+            dis = cv2.optflow.createOptFlow_DIS(cv2.optflow.DISOPTICAL_FLOW_PRESET_FAST)
+            flow = dis.calc(u_a, u_b, None)
+        elif hasattr(cv2, "calcOpticalFlowFarneback"):
+            flow = cv2.calcOpticalFlowFarneback(
+                u_a, u_b, None,
+                pyr_scale=0.5, levels=2, winsize=13,
+                iterations=2, poly_n=5, poly_sigma=1.1, flags=0
+            )
+        else:
+            return None
+
+        mag = np.hypot(flow[..., 0], flow[..., 1])
+        # Isolate top 30% most energetic pixels so static background does not wash out reactions
+        k = max(int(mag.size * 0.30), 1)
+        top = np.partition(mag.ravel(), -k)[-k:]
+        mean_vel = float(top.mean())
+        return min(mean_vel / 3.2, 1.0)
+    except Exception as e:
+        log.debug("optical flow calculation failed: %s", e)
+        return None
+
+
 def reaction_energy(src_path: str, cam: Rect, t0: float, t1: float,
-                    *, samples: int = 4) -> float | None:
+                    *, samples: int = 4,
+                    climax_t: float | None = None) -> float | None:
     """Mean motion energy [0..1] inside the facecam over [t0, t1].
 
-    Samples a handful of frames, crops to the cam region, and averages the
-    absolute frame difference — cheap, and a strong proxy for "the streamer is
-    going off". Returns None when frames can't be read.
+    Combines dense DIS optical flow with frame difference to detect genuine
+    streamer reactions (screaming, jumping, desk slams, laughing) while
+    rejecting false positives from monitor/lighting flashes.
+    When climax_t is present, samples are anchored tightly around the reaction
+    climax window. Returns None when frames can't be read.
     """
     try:
         import cv2
@@ -257,11 +300,19 @@ def reaction_energy(src_path: str, cam: Rect, t0: float, t1: float,
     except Exception:
         return None
 
-    span = max(t1 - t0, 0.5)
+    if climax_t is not None and t0 <= climax_t <= t1:
+        w0 = max(t0, climax_t - 0.8)
+        w1 = min(t1, climax_t + 2.2)
+        span = max(w1 - w0, 0.5)
+        sample_start = w0
+    else:
+        sample_start = t0
+        span = max(t1 - t0, 0.5)
+
     crops = []
     with tempfile.TemporaryDirectory() as tmp:
         for i in range(samples):
-            t = t0 + span * (i + 0.5) / samples
+            t = sample_start + span * (i + 0.5) / samples
             fp = Path(tmp) / f"r_{i:02d}.jpg"
             try:
                 ffmpeg.run(["-ss", f"{t:.2f}", "-i", src_path, "-frames:v", "1",
@@ -276,10 +327,19 @@ def reaction_energy(src_path: str, cam: Rect, t0: float, t1: float,
                 crops.append(gray.astype("float32"))
     if len(crops) < 2:
         return None
-    diffs = [float(np.abs(a - b).mean()) / 255.0
-             for a, b in zip(crops, crops[1:])]
-    # ~0.04 mean-abs-diff is already a lively cam; saturate around there.
-    return min(sum(diffs) / len(diffs) / 0.04, 1.0)
+
+    pair_energies: list[float] = []
+    for a, b in zip(crops, crops[1:]):
+        diff_score = min(float(np.abs(a - b).mean()) / 255.0 / 0.04, 1.0)
+        flow_score = _compute_flow_energy(a, b)
+        if flow_score is not None:
+            # 75% optical flow velocity norm + 25% pixel difference
+            pair_score = 0.75 * flow_score + 0.25 * diff_score
+        else:
+            pair_score = diff_score
+        pair_energies.append(pair_score)
+
+    return min(sum(pair_energies) / len(pair_energies), 1.0)
 
 
 # --------------------------------------------------------------------------- #

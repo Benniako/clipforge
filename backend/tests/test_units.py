@@ -4528,6 +4528,114 @@ def test_climax_teaser_loop_and_platform_ceiling():
     assert preview_start_early is None  # bypassed climax teaser
 
 
+def test_hierarchical_keyframe_times_sampling():
+    from app.providers import vlm
+
+    # 1. 30s clip with climax at t=24.0s (80% golden climax)
+    times_8 = vlm.hierarchical_keyframe_times(0.0, 30.0, climax_t=24.0, n=8)
+    assert len(times_8) == 8
+    assert times_8 == sorted(times_8)
+    # Hook window: first 3 frames within opening 3 seconds
+    assert times_8[0] <= 0.5
+    assert times_8[1] <= 1.5
+    assert times_8[2] <= 2.8
+    # Climax cluster: frames surrounding climax_t=24.0s
+    assert any(abs(t - 24.0) < 0.2 for t in times_8)  # exact climax hit
+    climax_cluster = [t for t in times_8 if 23.0 <= t <= 25.0]
+    assert len(climax_cluster) >= 2  # dense action sampling
+    # Outro frame
+    assert times_8[-1] >= 29.0
+
+    # 2. Golden climax fallback when climax_t is None
+    times_fallback = vlm.hierarchical_keyframe_times(0.0, 30.0, climax_t=None, n=8)
+    assert len(times_fallback) == 8
+    # Golden climax is ~23.4s (0.78 * 30)
+    assert any(22.0 <= t <= 25.0 for t in times_fallback)
+
+    # 3. Compact sizes (n=6, n=4, n=3)
+    times_6 = vlm.hierarchical_keyframe_times(10.0, 30.0, climax_t=25.0, n=6)
+    assert len(times_6) == 6
+    assert times_6 == sorted(times_6)
+
+    times_3 = vlm.hierarchical_keyframe_times(0.0, 20.0, climax_t=15.0, n=3)
+    assert len(times_3) == 3
+
+
+def test_vlm_score_visuals_spans_with_climax():
+    from unittest.mock import patch
+    from app.providers import vlm
+
+    captured_args = []
+
+    def mock_score_visual(path, a, b, *, climax_t=None, **kwargs):
+        captured_args.append((a, b, climax_t))
+        return (0.85, "Great shot")
+
+    with patch.object(vlm, "available", return_value=True), \
+         patch.object(vlm, "active_model", return_value="qwen2.5-vl"), \
+         patch.object(vlm, "score_visual", side_effect=mock_score_visual):
+        # Test 3-tuple input (start, end, climax_t)
+        spans_3 = [(10.0, 30.0, 25.0), (40.0, 60.0, 56.0)]
+        res = vlm.score_visuals("video.mp4", spans_3, budget=10.0)
+        assert len(res) == 2
+        assert captured_args == [(10.0, 30.0, 25.0), (40.0, 60.0, 56.0)]
+
+        # Test 2-tuple backwards compatibility
+        captured_args.clear()
+        spans_2 = [(0.0, 15.0), (20.0, 35.0)]
+        res2 = vlm.score_visuals("video.mp4", spans_2, budget=10.0)
+        assert len(res2) == 2
+        assert captured_args == [(0.0, 15.0, None), (20.0, 35.0, None)]
+
+
+def test_optical_flow_reaction_energy():
+    import numpy as np
+    from app.pipeline import facecam
+
+    # Synthetic 96x96 grayscale facecam crops
+    base_frame = np.full((96, 96), 110, dtype=np.uint8)
+    # Streamer head in middle
+    cv2_mock_head = base_frame.copy()
+    cv2_mock_head[30:60, 30:60] = 190
+
+    # 1. Static: identical frames yield 0 motion energy
+    e_static = facecam._compute_flow_energy(cv2_mock_head, cv2_mock_head)
+    assert e_static is not None
+    assert e_static < 0.05
+
+    # 2. Reaction jump: head shifts rapidly by 6 pixels
+    jump_frame = base_frame.copy()
+    jump_frame[24:54, 30:60] = 190
+    e_jump = facecam._compute_flow_energy(cv2_mock_head, jump_frame)
+    assert e_jump is not None
+    assert e_jump >= 0.60
+
+    # 3. Illumination flash (monitor flash): brightness shift +45 with no physical motion
+    flash_frame = np.clip(cv2_mock_head.astype(np.int16) + 45, 0, 255).astype(np.uint8)
+    e_flash = facecam._compute_flow_energy(cv2_mock_head, flash_frame)
+    assert e_flash is not None
+    assert e_flash < 0.15  # optical flow correctly rejects false positive lighting flash!
+
+
+def test_scene_snapping_protects_climax():
+    from app.providers import scenes
+    from app.models import Word
+
+    # Candidate clip from 10.0 to 30.0 with climax at 25.0s
+    cuts = [11.0, 24.5, 25.2, 29.5]
+    words = [
+        Word(t=10.5, d=1.0, text="Watch"),
+        Word(t=24.0, d=1.5, text="GOAL!"),
+        Word(t=28.0, d=1.0, text="unreal."),
+    ]
+    # Snapping with climax_t=25.0s:
+    # Cut at 24.5s and 25.2s must NEVER be picked because they cut right through the climax!
+    ns, ne = scenes.snap_dual(10.0, 30.0, cuts, words=words, window=1.2, min_dur=3.0, climax_t=25.0)
+    assert ns <= 24.2  # start is before climax
+    assert ne >= 25.4  # end is after climax
+    assert ne == 29.5  # snapped to clean outro cut
+
+
 if __name__ == "__main__":
     import sys
     # Windows consoles default to a legacy code page that can't print "✓".

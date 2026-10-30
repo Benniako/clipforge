@@ -176,7 +176,9 @@ def _score_visual_reads(src_path: str, clips: list[Clip], *,
     if not vlm_mod.available():
         return {}
     opts = get_settings().vlm_options_for(power_mode)
-    return vlm_mod.score_visuals(src_path, [(c.start, c.end) for c in clips],
+    spans = [(c.start, c.end, c.features["climax_t"]) if "climax_t" in c.features else (c.start, c.end)
+             for c in clips]
+    return vlm_mod.score_visuals(src_path, spans,
                                  budget=float(opts["budget"]),
                                  max_workers=int(opts["max_workers"]),
                                  n_frames=int(opts["n_frames"]),
@@ -769,7 +771,8 @@ class Engine:
                     if gc.features.get("cue", 0.0) > 0.0 or gc.features.get("ocr", 0.0) > 0.0:
                         continue
                     r = facecam_mod.reaction_energy(src_path, cam_rect,
-                                                    gc.start, gc.end)
+                                                    gc.start, gc.end,
+                                                    climax_t=gc.features.get("climax_t"))
                     if r is not None:
                         gc.features["reaction"] = round(r, 4)
                     gc.score, gc.factors = gameplay_mod.score_audio(
@@ -800,14 +803,22 @@ class Engine:
                     all_cuts = scenes_mod.scene_cuts(src_path, span_start, span_end)
                     for clip in clips:
                         clip_words = [w for w in transcript.words if w.end > clip.start and w.t < clip.end + 1.0]
-                        ns, ne = scenes_mod.snap_dual(clip.start, clip.end, all_cuts, words=clip_words, window=1.2, min_dur=3.0)
+                        ns, ne = scenes_mod.snap_dual(
+                            clip.start, clip.end, all_cuts,
+                            words=clip_words, window=1.2, min_dur=3.0,
+                            climax_t=clip.features.get("climax_t")
+                        )
                         clip.start, clip.end = ns, ne
                 else:
                     for clip in clips:
                         cuts = scenes_mod.scene_cuts(
                             src_path, max(clip.start - 2.0, 0.0), clip.end + 2.0)
                         clip_words = [w for w in transcript.words if w.end > clip.start and w.t < clip.end + 1.0]
-                        ns, ne = scenes_mod.snap_dual(clip.start, clip.end, cuts, words=clip_words, window=1.2, min_dur=3.0)
+                        ns, ne = scenes_mod.snap_dual(
+                            clip.start, clip.end, cuts,
+                            words=clip_words, window=1.2, min_dur=3.0,
+                            climax_t=clip.features.get("climax_t")
+                        )
                         clip.start, clip.end = ns, ne
             except Exception as e:
                 log.warning("scene snap failed: %s", e)
