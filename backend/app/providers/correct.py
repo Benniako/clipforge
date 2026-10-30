@@ -108,7 +108,9 @@ def correct_transcript(transcript: Transcript, lang: str = "de") -> int:
     if cached is None:
         prompt = _build_prompt(full_text, lang=lang)
         try:
-            raw = oc.generate(model, prompt, temperature=0.1, max_tokens=2048)
+            raw = oc.generate(model=model, prompt=prompt, temperature=0.1, num_predict=2048)
+            if not raw:
+                return 0
         except Exception as e:
             log.warning("correction LLM call failed: %s", e)
             return 0
