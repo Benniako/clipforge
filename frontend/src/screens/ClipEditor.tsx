@@ -58,6 +58,7 @@ export default function ClipEditor() {
   const [capSpeakers, setCapSpeakers] = useState<number[] | null>(null); // null = all
   const [loopPreviewSeconds, setLoopPreviewSeconds] = useState(0);
   const [showShortcuts, setShowShortcuts] = useState(false);
+  const [showSafeGuides, setShowSafeGuides] = useState(false);
 
   // Undo/redo history.
   const undo = useUndo({
@@ -448,22 +449,36 @@ export default function ClipEditor() {
 
       <div className="editor">
         <div className="preview-pane">
-          <div className="seg preview-tabs" style={{ marginBottom: 10 }}>
+          <div className="row" style={{ justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+            <div className="seg preview-tabs">
+              <button
+                className={previewMode === "rendered" ? "on" : ""}
+                onClick={() => setPreviewMode("rendered")}
+              >
+                {t("ce.tabRendered")}
+              </button>
+              <button
+                className={previewMode === "original" ? "on" : ""}
+                onClick={() => setPreviewMode("original")}
+              >
+                {t("ce.tabOriginal")}
+              </button>
+            </div>
             <button
-              className={previewMode === "rendered" ? "on" : ""}
-              onClick={() => setPreviewMode("rendered")}
+              className={"btn ghost sm" + (showSafeGuides ? " on" : "")}
+              onClick={() => setShowSafeGuides(!showSafeGuides)}
+              title="Toggle safe zone guide overlay for TikTok and YouTube Shorts"
             >
-              {t("ce.tabRendered")}
-            </button>
-            <button
-              className={previewMode === "original" ? "on" : ""}
-              onClick={() => setPreviewMode("original")}
-            >
-              {t("ce.tabOriginal")}
+              🎯 Safe Zone: {showSafeGuides ? "ON" : "OFF"}
             </button>
           </div>
           <Waveform src={videoSrc || ""} start={start} end={end} onSeek={(t) => { if (videoRef.current) videoRef.current.currentTime = t; }} />
-          <div className="video-wrap" ref={videoWrapperRef}>
+          <div className="video-wrap" ref={videoWrapperRef} style={{ position: "relative" }}>
+            {showSafeGuides && (
+              <div className="safe-zone-guides">
+                <span className="safe-zone-label">TikTok / Shorts Safe Zone</span>
+              </div>
+            )}
             {videoSrc ? (
               <video
                 key={videoSrc}

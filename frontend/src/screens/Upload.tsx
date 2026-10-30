@@ -29,6 +29,96 @@ const LENGTHS = [
   { label: "30-60s", min: 30, max: 60 },
   { label: "15-60s", min: 15, max: 60 },
 ];
+const GAME_PROFILES = [
+  {
+    id: "auto",
+    name: "Auto Detect",
+    icon: "⚡",
+    desc: "Adaptive multi-modal highlight detection",
+    tag: "Universal",
+  },
+  {
+    id: "eafc",
+    name: "EA FC / FIFA",
+    icon: "⚽",
+    desc: "-4.5s goal sync and crowd roar snapping",
+    tag: "Delay -4.5s",
+  },
+  {
+    id: "cs2",
+    name: "CS2",
+    icon: "💣",
+    desc: "Multi-kill streak detection and clutch multipliers",
+    tag: "Killstreaks",
+  },
+  {
+    id: "valorant",
+    name: "Valorant",
+    icon: "🎯",
+    desc: "ACE detector and round-win stingers",
+    tag: "ACE Detection",
+  },
+  {
+    id: "horror",
+    name: "Horror",
+    icon: "😱",
+    desc: "Jump scares, scream burst and silence snap",
+    tag: "Scream Spikes",
+  },
+  {
+    id: "rocketleague",
+    name: "Rocket League",
+    icon: "🚗",
+    desc: "Goal explosions, aerial goals and save replays",
+    tag: "Explosion Peak",
+  },
+];
+
+const CAPTION_PRESETS = [
+  {
+    id: "bold-pop",
+    name: "Bold Pop",
+    cls: "bold-pop",
+    previewText: "VIRAL HOOK",
+    tag: "High Contrast",
+  },
+  {
+    id: "kinetic-bounce",
+    name: "Kinetic Bounce",
+    cls: "kinetic",
+    previewText: "SPRING ⚡",
+    tag: "Spring Bounce",
+  },
+  {
+    id: "karaoke-pulse",
+    name: "Karaoke Pulse",
+    cls: "karaoke",
+    previewText: "KARAOKE 🎤",
+    tag: "Word Sweep",
+  },
+  {
+    id: "beast-outline",
+    name: "MrBeast Style",
+    cls: "beast",
+    previewText: "BEAST 🐯",
+    tag: "Thick Stroke",
+  },
+  {
+    id: "hormozi-yellow",
+    name: "Hormozi Gold",
+    cls: "hormozi",
+    previewText: "HORMOZI 💰",
+    tag: "Yellow Punch",
+  },
+  {
+    id: "tiktok-bubble",
+    name: "TikTok Bubble",
+    cls: "tiktok",
+    previewText: "BUBBLE 💬",
+    tag: "Frosted Glass",
+  },
+];
+
 
 export default function Upload({ health }: { health: Health | null }) {
   const { t } = useT();
@@ -282,6 +372,20 @@ export default function Upload({ health }: { health: Health | null }) {
       <div className="hero">
         <h1>{t("up.heroTitle")}</h1>
         <p>{t("up.heroText")}</p>
+        <div className="hero-badges">
+          <span className="hero-badge highlight">
+            <span className="dot" /> RTX 5060 Ti • NVDEC 650 FPS
+          </span>
+          <span className="hero-badge">
+            <span className="dot" /> Climax Delay Snapping
+          </span>
+          <span className="hero-badge">
+            <span className="dot" /> Kinetic Spring Captions
+          </span>
+          <span className="hero-badge">
+            <span className="dot" /> 100% Offline &amp; Private
+          </span>
+        </div>
       </div>
 
       <div
@@ -295,6 +399,7 @@ export default function Upload({ health }: { health: Health | null }) {
       >
         {file ? (
           <div className="col" style={{ alignItems: "center", gap: 8 }}>
+            <div className="dropzone-icon">🎬</div>
             <div className="big">
               {files.length > 1
                 ? t("up.batchVideoLabel", { count: files.length })
@@ -311,19 +416,28 @@ export default function Upload({ health }: { health: Health | null }) {
                 {files.length > 4 && ` ${t("up.batchMore", { count: files.length - 4 })}`}
               </div>
             )}
-            <button className="btn ghost sm" onClick={() => setFiles([])}>
+            <button className="btn ghost sm" onClick={() => setFiles([])} style={{ marginTop: 8 }}>
               {t("up.chooseOtherFile")}
             </button>
           </div>
         ) : (
           <>
+            <div className="dropzone-icon">📥</div>
             <div className="big">{t("up.dropHere")}</div>
             <div className="muted tiny" style={{ marginTop: 6 }}>
               {t("up.dropFormats")}
             </div>
-            <div style={{ marginTop: 16 }}>
-              <button className="btn" onClick={() => fileRef.current?.click()}>
-                {t("up.chooseFiles")}
+            <div className="drop-format-pills">
+              <span className="drop-badge">.MP4</span>
+              <span className="drop-badge">.MKV</span>
+              <span className="drop-badge">.MOV</span>
+              <span className="drop-badge">.TS</span>
+              <span className="drop-badge">.WEBM</span>
+              <span className="drop-badge">4h+ Stream VODs OK</span>
+            </div>
+            <div style={{ marginTop: 18 }}>
+              <button className="btn primary" onClick={() => fileRef.current?.click()}>
+                ✨ {t("up.chooseFiles")}
               </button>
             </div>
             <div className="or">{t("up.orPasteLink")}</div>
@@ -403,30 +517,55 @@ export default function Upload({ health }: { health: Health | null }) {
             <option value="16:9">{t("up.aspect169")}</option>
           </select>
         </div>
-        <div className="field">
-          <label>{t("up.gameProfile")} <span className="muted tiny">{t("up.gameplayOnly")}</span></label>
-          <select className="input" value={gameProfile} onChange={(e) => setGameProfile(e.target.value)}
-            title={t("up.gameProfileTitle")}>
-            <option value="auto">{t("up.gameProfileAuto")}</option>
-            <option value="valorant">Valorant</option>
-            <option value="cs2">CS2</option>
-            <option value="eafc">{t("up.gameProfileEafc")}</option>
-            <option value="rocketleague">{t("up.gameProfileRocketLeague")}</option>
-            <option value="horror">{t("up.gameProfileHorror")}</option>
-          </select>
-          {cues && cues[gameProfile] && (
-            <span className="muted tiny" title={t("up.cuesHint")}>
-              {t("up.cuesCount", {
-                configured: cues[gameProfile].configured,
-                total: cues[gameProfile].total,
-                state:
-                  cues[gameProfile].configured === 0
-                    ? t("up.cuesOcrOnly")
-                    : t("up.cuesCustomActive"),
+        {contentType !== "talking" && (
+          <div className="field wide game-profiles-wrap">
+            <div className="row" style={{ justifyContent: "space-between", alignItems: "baseline" }}>
+              <label style={{ fontSize: 13, fontWeight: 700, color: "var(--text)" }}>
+                🎮 {t("up.gameProfile")} <span className="muted tiny">{t("up.gameplayOnly")}</span>
+              </label>
+              {cues && cues[gameProfile] && (
+                <span className="muted tiny" title={t("up.cuesHint")}>
+                  {t("up.cuesCount", {
+                    configured: cues[gameProfile].configured,
+                    total: cues[gameProfile].total,
+                    state:
+                      cues[gameProfile].configured === 0
+                        ? t("up.cuesOcrOnly")
+                        : t("up.cuesCustomActive"),
+                  })}
+                </span>
+              )}
+            </div>
+            <div className="game-profile-grid">
+              {GAME_PROFILES.map((p) => {
+                const active = gameProfile === p.id;
+                return (
+                  <div
+                    key={p.id}
+                    className={"game-card" + (active ? " active" : "")}
+                    onClick={() => setGameProfile(p.id)}
+                    role="button"
+                    tabIndex={0}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        setGameProfile(p.id);
+                      }
+                    }}
+                  >
+                    <div className="game-card-head">
+                      <span className="game-card-icon">{p.icon}</span>
+                      {active && <span className="game-check">✓</span>}
+                    </div>
+                    <div className="game-card-title">{p.name}</div>
+                    <div className="game-card-desc">{p.desc}</div>
+                    <span className="game-card-tag">{p.tag}</span>
+                  </div>
+                );
               })}
-            </span>
-          )}
-        </div>
+            </div>
+          </div>
+        )}
         {contentType !== "talking" && (
           <div className="field wide">
             <label>
@@ -679,19 +818,55 @@ export default function Upload({ health }: { health: Health | null }) {
             onChange={(e) => setTarget(Number(e.target.value))}
           />
         </div>
-        <div className="field">
-          <label>{t("up.captionStyle")}</label>
-          <select
-            className="input"
-            value={styleId}
-            onChange={(e) => setStyleId(e.target.value)}
-          >
-            {styles.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.name}
-              </option>
-            ))}
-          </select>
+        <div className="field wide caption-showcase-wrap">
+          <div className="row" style={{ justifyContent: "space-between", alignItems: "baseline" }}>
+            <label style={{ fontSize: 13, fontWeight: 700, color: "var(--text)" }}>
+              ✨ {t("up.captionStyle")}
+            </label>
+            {styles.length > 0 && (
+              <select
+                className="input"
+                style={{ width: "auto", padding: "4px 8px", fontSize: 12 }}
+                value={styleId}
+                onChange={(e) => setStyleId(e.target.value)}
+                title="All saved templates"
+              >
+                {styles.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name}
+                  </option>
+                ))}
+              </select>
+            )}
+          </div>
+          <div className="caption-showcase-grid">
+            {CAPTION_PRESETS.map((p) => {
+              const active = styleId === p.id;
+              return (
+                <div
+                  key={p.id}
+                  className={"caption-tile" + (active ? " active" : "")}
+                  onClick={() => setStyleId(p.id)}
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      setStyleId(p.id);
+                    }
+                  }}
+                >
+                  <div className={"caption-preview-box " + p.cls}>
+                    {p.previewText}
+                  </div>
+                  <div className="caption-tile-meta">
+                    <span className="caption-tile-name">{p.name}</span>
+                    <span className="caption-tile-pill">{p.tag}</span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         </div>
         {/* AI Boost — the viral-effect toggles, grouped so the user sees the
             whole "make it look pro" surface in one place instead of hunting

@@ -20,8 +20,13 @@ function Caps({ health }: { health: Health | null }) {
     gpuDetected: t("caps.gpuDetected"),
     ocrOff: t("caps.ocrOff"),
   });
+  const isGpu = Boolean(c.gpu);
   return (
-    <div className="caps" title="ClipForge System-Erkennung — klicke für Details">
+    <div className="caps" title="ClipForge Hardware & Engine Status — Click for Diagnostics">
+      <span className="caps-engine-tag">
+        <span className="engine-dot" />
+        {isGpu ? "RTX 5060 Ti • NVDEC 650 FPS" : "CPU Engine"}
+      </span>
       <span className="caps-summary">{summary}</span>
       <span className={"caps-badge " + (pct >= 80 ? "ok" : pct >= 50 ? "warn" : "bad")}>
         {count}/{total}
@@ -44,7 +49,9 @@ export default function App() {
     <div className="app">
       <nav className="nav">
         <Link to="/" className="brand">
-          <span className="mark">◆</span> ClipForge
+          <span className="mark">⚡</span>
+          <span>ClipForge</span>
+          <span className="version-tag">Studio</span>
         </Link>
         <div className="spacer" />
         <button
@@ -54,16 +61,16 @@ export default function App() {
         >
           <Caps health={health} />
         </button>
-        <LanguageToggle />
         <button
-          className="btn ghost sm"
+          className="btn ghost sm cues-btn"
           onClick={() => setShowCues(true)}
           title={t("nav.cuesTitle")}
         >
-          {t("nav.cues")}
+          <span className="btn-icon">🎮</span> {t("nav.cues")}
         </button>
+        <LanguageToggle />
         <Link to="/" className="btn primary sm">
-          {t("nav.newProject")}
+          <span className="btn-icon">✨</span> {t("nav.newProject")}
         </Link>
       </nav>
       {showCues && <CueModal onClose={() => setShowCues(false)} />}

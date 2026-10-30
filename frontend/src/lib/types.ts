@@ -267,6 +267,8 @@ export interface StyleTemplate {
   // emphasis (power-word colour/scale across the line) and tasteful auto-emoji.
   emphasis?: boolean;
   emoji?: boolean;
+  kinetic?: boolean;
+  karaoke?: boolean;
 }
 
 export interface Health {

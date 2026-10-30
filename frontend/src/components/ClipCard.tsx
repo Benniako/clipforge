@@ -50,6 +50,7 @@ export default function ClipCard({ clip, projectId, rank, selected, onToggleSele
   const open = () => nav(`/p/${projectId}/clip/${clip.id}`);
   const ready = clip.status === "ready" && clip.export_url;
   const [fb, setFb] = useState<"up" | "down" | null>(clip.feedback);
+  const [copied, setCopied] = useState(false);
 
   const rate = async (e: React.MouseEvent, r: "up" | "down") => {
     e.stopPropagation();
@@ -58,8 +59,21 @@ export default function ClipCard({ clip, projectId, rank, selected, onToggleSele
     await api.rateClip(projectId, clip.id, next).catch(() => {});
   };
 
+  const copyCaption = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    const tags = clip.hashtags && clip.hashtags.length
+      ? clip.hashtags.join(" ")
+      : "#gaming #fyp #viral #streamer";
+    const text = `${clip.title || "Stream Highlight"}\n\n${tags}`;
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(text).catch(() => {});
+    }
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
   return (
-    <div className="clip-card" style={selected ? { outline: "2px solid var(--accent)" } : undefined}>
+    <div className="clip-card" style={selected ? { outline: "2px solid var(--accent)", boxShadow: "0 0 20px rgba(139, 92, 246, 0.35)" } : undefined}>
       <div
         className="thumb"
         style={clip.thumb_url ? { backgroundImage: `url(${clip.thumb_url})` } : undefined}
@@ -83,6 +97,7 @@ export default function ClipCard({ clip, projectId, rank, selected, onToggleSele
               borderRadius: 6, display: "grid", placeItems: "center", fontSize: 15,
               background: selected ? "var(--accent)" : "rgba(0,0,0,0.55)",
               border: "1px solid rgba(255,255,255,0.3)", color: "#fff", cursor: "pointer",
+              zIndex: 6,
             }}
           >
             {selected ? "✓" : ""}
@@ -101,8 +116,17 @@ export default function ClipCard({ clip, projectId, rank, selected, onToggleSele
         </span>
       </div>
       <div className="clip-body">
-        <div className="row" style={{ justifyContent: "space-between" }}>
+        <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
           <ScoreBadge score={clip.score} />
+          {ready && (
+            <button
+              className={"copy-tiktok-btn" + (copied ? " copied" : "")}
+              onClick={copyCaption}
+              title="Copy formatted viral caption and tags for TikTok, Reels & Shorts"
+            >
+              <span>{copied ? "✓ Copied!" : "📋 Copy"}</span>
+            </button>
+          )}
         </div>
         <div className="clip-title" onClick={open} role="button" tabIndex={0}
              onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } }}>
@@ -152,7 +176,7 @@ export default function ClipCard({ clip, projectId, rank, selected, onToggleSele
           </button>
           {ready && (
             <a
-              className="btn sm"
+              className="btn sm primary"
               href={api.downloadClipUrl(projectId, clip.id)}
               download
             >
@@ -168,17 +192,6 @@ export default function ClipCard({ clip, projectId, rank, selected, onToggleSele
               style={{ padding: "7px 9px", fontSize: 12 }}
             >
               .srt
-            </a>
-          )}
-          {ready && (
-            <a
-              className="btn sm ghost"
-              href={api.downloadVttUrl(projectId, clip.id)}
-              download
-              title="WebVTT for TikTok/YouTube upload"
-              style={{ padding: "7px 9px", fontSize: 12 }}
-            >
-              .vtt
             </a>
           )}
           <div className="spacer" style={{ flex: 1 }} />
@@ -203,5 +216,3 @@ export default function ClipCard({ clip, projectId, rank, selected, onToggleSele
     </div>
   );
 }
-
-

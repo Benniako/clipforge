@@ -563,64 +563,83 @@ export default function ClipGridView({
         </div>
       </div>
 
-      <div className="grid-head" style={{ marginTop: 22 }}>
-        <span className="muted tiny">Sortierung</span>
-        <div className="seg" style={{ width: "auto" }}>
-          {(["score", "timeline", "duration"] as Sort[]).map((s) => (
+      <div className="grid-head" style={{ marginTop: 24, padding: "14px 16px", background: "rgba(18, 23, 38, 0.7)", border: "1px solid var(--border)", borderRadius: "var(--radius)" }}>
+        <div className="row" style={{ gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          <span className="muted tiny" style={{ fontWeight: 700 }}>Filter:</span>
+          <div className="seg" style={{ width: "auto" }}>
             <button
-              key={s}
-              className={sort === s ? "on" : ""}
-              style={{ minWidth: 84, textTransform: "capitalize" }}
-              onClick={() => setSort(s)}
+              className={minScore === 0 ? "on" : ""}
+              onClick={() => setMinScore(0)}
+              style={{ padding: "5px 12px", fontSize: 12 }}
             >
-              {SORT_LABELS[s]}
+              Alle ({project.clips.length})
             </button>
-          ))}
+            <button
+              className={minScore === 85 ? "on" : ""}
+              onClick={() => setMinScore(85)}
+              style={{ padding: "5px 12px", fontSize: 12, color: minScore === 85 ? "#fff" : "var(--accent-gold)" }}
+            >
+              🔥 Ultra Viral 85+ ({project.clips.filter((c) => c.score >= 85).length})
+            </button>
+            <button
+              className={minScore === 70 ? "on" : ""}
+              onClick={() => setMinScore(70)}
+              style={{ padding: "5px 12px", fontSize: 12, color: minScore === 70 ? "#fff" : "var(--accent-cyan)" }}
+            >
+              ⚡ Highlights 70+ ({project.clips.filter((c) => c.score >= 70).length})
+            </button>
+          </div>
         </div>
-        <span className="muted tiny" style={{ marginLeft: 10 }}>Format</span>
-        <select
-          className="input"
-          style={{ width: "auto", padding: "7px 10px" }}
-          value={project.settings.aspect}
-          title="Ausgabeformat jetzt ändern - rendert alle Clips neu; Momente, Scores und Untertitel bleiben gleich"
-          onChange={async (e) => {
-            try {
-              await api.setAspect(project.id, e.target.value);
-              window.location.reload(); // show live render progress
-            } catch (err: any) {
-              setMontageErr(err?.message ?? "Format konnte nicht geändert werden.");
-            }
-          }}
-        >
-          <option value="9:16">9:16 vertikal</option>
-          <option value="4:5">4:5 Feed</option>
-          <option value="1:1">1:1 Quadrat</option>
-          <option value="16:9">16:9 breit</option>
-        </select>
+
         <div className="spacer" />
-        <span className="muted tiny">Min. Score: {minScore}+</span>
-        <input
-          type="range"
-          min={0}
-          max={90}
-          step={5}
-          value={minScore}
-          onChange={(e) => setMinScore(Number(e.target.value))}
-          style={{ width: 160 }}
-        />
-        <button className="btn ghost sm" onClick={refresh} title="Aktualisieren">
-          Neu
-        </button>
-        <button className="btn ghost sm" onClick={() => setSelected(clips.map(c => c.id))}
-          title="Alle anzeigen">
-          Alle
-        </button>
-        {selected.length > 0 && (
-          <button className="btn ghost sm" onClick={() => setSelected([])}
-            title="Auswahl aufheben">
-            Abwählen
+
+        <div className="row" style={{ gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          <span className="muted tiny">Sortierung:</span>
+          <div className="seg" style={{ width: "auto" }}>
+            {(["score", "timeline", "duration"] as Sort[]).map((s) => (
+              <button
+                key={s}
+                className={sort === s ? "on" : ""}
+                style={{ minWidth: 72, padding: "5px 10px", fontSize: 12, textTransform: "capitalize" }}
+                onClick={() => setSort(s)}
+              >
+                {SORT_LABELS[s]}
+              </button>
+            ))}
+          </div>
+
+          <select
+            className="input"
+            style={{ width: "auto", padding: "5px 10px", fontSize: 12 }}
+            value={project.settings.aspect}
+            title="Ausgabeformat jetzt ändern - rendert alle Clips neu"
+            onChange={async (e) => {
+              try {
+                await api.setAspect(project.id, e.target.value);
+                window.location.reload();
+              } catch (err: any) {
+                setMontageErr(err?.message ?? "Format konnte nicht geändert werden.");
+              }
+            }}
+          >
+            <option value="9:16">9:16 vertikal</option>
+            <option value="4:5">4:5 Feed</option>
+            <option value="1:1">1:1 Quadrat</option>
+            <option value="16:9">16:9 breit</option>
+          </select>
+
+          <button className="btn ghost sm" onClick={refresh} title="Aktualisieren">
+            🔄
           </button>
-        )}
+          <button className="btn ghost sm" onClick={() => setSelected(clips.map((c) => c.id))} title="Alle auswählen">
+            Alle
+          </button>
+          {selected.length > 0 && (
+            <button className="btn ghost sm" onClick={() => setSelected([])} title="Auswahl aufheben">
+              Abwählen ({selected.length})
+            </button>
+          )}
+        </div>
       </div>
 
       {clips.length === 0 ? (
