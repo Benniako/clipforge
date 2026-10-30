@@ -467,6 +467,9 @@ def detect_gameplay(src_path: str, info: MediaInfo, settings: ImportSettings,
         pre = rms[lo:hi]
         base = float(pre.mean()) if len(pre) else floor
         transient = float(max(0.0, (rms[idx] - base) / (rms[idx] + 1e-6)))
+        # Horror jump-scare surge: reward dramatic silence-to-spike transitions
+        if profile.get("w_transient", 0) >= 15.0 and base < floor * 1.5:
+            transient = min(1.0, transient * 1.35)
 
         feats = {"intensity": round(pct, 4), "sustain": round(sustain, 4),
                  "transient": round(transient, 4),
@@ -662,14 +665,19 @@ def _ocr_clips(events: list, info: MediaInfo, settings: ImportSettings, *,
     for e in events:
         if _is_menu_ocr_event(e):
             continue
-        start = max(0.0, e.t - lead)
-        end = min(info.duration, e.t + tail)
+        lbl = str(getattr(e, "label", "") or "").lower()
+        t_event = e.t
+        # EA FC / Sports broadcast delay calibration: scoreboard update occurs ~4.5s AFTER the ball crossed the line
+        if lbl in {"goal", "scoreboard"} and getattr(settings, "game_profile", "auto") in {"eafc", "fifa", "rocketleague", "auto"}:
+            t_event = max(0.0, e.t - 4.5)
+
+        start = max(0.0, t_event - lead)
+        end = min(info.duration, t_event + tail)
         if end - start < settings.min_len:
             start = max(0.0, end - settings.min_len)
         if end - start > settings.max_len:
             start = max(0.0, end - settings.max_len)
         # Goals and critical events score top-tier; generic scoreboard changes score moderately
-        lbl = str(getattr(e, "label", "") or "").lower()
         if lbl in {"goal", "victory", "ace", "clutch"}:
             base_score = 78
         elif lbl in {"scoreboard"}:
@@ -680,7 +688,7 @@ def _ocr_clips(events: list, info: MediaInfo, settings: ImportSettings, *,
         m, s = divmod(int(e.t), 60)
         label = e.label.replace("_", " ").title()
         out.append(GameplayClip(
-            start=round(start, 3), end=round(end, 3), score=score, peak_t=e.t,
+            start=round(start, 3), end=round(end, 3), score=score, peak_t=t_event,
             title=f"{label} — {m}:{s:02d}",
             features={"ocr": round(e.confidence, 4), "intensity": 0.0,
                       "sustain": 0.0, "transient": 0.0, "spikes": 0.0, "cue": 0.0},
@@ -863,8 +871,21 @@ def _cue_clips(events: list, info: MediaInfo, lead: float, tail: float,
 
         # Cue-only evidence is useful, but it is not proof by itself. Top scores
         # require corroboration from OCR/visual/audio/reaction later in the pipe.
+        # Multi-kill exponential streak multipliers (2k: 1.3x, 3k: 1.8x, 4k: 2.4x, 5k: 3.5x ACE)
+        streak_mult = 1.0
+        if n == 2:
+            streak_mult = 1.3
+        elif n == 3:
+            streak_mult = 1.8
+        elif n == 4:
+            streak_mult = 2.4
+        elif n >= 5:
+            streak_mult = 3.5
+
         cue_strength = max(0.0, sim - 0.84)
-        score = int(round(max(1, min(88, 58 + cue_strength * 120 + (n - 1) * 4))))
+        streak_bonus = (n - 1) * 4 * streak_mult
+        max_cap = 99 if n >= 3 else 88
+        score = int(round(max(1, min(max_cap, 58 + cue_strength * 120 + streak_bonus))))
         m, s = divmod(int(first.t), 60)
         label = first.label.replace("_", " ").title()
         labels = {e.label for e in grp}
@@ -1027,3 +1048,25 @@ def _uniform_fallback(info: MediaInfo, settings: ImportSettings) -> list[Gamepla
         t += target
         i += 1
     return out
+
+
+def compute_climax_curve(times, rms, profile: dict | None = None) -> tuple[list[float], list[float]]:
+    """Compute continuous 10 Hz climax intensity curve C(t) in [0, 1]."""
+    if times is None or rms is None or len(times) == 0 or len(rms) == 0:
+        return [], []
+    import numpy as np
+    prof = profile or _PROFILES["generic"]
+    thr = float(np.percentile(rms, prof.get("thr_pct", 82)))
+    rms_max = float(np.max(rms)) if len(rms) else 1.0
+    norm_rms = np.clip(rms / max(rms_max, 1e-6), 0.0, 1.0)
+    # 1st-derivative surge: rate of loudness increase over 1s (10 hops)
+    surge = np.zeros_like(norm_rms)
+    hop_1s = 10
+    if len(norm_rms) > hop_1s:
+        surge[hop_1s:] = np.maximum(0.0, norm_rms[hop_1s:] - norm_rms[:-hop_1s])
+    w_t = prof.get("w_transient", 3.0) / 10.0
+    w_s = prof.get("w_sustain", 6.0) / 10.0
+    total_w = w_t + w_s + 1.0
+    curve = (norm_rms + w_t * surge + w_s * (norm_rms > (thr / max(rms_max, 1e-6)))) / total_w
+    curve = np.clip(curve, 0.0, 1.0)
+    return [round(float(t), 3) for t in times], [round(float(v), 4) for v in curve]

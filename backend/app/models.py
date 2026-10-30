@@ -331,6 +331,10 @@ class StyleTemplate(BaseModel):
     emphasis: bool = True
     # Auto-emoji: append a tasteful emoji to matched power words (max ~2/line).
     emoji: bool = False
+    # Kinematic physics spring bounce animation (\fscx, \fscy, \frz)
+    kinetic: bool = False
+    # Syllable/phoneme progressive sweep karaoke (\kf)
+    karaoke: bool = False
 
 
 # --------------------------------------------------------------------------- #

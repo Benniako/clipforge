@@ -149,7 +149,8 @@ def _alpha(cutoff: float, dt: float) -> float:
 def one_euro_filter(samples: list[tuple[float, float]], *,
                     min_cutoff: float = ONE_EURO_MIN_CUTOFF,
                     beta: float = ONE_EURO_BETA,
-                    d_cutoff: float = ONE_EURO_D_CUTOFF
+                    d_cutoff: float = ONE_EURO_D_CUTOFF,
+                    deadband: float = 0.0
                     ) -> list[tuple[float, float]]:
     """One-Euro adaptive low-pass over a (t, value) series.
 
@@ -177,6 +178,9 @@ def one_euro_filter(samples: list[tuple[float, float]], *,
         cutoff = min_cutoff + beta * abs(d_hat)
         a = _alpha(cutoff, dt)
         v_hat = a * v + (1 - a) * prev_v
+        # Deadband threshold: if displacement is tiny and velocity is low, lock camera steady
+        if deadband > 0.0 and abs(v - prev_v) < deadband and abs(d_hat) < 0.08:
+            v_hat = prev_v
         out.append((t, v_hat))
         prev_t, prev_v = t, v_hat
         d_prev = d_hat
@@ -539,3 +543,40 @@ def _rdp(points: list[tuple[float, float]], epsilon: float) -> list[tuple[float,
     left = _rdp(points[: idx + 1], epsilon)
     right = _rdp(points[idx:], epsilon)
     return left[:-1] + right
+
+
+def hermite_s_curve(p0: float, p1: float, tau: float) -> float:
+    """Cubic Hermite S-curve interpolation (3*tau^2 - 2*tau^3) for smooth cinematic pans."""
+    t_clamped = max(0.0, min(1.0, float(tau)))
+    s = 3.0 * (t_clamped ** 2) - 2.0 * (t_clamped ** 3)
+    return float(p0 + (p1 - p0) * s)
+
+
+def apply_crosshair_prior(cx: float, profile_name: str = "generic") -> float:
+    """Blend horizontal crop center with screen center crosshair prior (w_cross).
+
+    FPS games (CS2/Valorant) lock recoil and kill confirmation to screen center
+    (w_cross = 0.85); Sports games (EA FC / Rocket League) let the camera track
+    field action (w_cross = 0.15).
+    """
+    prof = (profile_name or "generic").lower().replace(" ", "")
+    if prof in {"valorant", "cs2", "cs", "fps"}:
+        w_cross = 0.85
+    elif prof in {"eafc", "fifa", "rocketleague", "sports"}:
+        w_cross = 0.15
+    else:
+        w_cross = 0.50
+    return float(w_cross * 0.50 + (1.0 - w_cross) * cx)
+
+
+def decide_layout(has_facecam: bool, *, reaction_energy: float = 0.0,
+                  is_climax: bool = False, profile: str = "auto") -> LayoutType:
+    """Direct vertical layout based on facecam presence, streamer arousal, and climax beat.
+
+    - Facecam present: Stacked/Split (Facecam top, Gameplay bottom).
+    - Climax punch without facecam: Full Gameplay bleed (fill).
+    - High streamer scream/reaction: Split with prominent reaction cam.
+    """
+    if not has_facecam:
+        return LayoutType.fill
+    return LayoutType.split

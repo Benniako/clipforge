@@ -90,6 +90,23 @@ _TEMPLATES: dict[str, StyleTemplate] = {
             primary="FFFFFF", highlight="FFD166", outline="000000",
             outline_w=3, y_frac=0.84, uppercase=False, emphasis=False, emoji=False,
         ),
+        # Kinetic bounce: 4-phase underdamped spring bounce physics animation
+        # with dynamic tilt on high-emotion power words. Viral TikTok/Reels look.
+        StyleTemplate(
+            id="kinetic-bounce", name="Kinetic Bounce",
+            font="FreeSans", font_size=104,
+            primary="FFFFFF", highlight="FFE45C", outline="000000",
+            outline_w=8, y_frac=0.74, uppercase=True, emphasis=True, emoji=True,
+            kinetic=True,
+        ),
+        # Karaoke pulse: progressive syllable/word sweep with neon cyan highlight.
+        StyleTemplate(
+            id="karaoke-pulse", name="Karaoke Pulse",
+            font="DejaVu Sans", font_size=96,
+            primary="E2E8F0", highlight="00F0FF", outline="0A0A10",
+            outline_w=7, y_frac=0.76, uppercase=True, emphasis=True, emoji=True,
+            karaoke=True,
+        ),
     ]
 }
 

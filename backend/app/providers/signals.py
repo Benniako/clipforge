@@ -437,13 +437,13 @@ def hook_potential_index(words: list[Word], duration: float,
     else:
         s_pace = 0.50
 
-    # 3. Voice Onset Time penalty (Phi_VOT)
+    # 3. Voice Onset Time penalty (Phi_VOT) - strict 0.15s dead-air elimination
     vot_mult = 1.0
     if clip_start is not None and clip_start >= 0:
         vot = max(0.0, start - clip_start)
-        if vot > 0.25:
+        if vot > 0.15:
             import math
-            vot_mult = max(0.1, min(1.0, math.exp(-(vot - 0.25) / 0.40)))
+            vot_mult = max(0.1, min(1.0, math.exp(-(vot - 0.15) / 0.40)))
 
     # Composite HPI
     hpi = (0.55 * s_ling + 0.45 * s_pace) * vot_mult
@@ -854,3 +854,36 @@ _SV = Lexicon(
 
 _LEXICONS: dict[str, Lexicon] = {"en": _EN, "de": _DE, "fr": _FR, "es": _ES, "pt": _PT, "it": _IT,
 	                                  "tr": _TR, "jp": _JP, "nl": _NL, "pl": _PL, "sv": _SV}
+
+
+def continuous_emotion_curve(words: list[Word], duration: float, hop: float = 0.1,
+                             lex: Lexicon = _EN) -> tuple[list[float], list[float]]:
+    """Compute a continuous 10 Hz emotional energy curve over the clip duration."""
+    if duration <= 0:
+        return [], []
+    import numpy as np
+    n = max(1, int(round(duration / hop)))
+    times = [round(i * hop, 3) for i in range(n)]
+    curve = np.zeros(n, dtype=np.float32)
+
+    for w in words:
+        txt = w.text.strip().lower()
+        charge = 0.20  # spoken speech floor
+        if w.text.strip().endswith("!"):
+            charge += 0.50
+        elif w.text.strip().endswith("?"):
+            charge += 0.25
+        clean_toks = _WORD_RE.findall(txt)
+        for t in clean_toks:
+            if t in lex.emotion:
+                charge += 0.45
+            if t in lex.payoff:
+                charge += 0.35
+            if t in lex.controversy:
+                charge += 0.25
+        i0 = max(0, int(round(w.t / hop)))
+        i1 = min(n, int(round((w.t + w.d) / hop)))
+        if i1 > i0:
+            curve[i0:i1] = np.maximum(curve[i0:i1], min(1.0, charge))
+
+    return times, [round(float(v), 4) for v in curve]

@@ -441,6 +441,28 @@ def test_diarization_capability_requires_token():
     assert _settings(has_whisperx=True, hf_token=None).capability_report()["diarization_model"] is None
 
 
+def test_cuda_video_reader_and_batched_whisper_scaling():
+    """CUDAVideoReader exposes NVDEC frame grabbing; whisper_batch_for scales to 32 on 12-14GB VRAM."""
+    from app.media.ffmpeg import CUDAVideoReader
+    from app.media import frame_cache
+
+    reader = CUDAVideoReader("test_vod.mp4")
+    assert reader.src == "test_vod.mp4"
+    # Seed frame cache and verify grab_frames retrieves cached byte surfaces
+    frame_cache.put("test_vod.mp4", 1.5, b"FAKE_NVDEC_SURFACE_BYTES")
+    cached_frames = reader.grab_frames([1.5])
+    assert len(cached_frames) == 1
+    assert cached_frames[0] == b"FAKE_NVDEC_SURFACE_BYTES"
+
+    # Batch scaling verification under 12-14GB VRAM envelope
+    s_12gb = _settings(device="cuda", vram_mb=12288, whisper_batch_size=8)
+    assert s_12gb.whisper_batch_for("max_gpu") >= 32
+    assert s_12gb.whisper_batch_for("quality") >= 24
+
+    s_16gb = _settings(device="cuda", vram_mb=16384, whisper_batch_size=8)
+    assert s_16gb.whisper_batch_for("max_gpu") >= 48
+
+
 def test_whisperx_torchaudio_metadata_shim_restores_removed_type():
     from app.providers import transcribe as T
 
@@ -1405,6 +1427,47 @@ def test_render_finish_fails_project_when_no_clips_ready():
     assert out.status == ProjectStatus.failed
     assert "every clip" in (out.error or "").lower()
     assert out.progress.stage == "render"
+
+
+def test_eafc_scoreboard_delay_and_multikill_exponential_multipliers():
+    """EA FC goal OCR events calibrate 4.5s broadcast delay; multi-kills scale exponentially."""
+    from app.media.ffmpeg import MediaInfo
+    from app.models import ImportSettings, Word
+    from app.providers.detect_ocr import OcrEvent
+    from app.providers.detect_cues import CueEvent
+    from app.providers.detect_gameplay import _ocr_clips, _cue_clips, compute_climax_curve
+    from app.providers.signals import continuous_emotion_curve, get_lexicon
+    import numpy as np
+
+    info = MediaInfo(duration=600, width=1920, height=1080, fps=30, has_audio=True, has_video=True, codec=None)
+    st = ImportSettings(min_len=15, max_len=45, game_profile="eafc")
+
+    # 1. EA FC Goal OCR delay calibration
+    ev_goal = [OcrEvent(t=100.0, label="goal", text="GOAL 1-0", confidence=0.9)]
+    clips = _ocr_clips(ev_goal, info, st, lead=15.0, tail=10.0)
+    assert len(clips) == 1
+    # peak_t must be calibrated back ~4.5s to 95.5s so the build-up is preserved
+    assert abs(clips[0].peak_t - 95.5) < 0.1
+
+    # 2. Multi-kill exponential multipliers
+    ev_ace = [CueEvent(t=50.0 + i * 2.0, label="kill", similarity=0.9) for i in range(5)]
+    ace_clip = _cue_clips(ev_ace, info, lead=10.0, tail=8.0, settings=st)[0]
+    ev_double = [CueEvent(t=50.0, label="kill", similarity=0.9), CueEvent(t=52.0, label="kill", similarity=0.9)]
+    double_clip = _cue_clips(ev_double, info, lead=10.0, tail=8.0, settings=st)[0]
+    assert ace_clip.score > double_clip.score
+    assert ace_clip.score >= 88
+
+    # 3. Continuous 10 Hz climax and emotion curves
+    times = np.linspace(0, 10, 100)
+    rms = np.sin(times) * 0.5 + 0.5
+    c_times, c_curve = compute_climax_curve(times, rms)
+    assert len(c_times) == 100
+    assert all(0.0 <= v <= 1.0 for v in c_curve)
+
+    words = [Word(t=1.0, d=0.4, text="WOW!"), Word(t=2.0, d=0.5, text="UNBELIEVABLE")]
+    e_times, e_curve = continuous_emotion_curve(words, 5.0, hop=0.1, lex=get_lexicon("en"))
+    assert len(e_times) == 50
+    assert max(e_curve) >= 0.5
 
 
 def test_multikill_streaks_chain_and_outscore_single_kills():
@@ -2758,6 +2821,43 @@ def test_reframe_smooth_clamps_to_crop_safe_range():
         assert half - 1e-6 <= cx <= 1.0 - half + 1e-6, f"cx {cx} outside safe range"
 
 
+def test_kinematic_reframe_deadband_and_hermite_scurve():
+    """Kinematic deadband locks camera steady; Hermite S-curve glides pans; Crosshair priors apply."""
+    from app.pipeline.reframe import (one_euro_filter, hermite_s_curve,
+                                      apply_crosshair_prior, decide_layout)
+    from app.models import LayoutType
+
+    # 1. Deadband suppression: tiny micro-movements are locked
+    micro_jitter = [(i * 0.1, 0.500 + (0.01 if i % 2 else 0.00)) for i in range(10)]
+    smoothed_deadband = one_euro_filter(micro_jitter, deadband=0.045)
+    # The output should remain virtually constant
+    assert abs(smoothed_deadband[-1][1] - 0.5) < 0.015
+
+    # 2. Hermite cubic S-curve (3*tau^2 - 2*tau^3)
+    p_start = 0.2
+    p_end = 0.8
+    assert hermite_s_curve(p_start, p_end, 0.0) == 0.2
+    assert hermite_s_curve(p_start, p_end, 1.0) == 0.8
+    # Midpoint should be exactly half (0.5)
+    assert abs(hermite_s_curve(p_start, p_end, 0.5) - 0.5) < 1e-5
+    # Smooth acceleration: at 20% time, motion should be less than linear (0.32)
+    assert hermite_s_curve(p_start, p_end, 0.2) < 0.2 + (0.8 - 0.2) * 0.2
+
+    # 3. Crosshair anchor priors
+    # In FPS (Valorant/CS2), an eccentric target at cx=0.8 is pulled heavily toward center 0.5
+    cx_fps = apply_crosshair_prior(0.8, "valorant")
+    assert abs(cx_fps - (0.85 * 0.5 + 0.15 * 0.8)) < 1e-4
+    assert cx_fps < 0.60
+
+    # In Sports (EA FC), the camera tracks the ball freely (w_cross = 0.15)
+    cx_sports = apply_crosshair_prior(0.8, "eafc")
+    assert cx_sports > 0.70
+
+    # 4. Layout Director
+    assert decide_layout(has_facecam=False) == LayoutType.fill
+    assert decide_layout(has_facecam=True, reaction_energy=0.8) == LayoutType.split
+
+
 def test_one_euro_reduces_jitter_and_tracks_step():
     """Still input → smoothed; a real step → tracked (adaptive, not over-smoothed)."""
     from app.pipeline.reframe import one_euro_filter
@@ -3328,6 +3428,35 @@ def test_hook_analysis_classifies_strength_and_suggests():
     assert isinstance(r2["suggestion"], str)
     # Strong hooks should not produce an empty suggestion only when strong.
     assert "strength" in r2 and 0.0 <= r2["strength"] <= 1.0
+
+
+def test_kinetic_and_karaoke_caption_presets():
+    """Kinetic bounce and karaoke pulse presets are registered and format ASS with dynamic tags."""
+    from app.styles import all_styles, get_style
+    from app.models import Transcript, Word
+    from app.pipeline import captions, captionize
+
+    ids = {s.id for s in all_styles()}
+    assert "kinetic-bounce" in ids
+    assert "karaoke-pulse" in ids
+
+    k_style = get_style("kinetic-bounce")
+    assert k_style.kinetic is True
+
+    kp_style = get_style("karaoke-pulse")
+    assert kp_style.karaoke is True
+
+    words = [Word(t=0.0, d=0.4, text="CLUTCH!"), Word(t=0.5, d=0.3, text="VICTORY")]
+    cs_kinetic = captionize.build_caption_set(Transcript(words=words), 0.0, 1.0, "kinetic-bounce")
+    ass_kinetic = captions.build_ass(cs_kinetic, k_style, 1080, 1920)
+    # Check 4-phase underdamped spring bounce tags & rotational tilt on exclamation
+    assert "\\fscx75\\fscy75" in ass_kinetic
+    assert "\\fscx128\\fscy128" in ass_kinetic
+    assert "\\frz" in ass_kinetic
+
+    cs_karaoke = captionize.build_caption_set(Transcript(words=words), 0.0, 1.0, "karaoke-pulse")
+    ass_karaoke = captions.build_ass(cs_karaoke, kp_style, 1080, 1920)
+    assert "\\kf" in ass_karaoke
 
 
 def test_new_caption_presets_exist_and_are_distinct():

@@ -197,13 +197,17 @@ Format: Layer, Start, End, Style, MarginL, MarginR, MarginV, Effect, Text
             # the highlight flickers off. Always keep a visible minimum span.
             end = max(end, start + 0.08)
             events.append(_dialogue(line, idx, start, end, line_primary, highlight,
-                                    style.uppercase))
+                                    style.uppercase,
+                                    kinetic=getattr(style, "kinetic", False),
+                                    karaoke=getattr(style, "karaoke", False)))
 
     return head + "\n".join(events) + "\n"
 
 
-def _dialogue(line, active_idx, start, end, primary, highlight, upper) -> str:
+def _dialogue(line, active_idx, start, end, primary, highlight, upper,
+              *, kinetic: bool = False, karaoke: bool = False) -> str:
     parts: list[str] = []
+    dur_ms = max(50, int(round((end - start) * 1000)))
     for i, w in enumerate(line):
         token = _esc(w.text)
         if upper:
@@ -212,8 +216,37 @@ def _dialogue(line, active_idx, start, end, primary, highlight, upper) -> str:
         if emoji:
             token = f"{token} {emoji}"
         if i == active_idx:
-            # active word: highlight colour + a slight pop for the animated feel
-            parts.append(f"{{\\c{highlight}\\fscx112\\fscy112}}{token}{{\\c{primary}\\fscx100\\fscy100}}")
+            if kinetic:
+                # 4-phase underdamped spring bounce physics:
+                # 75% scale start -> 128% overshoot peak -> 94% undershoot recoil -> 105% secondary -> 100% rest.
+                if dur_ms >= 280:
+                    t1, t2, t3, t4 = 65, 135, 200, 280
+                else:
+                    t1 = max(1, int(dur_ms * 0.23))
+                    t2 = max(t1 + 1, int(dur_ms * 0.48))
+                    t3 = max(t2 + 1, int(dur_ms * 0.71))
+                    t4 = dur_ms
+                bounce = (
+                    f"\\fscx75\\fscy75"
+                    f"\\t(0,{t1},\\fscx128\\fscy128)"
+                    f"\\t({t1},{t2},\\fscx94\\fscy94)"
+                    f"\\t({t2},{t3},\\fscx105\\fscy105)"
+                    f"\\t({t3},{t4},\\fscx100\\fscy100)"
+                )
+                tilt = ""
+                if "!" in w.text or "?" in w.text or getattr(w, "emphasis", False):
+                    # Rotational tilt on high arousal / power word
+                    tt1 = max(1, int(dur_ms * 0.25))
+                    tt2 = max(tt1 + 1, int(dur_ms * 0.50))
+                    tilt = f"\\frz-4\\t(0,{tt1},\\frz3)\\t({tt1},{tt2},\\frz0)"
+                parts.append(f"{{\\c{highlight}{bounce}{tilt}}}{token}{{\\c{primary}\\fscx100\\fscy100\\frz0}}")
+            elif karaoke:
+                # Progressive karaoke sweep
+                dur_cs = max(1, int(round(w.d * 100)))
+                parts.append(f"{{\\kf{dur_cs}\\c{highlight}\\fscx108\\fscy108}}{token}{{\\c{primary}\\fscx100\\fscy100}}")
+            else:
+                # active word: highlight colour + a slight pop for the animated feel
+                parts.append(f"{{\\c{highlight}\\fscx112\\fscy112}}{token}{{\\c{primary}\\fscx100\\fscy100}}")
         elif getattr(w, "emphasis", False):
             # power word: stays highlighted + slightly larger for the whole line
             # (keyword emphasis) even when it isn't the currently-spoken word.

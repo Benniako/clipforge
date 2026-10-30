@@ -45,6 +45,10 @@ _EMOJI_FALLBACK: dict[str, str] = {
     # win / time
     "win": "🏆", "won": "🏆", "victory": "🏆", "finally": "🙌", "now": "⏰",
     "sieg": "🏆", "endlich": "🙌", "jetzt": "⏰",
+    # gaming / climax / action
+    "headshot": "🎯", "ace": "👑", "clutch": "🔥", "goal": "⚽", "tor": "⚽",
+    "boom": "💥", "scream": "😱", "legend": "🏆", "goat": "🐐", "gg": "🤝",
+    "clash": "⚔️", "sniper": "🎯", "kill": "💀", "boss": "👑",
 }
 
 _EMOJI_PATH = Path(__file__).parent / "emoji_map.json"

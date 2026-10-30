@@ -770,9 +770,9 @@ class Settings:
             return 0
         mode = (power_mode or "balanced").lower()
         if mode == "max_gpu":
-            return max(base, 48 if self.vram_mb >= 16000 else 24 if self.vram_mb >= 12000 else 16 if self.vram_mb >= 8000 else 8)
+            return max(base, 48 if self.vram_mb >= 16000 else 32 if self.vram_mb >= 12000 else 16 if self.vram_mb >= 8000 else 8)
         if mode == "quality":
-            return max(base, 16 if self.vram_mb >= 12000 else 8)
+            return max(base, 24 if self.vram_mb >= 12000 else 8)
         return base
 
     def vlm_options_for(self, power_mode: str | None) -> dict[str, float | int]:

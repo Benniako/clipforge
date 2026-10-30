@@ -186,5 +186,3 @@ def snap_dual(start: float, end: float, cuts: list[float],
             e = snapped_e
 
     return round(s, 3), round(e, 3)
-
-    return round(s, 3), round(e, 3)
