@@ -3644,6 +3644,7 @@ def test_adaptive_binarization_checks_monotone_rois():
     assert "THRESH_BINARY" in src  # fallback threshold method
 
 
+
 # --------------------------------------------------------------------------- #
 # Plugin base class
 # --------------------------------------------------------------------------- #
@@ -4330,6 +4331,22 @@ def test_store_summary_migration_adds_column_to_legacy_db():
     # No crash; the corrupt/empty legacy row is simply skipped.
     assert all(s.id != "legacy_1" for s in store.list_summaries())
 
+def test_scene_cuts_cache_subinterval():
+    from app.providers import scenes
+    scenes.clear_cache()
+    fake_src = "fake_video.mp4"
+    scenes._CACHE[fake_src] = (0.0, 100.0, 0.4, [10.0, 25.5, 50.0, 75.2, 90.0])
+
+    # Query a subinterval: returns cached cuts without invoking ffmpeg
+    sub_cuts = scenes.scene_cuts(fake_src, 20.0, 60.0, threshold=0.4)
+    assert sub_cuts == [25.5, 50.0]
+
+    # Query another subinterval
+    sub_cuts2 = scenes.scene_cuts(fake_src, 80.0, 95.0, threshold=0.4)
+    assert sub_cuts2 == [90.0]
+
+    scenes.clear_cache()
+
 
 if __name__ == "__main__":
     import sys
@@ -4350,3 +4367,16 @@ if __name__ == "__main__":
     print(f"\n{passed}/{len(fns)} unit tests passed"
           + (f", {failed} failed" if failed else ""), flush=True)
     sys.exit(1 if failed else 0)
+
+
+if __name__ == "__main__":
+    import sys
+    # Windows consoles default to a legacy code page that can't print "✓".
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
+    passed = 0
+    for fn in fns:
+        fn()
+        print(f"  ✓ {fn.__name__}")
+        passed += 1
+    print(f"\n{passed}/{len(fns)} unit tests passed")

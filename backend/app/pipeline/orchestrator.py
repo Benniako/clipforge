@@ -828,15 +828,28 @@ class Engine:
             # Snap each highlight's start to a nearby hard cut (killcam wipe,
             # replay transition) so the clip opens on a fresh shot.
             self._advance(project_id, 2, "Snapping to scene cuts…")
-            for clip in clips:
-                try:
-                    cuts = scenes_mod.scene_cuts(
-                        src_path, max(clip.start - 2.0, 0.0), clip.start + 2.0)
-                    ns = scenes_mod.snap(clip.start, cuts, window=1.5)
-                    if ns != clip.start and clip.end - ns >= 3.0:
-                        clip.start = round(ns, 3)
-                except Exception as e:
-                    log.warning("scene snap failed for %s: %s", clip.id, e)
+            try:
+                min_t = max(min(c.start for c in clips) - 2.0, 0.0) if clips else 0.0
+                max_t = max(c.start for c in clips) + 2.0 if clips else 0.0
+                # If clips are clustered or video <= 900s, detect once to avoid N ffmpeg decodes
+                if clips and (max_t - min_t <= 600.0 or info.duration <= 900.0):
+                    span_start = 0.0 if info.duration <= 900.0 else min_t
+                    span_end = info.duration if info.duration <= 900.0 else max_t
+                    all_cuts = scenes_mod.scene_cuts(src_path, span_start, span_end)
+                    for clip in clips:
+                        nearby = [c for c in all_cuts if max(clip.start - 2.0, 0.0) <= c <= clip.start + 2.0]
+                        ns = scenes_mod.snap(clip.start, nearby, window=1.5)
+                        if ns != clip.start and clip.end - ns >= 3.0:
+                            clip.start = round(ns, 3)
+                else:
+                    for clip in clips:
+                        cuts = scenes_mod.scene_cuts(
+                            src_path, max(clip.start - 2.0, 0.0), clip.start + 2.0)
+                        ns = scenes_mod.snap(clip.start, cuts, window=1.5)
+                        if ns != clip.start and clip.end - ns >= 3.0:
+                            clip.start = round(ns, 3)
+            except Exception as e:
+                log.warning("scene snap failed: %s", e)
             self._advance(project_id, 2, "Ranking highlights by intensity…")
             bscope = feedback.bound_scope("gameplay", project.settings.game_profile)
         else:

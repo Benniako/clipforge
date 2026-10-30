@@ -21,6 +21,13 @@ log = logging.getLogger("clipforge.scenes")
 # showinfo lines look like: "... n:  3 pts:  12345 pts_time:4.115 ..."
 _PTS = re.compile(r"pts_time:\s*(\d+(?:\.\d+)?)")
 
+_CACHE: dict[str, tuple[float, float, float, list[float]]] = {}
+
+
+def clear_cache() -> None:
+    """Clear cached scene cut detection results."""
+    _CACHE.clear()
+
 
 def parse_showinfo_times(stderr: str) -> list[float]:
     """Frame timestamps from ffmpeg ``showinfo`` filter output (stderr)."""
@@ -40,14 +47,24 @@ def scene_cuts(src: str, t0: float, t1: float, *,
     dur = t1 - t0
     if dur <= 0:
         return []
+    cached = _CACHE.get(src)
+    if cached is not None:
+        c_t0, c_t1, c_thresh, c_cuts = cached
+        if c_thresh == threshold and c_t0 <= t0 + 1e-4 and t1 <= c_t1 + 1e-4:
+            return [c for c in c_cuts if t0 <= c <= t1]
+
+    cuts: list[float] | None = None
     if get_settings().has_scenedetect:
         cuts = _scenedetect_cuts(src, max(t0, 0.0), dur)
-        if cuts is not None:
-            return cuts
-    err = ffmpeg.run(["-ss", f"{max(t0, 0.0):.3f}", "-i", src, "-t", f"{dur:.3f}",
-                      "-vf", f"select='gt(scene,{threshold})',showinfo",
-                      "-f", "null", "-"], timeout=120)
-    return [round(max(t0, 0.0) + t, 3) for t in parse_showinfo_times(err)]
+    if cuts is None:
+        err = ffmpeg.run(["-ss", f"{max(t0, 0.0):.3f}", "-i", src, "-t", f"{dur:.3f}",
+                          "-vf", f"select='gt(scene,{threshold})',showinfo",
+                          "-f", "null", "-"], timeout=120)
+        cuts = [round(max(t0, 0.0) + t, 3) for t in parse_showinfo_times(err)]
+
+    if cached is None or (dur > (cached[1] - cached[0])):
+        _CACHE[src] = (max(t0, 0.0), t1, threshold, list(cuts))
+    return cuts
 
 
 def _scenedetect_cuts(src: str, t0: float, dur: float) -> list[float] | None:

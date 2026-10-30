@@ -612,18 +612,43 @@ def find_events(wav_path: str, duration: float, *, window: float = 6.0,
         pairs: list[tuple[float, str]] = []
         with tempfile.TemporaryDirectory() as tmp:
             tmpdir = Path(tmp)
-            for i, start in enumerate(starts):
-                seg = tmpdir / f"w{i:04d}.wav"
-                dur = min(window, max(duration - start, 0.2))
-                if dur < 0.4:
-                    continue
-                try:
-                    ffmpeg.run(["-ss", f"{start:.3f}", "-i", wav_path,
-                                "-t", f"{dur:.3f}", "-ac", "1", "-ar", "48000",
-                                "-c:a", "pcm_s16le", str(seg)], timeout=45)
+            in_memory_sliced = False
+            try:
+                import soundfile as sf
+                # Convert source to standardized 48kHz 16-bit mono wav in one ffmpeg pass
+                std_wav = tmpdir / "std_48k.wav"
+                ffmpeg.run(["-i", wav_path, "-ac", "1", "-ar", "48000",
+                            "-c:a", "pcm_s16le", str(std_wav)], timeout=60)
+                data, sr = sf.read(str(std_wav))
+                for i, start in enumerate(starts):
+                    dur = min(window, max(duration - start, 0.2))
+                    if dur < 0.4:
+                        continue
+                    seg = tmpdir / f"w{i:04d}.wav"
+                    s_idx = max(0, int(round(start * sr)))
+                    e_idx = min(len(data), int(round((start + dur) * sr)))
+                    if e_idx - s_idx < int(0.4 * sr):
+                        continue
+                    sf.write(str(seg), data[s_idx:e_idx], sr, subtype="PCM_16")
                     pairs.append((start + dur / 2.0, str(seg)))
-                except Exception as e:
-                    log.debug("CLAP window extract failed at %.1fs: %s", start, e)
+                in_memory_sliced = True
+            except Exception as e:
+                log.debug("In-memory audio slicing fallback to per-window ffmpeg: %s", e)
+
+            if not in_memory_sliced:
+                for i, start in enumerate(starts):
+                    seg = tmpdir / f"w{i:04d}.wav"
+                    dur = min(window, max(duration - start, 0.2))
+                    if dur < 0.4:
+                        continue
+                    try:
+                        ffmpeg.run(["-ss", f"{start:.3f}", "-i", wav_path,
+                                    "-t", f"{dur:.3f}", "-ac", "1", "-ar", "48000",
+                                    "-c:a", "pcm_s16le", str(seg)], timeout=45)
+                        pairs.append((start + dur / 2.0, str(seg)))
+                    except Exception as e:
+                        log.debug("CLAP window extract failed at %.1fs: %s", start, e)
+
             rows = _clap_similarity_rows([p for _, p in pairs],
                                          profile=profile, language=language,
                                          positive_prompts=positive_prompts,
