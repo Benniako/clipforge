@@ -599,7 +599,7 @@ def _pick_thumbnail_at(out_path: Path, duration: float, default_at: float,
     except Exception:
         return default_at
 
-    n_samples = 7
+    n_samples = 3
     timestamps = [duration * (i + 1) / (n_samples + 1) for i in range(n_samples)]
     best_score = -1.0
     best_t = duration * 0.5  # fallback: center frame

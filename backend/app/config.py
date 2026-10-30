@@ -13,7 +13,6 @@ from __future__ import annotations
 import logging
 import os
 import shutil
-import time
 from dataclasses import dataclass, field
 from functools import lru_cache
 from importlib import metadata as importlib_metadata
@@ -186,15 +185,34 @@ def _ollama_tags_url(url: str, host: str, port: int) -> str:
 def _detect_ollama() -> tuple[bool, str]:
     """Return (available, model_names_string).
 
-    True when the local Ollama server is reachable via CLI or port probe.
+    True when the local Ollama server is reachable via port probe.
     Also returns a comma-separated list of installed models to show in the
     diagnostics panel so users can see exactly what AI models are ready.
+    Fast socket probe first to avoid 5s CLI hang when Ollama daemon is offline.
     """
+    import socket
+    url = os.environ.get("CLIPFORGE_OLLAMA_URL", "")
+    if url:
+        from urllib.parse import urlparse
+        parsed = urlparse(url)
+        host = parsed.hostname or "127.0.0.1"
+        port = parsed.port or 11434
+    else:
+        host = os.environ.get("CLIPFORGE_OLLAMA_HOST", "127.0.0.1")
+        port = int(os.environ.get("CLIPFORGE_OLLAMA_PORT", "11434"))
+
+    # Quick socket probe: if local daemon isn't running, return immediately (<100ms)
+    try:
+        sock = socket.create_connection((host, port), timeout=0.15)
+        sock.close()
+    except OSError:
+        return False, ""
+
     models = ""
     if shutil.which("ollama"):
         try:
             from ._util import run_subprocess
-            out = run_subprocess(["ollama", "list"], timeout=5, check=False, log_label="ollama")
+            out = run_subprocess(["ollama", "list"], timeout=2, check=False, log_label="ollama")
             lines = out.stdout.splitlines()
             if len(lines) > 1:
                 names = [l.split()[0] for l in lines[1:] if l.strip()]
@@ -202,48 +220,20 @@ def _detect_ollama() -> tuple[bool, str]:
                     models = ", ".join(names)
         except Exception as exc:
             log.debug("ollama list unavailable: %s", exc)
-        if models:
-            return True, models
-    import socket
-    try:
-        # CLIPFORGE_OLLAMA_URL is the canonical env var (used by llm.py and vlm.py).
-        # Parse host/port from it if set; fall back to individual vars for compat.
-        url = os.environ.get("CLIPFORGE_OLLAMA_URL", "")
-        if url:
-            from urllib.parse import urlparse
-            parsed = urlparse(url)
-            host = parsed.hostname or "127.0.0.1"
-            port = parsed.port or 11434
-        else:
-            host = os.environ.get("CLIPFORGE_OLLAMA_HOST", "127.0.0.1")
-            port = int(os.environ.get("CLIPFORGE_OLLAMA_PORT", "11434"))
-        # Retry with backoff: Ollama may still be initializing the GPU at server
-        # startup. The first socket probe can fail; retry 3x with 0.5s gaps.
-        _sock = None
-        for _retry in range(3):
-            try:
-                _sock = socket.create_connection((host, port), timeout=0.5)
-                break
-            except OSError:
-                time.sleep(0.5)
-        if _sock is None:
-            return False, models or ""
-        _sock.close()
-        if not models:
-            # Socket responded and CLI didn't; try HTTP API for model names.
-            try:
-                import json, urllib.request
-                with urllib.request.urlopen(
-                        _ollama_tags_url(url, host, port), timeout=1.5) as r:
-                    tags = json.loads(r.read()).get("models", [])
-                    names = [m.get("name", "") for m in tags if m.get("name")]
-                    if names:
-                        models = ", ".join(names)
-            except Exception:
-                pass
-        return True, models or "server running"
-    except OSError:
-        return False, ""
+
+    if not models:
+        try:
+            import json, urllib.request
+            with urllib.request.urlopen(
+                    _ollama_tags_url(url, host, port), timeout=1.5) as r:
+                tags = json.loads(r.read()).get("models", [])
+                names = [m.get("name", "") for m in tags if m.get("name")]
+                if names:
+                    models = ", ".join(names)
+        except Exception:
+            pass
+
+    return True, models or "server running"
 
 
 def _detect_reframe_engine() -> str:
