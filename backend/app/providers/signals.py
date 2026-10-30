@@ -470,6 +470,75 @@ def emotional_payoff(words: list[Word], lex: Lexicon = _EN) -> tuple[float, str]
     return _clamp(density * 9.0), "Clear emotional charge"
 
 
+def climax_narrative_pacing(words: list[Word], duration: float,
+                            lex: Lexicon = _EN) -> tuple[float, float, str]:
+    """Score adherence to the Golden Climax Interval (72%-88% of clip duration).
+
+    In short-form video retention dynamics (TikTok/Shorts), viral engagement is
+    maximized when the emotional or comedic punchline lands at 75%-85% into the
+    clip, leaving 2-4 seconds for reaction and clean resolution.
+
+    Returns:
+        (pacing_score 0..1, climax_timestamp, reason)
+    """
+    if not words or duration <= 0:
+        return 0.5, 0.0, ""
+
+    start_t = words[0].t
+
+    # Score each word or local window for climax energy
+    best_energy = -1.0
+    best_t = start_t + 0.75 * duration  # default fallback if completely flat
+
+    for w in words:
+        txt = w.text.strip().lower()
+        energy = 0.5
+        # Exclamations and punctuation punchlines
+        if w.text.strip().endswith("!"):
+            energy += 2.5
+        elif w.text.strip().endswith("?"):
+            energy += 1.2
+        # Lexical signals: emotion, payoff, controversy
+        clean_toks = _WORD_RE.findall(txt)
+        for t in clean_toks:
+            if t in lex.emotion:
+                energy += 2.0
+            if t in lex.payoff:
+                energy += 1.5
+            if t in lex.controversy:
+                energy += 1.2
+            if t in lex.quote:
+                energy += 0.8
+        if len(txt) > 7:
+            energy += 0.4
+
+        if energy > best_energy:
+            best_energy = energy
+            best_t = w.t + (w.end - w.t) * 0.5
+
+    # Normalized position tau*
+    tau = max(0.0, min(1.0, (best_t - start_t) / max(duration, 0.1)))
+
+    # Golden interval: [0.72, 0.88]
+    if 0.72 <= tau <= 0.88:
+        score = 1.0
+        reason = f"Climax lands at optimal {int(tau * 100)}% narrative arc"
+    elif 0.60 <= tau < 0.72:
+        score = 0.75 + (tau - 0.60) / 0.12 * 0.25
+        reason = f"Good build-up to climax at {int(tau * 100)}%"
+    elif 0.88 < tau <= 0.94:
+        score = 0.75 + (0.94 - tau) / 0.06 * 0.25
+        reason = f"Late punchline at {int(tau * 100)}%"
+    elif tau < 0.60:
+        score = max(0.15, 0.75 - (0.60 - tau) * 1.5)
+        reason = f"Climax occurs early at {int(tau * 100)}% (potential viewer drop-off)"
+    else:  # tau > 0.94
+        score = max(0.15, 0.75 - (tau - 0.94) * 8.0)
+        reason = f"Climax cut off too abruptly at {int(tau * 100)}%"
+
+    return round(_clamp(score), 4), round(best_t, 3), reason
+
+
 def standalone_clarity(words: list[Word], lex: Lexicon = _EN) -> tuple[float, str]:
     """Does it stand on its own — clean open, complete close?"""
     if not words:

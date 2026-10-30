@@ -73,6 +73,13 @@ def available() -> bool:
     return _cache.available()
 
 
+def unload_model() -> None:
+    """Unload active text model from Ollama VRAM."""
+    model = active_model()
+    if model:
+        _oc.unload_model(model)
+
+
 def active_model() -> str | None:
     """The model that will actually write titles, or None."""
     return _cache.active_model()

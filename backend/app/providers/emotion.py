@@ -31,7 +31,7 @@ def _load():
     try:
         from funasr import AutoModel
 
-        _model = AutoModel(model="iic/emotion2vec_plus_large",
+        _model = AutoModel(model="iic/emotion2vec_plus_base",
                             device=get_settings().device,
                             disable_update=True)
         log.info("emotion2vec loaded")
@@ -39,6 +39,20 @@ def _load():
         log.info("emotion2vec unavailable (%s)", e)
         _model = False
     return _model or None
+
+
+def unload_model() -> None:
+    """Unload FunASR / emotion2vec model to free GPU VRAM."""
+    global _model
+    _model = None
+    import gc
+    gc.collect()
+    try:
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:
+        pass
 
 
 def excitement(wav_path: str, start: float, end: float) -> float | None:

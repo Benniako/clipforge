@@ -35,12 +35,12 @@ _CUE_DIR = {"auto": "generic", "cs": "cs2", "fifa": "eafc", "valorant": "valoran
 #   w_transient    - reward sudden loud-after-quiet (jump scares, gunfire)
 #   w_sustain      - reward sustained loudness (goals/crowd roar, team-fights)
 _PROFILES: dict[str, dict] = {
-    "generic":      dict(thr_pct=82, min_gap_factor=0.6, lead_frac=0.45, w_transient=3.0,  w_sustain=6.0),
-    "valorant":     dict(thr_pct=80, min_gap_factor=0.45, lead_frac=0.50, w_transient=10.0, w_sustain=3.0),
-    "cs2":          dict(thr_pct=80, min_gap_factor=0.45, lead_frac=0.50, w_transient=10.0, w_sustain=3.0),
-    "eafc":         dict(thr_pct=85, min_gap_factor=0.85, lead_frac=0.55, w_transient=2.0,  w_sustain=13.0),
-    "rocketleague": dict(thr_pct=83, min_gap_factor=0.60, lead_frac=0.50, w_transient=6.0,  w_sustain=8.0),
-    "horror":       dict(thr_pct=88, min_gap_factor=0.90, lead_frac=0.65, w_transient=16.0, w_sustain=2.0),
+    "generic":      dict(thr_pct=82, min_gap_factor=0.6, lead_frac=0.75, w_transient=3.0,  w_sustain=6.0),
+    "valorant":     dict(thr_pct=80, min_gap_factor=0.45, lead_frac=0.76, w_transient=10.0, w_sustain=3.0),
+    "cs2":          dict(thr_pct=80, min_gap_factor=0.45, lead_frac=0.76, w_transient=10.0, w_sustain=3.0),
+    "eafc":         dict(thr_pct=85, min_gap_factor=0.85, lead_frac=0.78, w_transient=2.0,  w_sustain=13.0),
+    "rocketleague": dict(thr_pct=83, min_gap_factor=0.60, lead_frac=0.77, w_transient=6.0,  w_sustain=8.0),
+    "horror":       dict(thr_pct=88, min_gap_factor=0.90, lead_frac=0.80, w_transient=16.0, w_sustain=2.0),
 }
 _PROFILES["auto"] = _PROFILES["generic"]
 _PROFILES["cs"] = _PROFILES["cs2"]
@@ -301,11 +301,17 @@ def _pick_peaks(times, rms, *, settings: ImportSettings, profile: dict):
     return chosen, thr, floor
 
 
-def _timing_window(settings: ImportSettings, profile: dict) -> tuple[float, float]:
-    """Seconds before/after the event peak for gameplay clips."""
+def _timing_window(settings: ImportSettings, profile: dict, *,
+                   sustain_s: float = 0.0) -> tuple[float, float]:
+    """Seconds before/after the event peak for gameplay clips.
+    Enforces the Golden Climax Interval (72%-85% narrative pacing)."""
     target = (settings.min_len + settings.max_len) / 2.0
-    default_lead = target * profile["lead_frac"]
+    lead_frac = profile.get("lead_frac", 0.75)
+    default_lead = target * lead_frac
     default_tail = target - default_lead
+    if sustain_s > 0.0:
+        default_tail = max(default_tail, min(sustain_s + 1.2, target * 0.32))
+        default_lead = max(settings.min_len * 0.68, target - default_tail)
     lead = default_lead if settings.lead_seconds is None else float(settings.lead_seconds)
     tail = default_tail if settings.tail_seconds is None else float(settings.tail_seconds)
     lead = max(0.0, lead)
@@ -465,7 +471,7 @@ def detect_gameplay(src_path: str, info: MediaInfo, settings: ImportSettings,
         feats = {"intensity": round(pct, 4), "sustain": round(sustain, 4),
                  "transient": round(transient, 4),
                  "spikes": round(min(spikes / 5.0, 1.0), 4), "cue": 0.0,
-                 "reaction": 0.0}
+                 "reaction": 0.0, "climax_t": round(pt, 3)}
         score, factors = score_audio(feats, aw)
         clips.append(GameplayClip(start=round(start, 3), end=round(end, 3),
                                   score=score, factors=factors, peak_t=pt, features=feats))
@@ -649,9 +655,9 @@ def _ocr_clips(events: list, info: MediaInfo, settings: ImportSettings, *,
         return []
     target = (settings.min_len + settings.max_len) / 2.0
     if lead is None:
-        lead = target * 0.7    # banners are the payoff — bias to the build-up
+        lead = target * 0.75   # banners are the payoff — 75% setup
     if tail is None:
-        tail = max(target - lead, 2.0)
+        tail = max(target - lead, 2.5)
     out: list[GameplayClip] = []
     for e in events:
         if _is_menu_ocr_event(e):
@@ -691,9 +697,9 @@ def _audio_event_clips(events: list, info: MediaInfo, settings: ImportSettings, 
         return []
     target = (settings.min_len + settings.max_len) / 2.0
     if lead is None:
-        lead = target * 0.55
+        lead = target * 0.75   # audio climax — 75% setup
     if tail is None:
-        tail = max(target - lead, 2.0)
+        tail = max(target - lead, 2.5)
     out: list[GameplayClip] = []
     for e in events:
         start = max(0.0, e.t - lead)

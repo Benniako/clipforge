@@ -35,7 +35,9 @@ from ..providers import hashtags as hashtags_mod
 from ..providers import llm as llm_mod
 from ..providers import scenes as scenes_mod
 from ..providers import score as score_mod
+from ..providers import memory_supervisor
 from ..providers import transcribe as transcribe_mod
+from ..providers.torch_guard import TORCH_LOAD_LOCK
 from ..styles import get_style
 from . import captionize, classify, ingest
 from . import facecam as facecam_mod
@@ -341,12 +343,13 @@ class Engine:
                 continue
 
             try:
-                transcript = transcribe_mod.transcribe(
-                    job.audio_path,
-                    language=job.language,
-                    progress=job.progress,
-                    power_mode=job.power_mode,
-                )
+                with TORCH_LOAD_LOCK:
+                    transcript = transcribe_mod.transcribe(
+                        job.audio_path,
+                        language=job.language,
+                        progress=job.progress,
+                        power_mode=job.power_mode,
+                    )
                 job.future.set_result(transcript)
             except Exception as e:
                 job.future.set_exception(e)
@@ -823,6 +826,9 @@ class Engine:
                           kind="speech",
                           transcript_excerpt=" ".join(w.text for w in c.words)[:400])
                      for c in candidates]
+            for i, c in enumerate(candidates):
+                if getattr(c, "climax_t", 0.0) > 0:
+                    clips[i].features["climax_t"] = round(c.climax_t, 3)
             self._advance(project_id, 2, "Scoring clips…")
             for clip in clips:
                 words = [w for w in transcript.words
@@ -927,6 +933,7 @@ class Engine:
         try:
             from ..providers import vlm as vlm_mod
             if project.settings.use_vlm and vlm_mod.available():
+                memory_supervisor.vram_cleanup("pre_vlm")
                 self._advance(project_id, 2, "AI watching the clips…")
                 gcfg = getattr(project.settings, "game_config", None)
                 vlm_cues = getattr(gcfg, "vlm_visual_prompts", None) if gcfg else None
@@ -1127,21 +1134,25 @@ class Engine:
         self._raise_if_cancelled(project_id)
         transcript, wav_path, vad_warned = self._stage_transcribe(
             project_id, project, info, src_path)
+        memory_supervisor.vram_cleanup("stage_transcribe_done")
 
         # 1b. classify content type and find facecam if gameplay
         self._raise_if_cancelled(project_id)
         kind, cam_rect = self._stage_classify_and_cam(
             project_id, project, info, src_path, transcript, vad_warned)
+        memory_supervisor.vram_cleanup("stage_cam_done")
 
         # 2. detect + 3. score
         self._raise_if_cancelled(project_id)
         clips, ocr_labels, ocr_texts, bscope = self._stage_detect_and_score(
             project_id, project, info, src_path, transcript, wav_path, kind, cam_rect)
+        memory_supervisor.vram_cleanup("stage_detect_done")
 
         # 4. reframe
         self._raise_if_cancelled(project_id)
         self._stage_reframe(
             project_id, project, info, src_path, clips, kind, cam_rect, transcript)
+        memory_supervisor.vram_cleanup("stage_reframe_done")
 
         # 5. caption (+ tighten + hashtags)
         self._raise_if_cancelled(project_id)

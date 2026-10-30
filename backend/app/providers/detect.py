@@ -49,6 +49,7 @@ class Candidate:
     words: list[Word]
     salience: float
     title: str
+    climax_t: float = 0.0
 
     @property
     def duration(self) -> float:
@@ -71,8 +72,9 @@ def _segment_sentences(words: list[Word], *, pause: float = 0.65) -> list[Senten
     return sentences
 
 
-def _salience(words: list[Word], duration: float, st: ImportSettings,
-              lex: signals.Lexicon, weights: dict[str, float] | None = None) -> float:
+def _salience_and_climax(words: list[Word], duration: float, st: ImportSettings,
+                         lex: signals.Lexicon, weights: dict[str, float] | None = None) -> tuple[float, float]:
+    pacing_val, climax_t, _ = signals.climax_narrative_pacing(words, duration, lex)
     vals = {
         "hpi": signals.hook_potential_index(words, duration, lex)[0],
         "instant_hook": signals.instant_hook(words, lex)[0],
@@ -86,16 +88,23 @@ def _salience(words: list[Word], duration: float, st: ImportSettings,
         "list": signals.list_payoff(words, lex)[0],
         "controversy": signals.controversy(words, lex)[0],
         "qa": signals.qa_pattern(words, lex)[0],
+        "climax_pacing": pacing_val,
     }
-    if weights:  # personalised ranking — same weights as scoring
+    if weights:
         vals["list"] = signals.list_payoff(words, lex)[0]
-        return sum(v * weights.get(k, 0.0) for k, v in vals.items())
-    return (0.12 * vals["hpi"] + 0.12 * vals["instant_hook"] + 0.10 * vals["swipe"]
-            + 0.14 * vals["hook"] + 0.12 * vals["emotion"]
-            + 0.13 * vals["clarity"] + 0.08 * vals["quote"]
-            + 0.04 * vals["length"] + 0.04 * vals["pace"]
-            + 0.05 * vals["list"] + 0.03 * vals["controversy"]
-            + 0.03 * vals["qa"])
+        return sum(v * weights.get(k, 0.0) for k, v in vals.items()), climax_t
+    sal = (0.10 * vals["hpi"] + 0.10 * vals["instant_hook"] + 0.09 * vals["swipe"]
+           + 0.12 * vals["hook"] + 0.11 * vals["emotion"]
+           + 0.12 * vals["clarity"] + 0.08 * vals["quote"]
+           + 0.04 * vals["length"] + 0.04 * vals["pace"]
+           + 0.05 * vals["list"] + 0.03 * vals["controversy"]
+           + 0.03 * vals["qa"] + 0.09 * vals["climax_pacing"])
+    return sal, climax_t
+
+
+def _salience(words: list[Word], duration: float, st: ImportSettings,
+              lex: signals.Lexicon, weights: dict[str, float] | None = None) -> float:
+    return _salience_and_climax(words, duration, st, lex, weights)[0]
 
 
 def _make_title(words: list[Word]) -> str:
@@ -136,10 +145,10 @@ def detect_moments(words: list[Word], settings: ImportSettings,
                 continue
             if dur > settings.max_len:
                 break
-            sal = _salience(acc, dur, settings, lex, weights)
+            sal, climax_t = _salience_and_climax(acc, dur, settings, lex, weights)
             cands.append(Candidate(
                 start=acc[0].t, end=acc[-1].end, words=list(acc),
-                salience=sal, title=_make_title(acc),
+                salience=sal, title=_make_title(acc), climax_t=climax_t,
             ))
 
     # If sentences are so long nothing fits the window, fall back to fixed
@@ -173,9 +182,10 @@ def _window_fallback(words: list[Word], st: ImportSettings,
             j += 1
         span = words[i:j] or words[i:i + 1]
         dur = span[-1].end - span[0].t
+        sal, climax_t = _salience_and_climax(span, dur, st, lex, weights)
         out.append(Candidate(
             start=span[0].t, end=span[-1].end, words=list(span),
-            salience=_salience(span, dur, st, lex, weights), title=_make_title(span),
+            salience=sal, title=_make_title(span), climax_t=climax_t,
         ))
         # j == i when a single word already spans the target (bad ASR timestamp);
         # always advance or the loop never terminates.

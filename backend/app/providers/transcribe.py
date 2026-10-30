@@ -36,6 +36,11 @@ _wx_align: dict = {}  # language_code -> (align_model, metadata)
 _wx_diarize = None  # lazily-loaded diarization pipeline
 
 
+def has_active_model() -> bool:
+    """Return True if any ASR or alignment model is currently in memory."""
+    return _model is not None or _wx_model is not None or bool(_wx_align) or _wx_diarize is not None
+
+
 def unload_model() -> None:
     """Free the GPU ASR model (~3.5 GB VRAM) for other pipeline stages.
 

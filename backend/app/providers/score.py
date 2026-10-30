@@ -36,6 +36,7 @@ FEATURE_LABELS = {
     "list": "concrete payoff",
     "controversy": "controversial — drives comments",
     "qa": "question-answer pattern",
+    "climax_pacing": "75%-85% climax narrative pacing",
 }
 
 
@@ -60,6 +61,10 @@ def extract_features(words: list[Word], duration: float, settings: ImportSetting
         "list": signals.list_payoff(words, lex),
         "controversy": signals.controversy(words, lex),
         "qa": signals.qa_pattern(words, lex),
+        "climax_pacing": (
+            signals.climax_narrative_pacing(words, duration, lex)[0],
+            signals.climax_narrative_pacing(words, duration, lex)[2],
+        ),
     }
 
 

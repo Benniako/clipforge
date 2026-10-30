@@ -256,6 +256,23 @@ def _load_clap():
     return _clap or None
 
 
+def unload_model() -> None:
+    """Unload PANNs and CLAP audio models to free GPU VRAM."""
+    global _tagger, _clap
+    from .torch_guard import TORCH_LOAD_LOCK
+    with TORCH_LOAD_LOCK:
+        _tagger = None
+        _clap = None
+    import gc
+    gc.collect()
+    try:
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:
+        pass
+
+
 def _load_clap_checkpoint(model) -> None:
     """Load LAION-CLAP weights across package / PyTorch version mismatches."""
     try:

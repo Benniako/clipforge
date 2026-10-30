@@ -268,6 +268,8 @@ class Clip(BaseModel):
     # Optional loopability preview: prepend the final N seconds of the rendered
     # clip before the full clip starts. 0 disables it; editor offers 3-5s.
     loop_preview_seconds: float = 0.0
+    # Automated cold-open climax teaser loop (previews the 2s climax before main clip)
+    teaser_loop: bool = False
     # Absolute source spans whose words are kept OUT of captions — in-game
     # announcer/agent lines located by audio-cue matches.
     caption_mute: list[list[float]] = Field(default_factory=list)

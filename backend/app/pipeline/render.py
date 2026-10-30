@@ -56,31 +56,73 @@ def _effective_duration(clip: Clip) -> float:
     return sum(b - a for a, b in segments) if len(segments) >= 2 else clip.duration
 
 
+def _loop_preview_params(clip: Clip, eff_dur: float | None = None) -> tuple[float, float | None]:
+    """Usable (preview_seconds, preview_start_offset) for this rendered clip.
+
+    Supports both manual loop_preview_seconds and automated Cold-Open Climax
+    Teaser Loop synthesis (Roadmap Initiative 3.3). When climax_t is present and
+    satisfies separation preconditions (t* >= start + 3.0s and tau* >= 0.65),
+    extracts a 2.0s-2.3s micro-teaser around the climax peak.
+    """
+    raw = max(float(getattr(clip, "loop_preview_seconds", 0.0) or 0.0), 0.0)
+    dur = _effective_duration(clip) if eff_dur is None else max(eff_dur, 0.0)
+
+    feats = getattr(clip, "features", {}) or {}
+    climax_t = feats.get("climax_t", getattr(clip, "peak_t", None))
+    if raw <= 0.0 and getattr(clip, "teaser_loop", False):
+        raw = 2.2
+
+    if raw <= 0.0:
+        return 0.0, None
+
+    preview_s = round(min(raw, 5.0, max(dur - 0.25, 0.0)), 3)
+    preview_start = None
+    if climax_t is not None and dur >= 15.0:
+        climax_rel = float(climax_t) - clip.start
+        tau = climax_rel / max(dur, 0.1)
+        if climax_rel >= 3.0 and tau >= 0.65:
+            preview_start = max(0.0, min(dur - preview_s, climax_rel - 0.8))
+
+    return preview_s, preview_start
+
+
 def _loop_preview_seconds(clip: Clip, eff_dur: float | None = None) -> float:
     """Usable loop-preview seconds for this rendered clip."""
-    raw = max(float(getattr(clip, "loop_preview_seconds", 0.0) or 0.0), 0.0)
-    if raw <= 0.0:
-        return 0.0
-    dur = _effective_duration(clip) if eff_dur is None else max(eff_dur, 0.0)
-    return round(min(raw, 5.0, max(dur - 0.25, 0.0)), 3)
+    return _loop_preview_params(clip, eff_dur)[0]
 
 
 def _prepend_loop_preview(base_path: Path, out_path: Path, *,
                           preview_s: float, base_duration: float,
-                          fps: float, has_audio: bool) -> None:
-    """Write out_path as the rendered tail followed by the full rendered clip."""
-    start = max(base_duration - preview_s, 0.0)
+                          fps: float, has_audio: bool,
+                          preview_start: float | None = None) -> None:
+    """Write out_path as the preview/teaser followed by the full rendered clip.
+
+    Uses 7ms Tukey raised-cosine crossfades when audio is present to eradicate
+    boundary pop/click transients. Enforces platform ceiling budgeting so total
+    rendered video stays <= 60.0s.
+    """
+    max_ceiling = 60.0
+    if base_duration + preview_s > max_ceiling:
+        preview_s = max(0.0, min(preview_s, max_ceiling - base_duration))
+
+    if preview_start is None:
+        start = max(base_duration - preview_s, 0.0)
+    else:
+        start = max(0.0, min(base_duration - preview_s, preview_start))
+
     base_abs = os.path.abspath(str(base_path))
     out_abs = os.path.abspath(str(out_path))
     with tempfile.TemporaryDirectory() as tmp:
         graph = Path(tmp) / "loop.txt"
         if has_audio:
+            fade_teaser = audio_fade_filter(preview_s, fade_duration=0.007)
+            fade_base = audio_fade_filter(base_duration, fade_duration=0.007)
             graph.write_text(
-                "[0:v]setpts=PTS-STARTPTS[v0];"
-                "[0:a]asetpts=PTS-STARTPTS[a0];"
-                "[1:v]setpts=PTS-STARTPTS[v1];"
-                "[1:a]asetpts=PTS-STARTPTS[a1];"
-                "[v0][a0][v1][a1]concat=n=2:v=1:a=1[vo][ao]",
+                f"[0:v]setpts=PTS-STARTPTS[v0];"
+                f"[0:a]asetpts=PTS-STARTPTS,{fade_teaser}[a0];"
+                f"[1:v]setpts=PTS-STARTPTS[v1];"
+                f"[1:a]asetpts=PTS-STARTPTS,{fade_base}[a1];"
+                f"[v0][a0][v1][a1]concat=n=2:v=1:a=1[vo][ao]",
                 encoding="utf-8",
             )
             audio = ["-map", "[ao]", "-c:a", "aac", "-b:a", "128k", "-ac", "2"]
@@ -305,7 +347,7 @@ def render_clip(clip: Clip, src_path: str, info: MediaInfo, style: StyleTemplate
     out_abs = os.path.abspath(str(out_path))
     fps = min(info.fps or 30, 60)
     eff_dur = _effective_duration(clip)
-    preview_s = _loop_preview_seconds(clip, eff_dur)
+    preview_s, preview_start = _loop_preview_params(clip, eff_dur)
     if preview_s > 0.0:
         with tempfile.TemporaryDirectory() as loop_tmp:
             base_out = Path(loop_tmp) / "base.mp4"
@@ -317,7 +359,8 @@ def render_clip(clip: Clip, src_path: str, info: MediaInfo, style: StyleTemplate
                         background_music=background_music, ai_boost=ai_boost)
             _prepend_loop_preview(base_out, out_path, preview_s=preview_s,
                                   base_duration=eff_dur, fps=fps,
-                                  has_audio=info.has_audio)
+                                  has_audio=info.has_audio,
+                                  preview_start=preview_start)
         final_dur = eff_dur + preview_s
         at = min(max(final_dur * 0.35, 0.5), max(final_dur - 0.1, 0.0))
         _make_thumbnail(out_path, thumb_path, at=at, width=540,

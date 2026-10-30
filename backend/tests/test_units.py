@@ -4431,6 +4431,102 @@ def test_scene_cuts_cache_subinterval():
 
     scenes.clear_cache()
 
+def test_climax_narrative_pacing_and_gameplay_profiles():
+    from app.models import Word, ImportSettings
+    from app.providers import signals, detect_gameplay
+
+    lex = signals.get_lexicon("en")
+    # Clip duration: 30s. Optimal climax at t=23.25s (tau = 23.25/30 = 0.775 -> 77.5%)
+    words_optimal = [
+        Word(t=0.0, d=1.0, text="Today"),
+        Word(t=1.0, d=1.0, text="we"),
+        Word(t=2.0, d=2.0, text="test"),
+        Word(t=4.0, d=2.0, text="the"),
+        Word(t=6.0, d=4.0, text="impossible"),
+        Word(t=10.0, d=5.0, text="challenge"),
+        Word(t=15.0, d=5.0, text="and"),
+        Word(t=22.5, d=1.5, text="WON!"),
+        Word(t=24.5, d=2.5, text="that was"),
+        Word(t=27.0, d=2.5, text="great"),
+    ]
+    score_opt, t_opt, reason_opt = signals.climax_narrative_pacing(words_optimal, 30.0, lex)
+    assert score_opt >= 0.95
+    assert 0.72 <= (t_opt / 30.0) <= 0.88
+    assert "optimal" in reason_opt.lower()
+
+    # Early climax at t=5s (tau = 5/30 = 0.167)
+    words_early = [
+        Word(t=0.0, d=1.0, text="BOOM!"),
+        Word(t=1.5, d=1.5, text="Insane!"),
+        Word(t=5.0, d=5.0, text="now"),
+        Word(t=10.0, d=10.0, text="we"),
+        Word(t=20.0, d=9.0, text="wait"),
+    ]
+    score_early, t_early, reason_early = signals.climax_narrative_pacing(words_early, 30.0, lex)
+    assert score_early < 0.60
+    assert "early" in reason_early.lower()
+
+    # Profiles verification (Phase 2 Roadmap Initiative 2.3)
+    profiles = detect_gameplay._PROFILES
+    for name in ("generic", "valorant", "cs2", "eafc", "rocketleague", "horror"):
+        prof = profiles[name]
+        assert 0.72 <= prof["lead_frac"] <= 0.85, f"{name} lead_frac {prof['lead_frac']} not in golden range"
+
+    # Dynamic sustain test
+    st = ImportSettings(min_len=15, max_len=45)
+    lead, tail = detect_gameplay._timing_window(st, profiles["eafc"], sustain_s=4.5)
+    assert lead + tail <= 45.0
+    assert tail >= 4.5  # covers sustained crowd cheer/celebration
+
+
+def test_memory_supervisor_cascade_and_unloading():
+    from app.providers import memory_supervisor
+
+    info = memory_supervisor.get_vram_usage()
+    assert hasattr(info, "allocated_mb")
+    assert hasattr(info, "reserved_mb")
+    assert hasattr(info, "free_mb")
+
+    # Sequential cleanup transitions should execute without exception
+    cleaned_transcribe = memory_supervisor.vram_cleanup("stage_transcribe_done")
+    assert cleaned_transcribe is not None
+
+    cleaned_cam = memory_supervisor.vram_cleanup("stage_cam_done")
+    assert cleaned_cam is not None
+
+    cleaned_vlm = memory_supervisor.vram_cleanup("pre_vlm")
+    assert cleaned_vlm is not None
+
+    cleaned_detect = memory_supervisor.vram_cleanup("stage_detect_done")
+    assert cleaned_detect is not None
+
+    cleaned_reframe = memory_supervisor.vram_cleanup("stage_reframe_done")
+    assert cleaned_reframe is not None
+
+    # Budget verification
+    budget_ok = memory_supervisor.ensure_vram_budget("pre_vlm", required_mb=500.0)
+    assert budget_ok is True
+
+
+def test_climax_teaser_loop_and_platform_ceiling():
+    from app.models import Clip
+    from app.pipeline.render import _loop_preview_params
+
+    # Clip with climax at t=25.0s on a 30.0s clip (tau = 25/30 = 0.833 -> in golden interval)
+    clip = Clip(start=0.0, end=30.0, title="Epic play",
+                features={"climax_t": 25.0}, teaser_loop=True)
+    preview_s, preview_start = _loop_preview_params(clip, 30.0)
+    assert preview_s >= 2.0
+    assert preview_start is not None
+    # Climax is at 25.0s, teaser starts ~25.0 - 0.8 = 24.2s
+    assert 23.5 <= preview_start <= 25.0
+
+    # Clip with early climax at t=2.0s -> separation precondition fails (bypassed)
+    clip_early = Clip(start=0.0, end=30.0, title="Early",
+                      features={"climax_t": 2.0}, teaser_loop=True)
+    _, preview_start_early = _loop_preview_params(clip_early, 30.0)
+    assert preview_start_early is None  # bypassed climax teaser
+
 
 if __name__ == "__main__":
     import sys
@@ -4451,16 +4547,3 @@ if __name__ == "__main__":
     print(f"\n{passed}/{len(fns)} unit tests passed"
           + (f", {failed} failed" if failed else ""), flush=True)
     sys.exit(1 if failed else 0)
-
-
-if __name__ == "__main__":
-    import sys
-    # Windows consoles default to a legacy code page that can't print "✓".
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
-    passed = 0
-    for fn in fns:
-        fn()
-        print(f"  ✓ {fn.__name__}")
-        passed += 1
-    print(f"\n{passed}/{len(fns)} unit tests passed")

@@ -260,3 +260,21 @@ def detect_faces(img_bgr, *, min_size_frac: float = 0.03) -> list[tuple[int, int
         faces = haar.detectMultiScale(gray, scaleFactor=1.15, minNeighbors=5,
                                       minSize=(max(min_px, 30), max(min_px, 30)))
     return [tuple(int(v) for v in f) for f in faces]
+
+
+def unload_model() -> None:
+    """Unload SCRFD and YOLO-face models to free GPU VRAM."""
+    global _scrfd, _yolo_face, _yunet, _haar
+    with _lock:
+        _scrfd = None
+        _yolo_face = None
+        _yunet = None
+        _haar = None
+    import gc
+    gc.collect()
+    try:
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:
+        pass

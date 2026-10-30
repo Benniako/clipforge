@@ -119,6 +119,21 @@ def generate(*, model: str, prompt: str, timeout: float = 30.0,
     return None
 
 
+def unload_model(model: str, timeout: float = 5.0) -> bool:
+    """Ask Ollama to unload model from VRAM immediately (keep_alive: 0)."""
+    if not model:
+        return False
+    try:
+        url = _ollama_url() + "/api/generate"
+        payload = json.dumps({"model": model, "keep_alive": 0}).encode("utf-8")
+        req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.status == 200
+    except Exception as e:
+        log.debug("ollama unload for %s failed: %s", model, e)
+        return False
+
+
 def parse_score_reason(text: str, *, max_reason: int = 48,
                        clamp_reason_below: float | None = None,
                        negative_terms: tuple[str, ...] = ()) -> tuple[float, str] | None:
