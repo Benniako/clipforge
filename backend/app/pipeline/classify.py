@@ -85,15 +85,17 @@ def detect_content_type(src_path: str, info: MediaInfo,
     metrics = {"face_ratio": None if face is None else round(face, 3),
                "speech_coverage": round(speech, 3)}
 
-    # Heuristic decision tree. Bias toward "talking" when unsure, since the
-    # transcript detector degrades more gracefully than the gameplay one.
+    # Heuristic decision tree. If there's barely any face on screen (f < 0.15),
+    # continuous speech is commentary / announcer / gameplay voiceover, NOT a talking head.
     f = face if face is not None else 0.5
-    if speech >= 0.5:
-        kind = "talking"                      # dense narration (even audio-only)
-    elif f >= 0.4 and speech >= 0.2:
-        kind = "talking"                      # face on screen + real speech
-    elif speech < 0.15 or f < 0.15:
-        kind = "gameplay"                     # little speech or no face
+    if f < 0.15:
+        kind = "gameplay"                     # little/no face on screen: gameplay, sports, screencast
+    elif f >= 0.35 and speech >= 0.20:
+        kind = "talking"                      # dominant face + speech: podcast, talk, interview
+    elif speech >= 0.65 and f >= 0.20:
+        kind = "talking"                      # dense narration with visible speaker
+    elif speech < 0.15:
+        kind = "gameplay"                     # sparse speech
     else:
         kind = "talking"
     log.info("content-type=%s (%s)", kind, metrics)

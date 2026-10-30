@@ -61,10 +61,14 @@ _AUTO_MARKERS: dict[str, list[str]] = {
         "schießstand", "gewerte",
     ],
     "eafc": [
-        "auswechslung", "champions", "fussball", "vorlage", "abpfiff",
-        "pässe", "präzision", "mannschaft", "dribbling", "schuss",
-        "fifa", "eafc", "ultimate team", "kick-off", "karriere",
-        "trikot", "liga", "stadion", "saison", "wechsel",
+        "ea sports", "ea sports fc", "fc 24", "fc 25", "fc 26", "fc 27",
+        "fc24", "fc25", "fc26", "fc27", "eafc", "fifa", "ultimate team",
+        "division rivals", "weekend league", "squad battles", "career mode",
+        "pro clubs", "clubs", "rush", "kick off", "kick-off", "goal", "tor",
+        "champions", "fussball", "abpfiff", "mannschaft", "schuss",
+        "karriere", "trikot", "liga", "stadion", "saison", "penalty",
+        "half time", "full time", "extra time", "stoppage time",
+        "auswechslung", "vorlage", "pässe", "präzision", "dribbling",
         "bewertung", "gesamt", "temp", "sprint",
     ],
     "cs2": [
@@ -156,12 +160,21 @@ _GW_FACTOR = {
 REACTION_WEIGHT = 0.2
 CONFIRM_WINDOW = 3.0
 MENU_CONTEXT_WINDOW = 5.0
-MENU_OCR_LABELS = {"menu"}
+MENU_OCR_LABELS = {"menu", "substitution"}
 MENU_OCR_WORDS = {
     "settings", "inventory", "main menu", "menu", "lobby", "store", "shop",
     "collection", "loadout", "agent select", "matchmaking", "einstellungen",
     "inventar", "hauptmenu", "hauptmenue", "hauptmenü", "menue", "menü",
     "laden", "sammlung", "ausruestung", "ausrüstung", "agenten",
+    # EA FC / FIFA menu, squad, tactics & hub keywords
+    "team-management", "team taktiken", "profi-rollen", "taktik bearbeiten",
+    "ansicht wechseln", "spielertausch", "tutorials", "aufteilung", "fc hub",
+    "transfermarkt", "zentrale", "modi", "online draft", "einzelspieler",
+    "moments", "aufgaben-fortschritt", "dein aufgaben-fortschritt", "ultimate team",
+    "chemie", "ges-chemie", "profi-info", "squad battles", "career mode",
+    "karriere", "karrieremodus", "rivals", "champions", "weekend league",
+    "anstoß", "kick-off", "playstyles", "chemie-stil", "trainer", "verträge",
+    "active squad", "player bio", "taktik", "zuweisungen", "auswechslungen",
 }
 
 
@@ -600,6 +613,12 @@ def _is_menu_ocr_event(event) -> bool:
     if label in MENU_OCR_LABELS:
         return True
     detail = str(getattr(event, "text", "") or getattr(event, "detail", "") or "").lower()
+    # If labelled scoreboard, drop if it matches menu words or lacks actual score numbers
+    if label == "scoreboard":
+        if any(word in detail for word in MENU_OCR_WORDS):
+            return True
+        if not any(c.isdigit() for c in detail):
+            return True
     return any(word in detail for word in MENU_OCR_WORDS)
 
 
@@ -643,7 +662,15 @@ def _ocr_clips(events: list, info: MediaInfo, settings: ImportSettings, *,
             start = max(0.0, end - settings.min_len)
         if end - start > settings.max_len:
             start = max(0.0, end - settings.max_len)
-        score = int(round(max(1, min(99, 68 + e.confidence * 20))))
+        # Goals and critical events score top-tier; generic scoreboard changes score moderately
+        lbl = str(getattr(e, "label", "") or "").lower()
+        if lbl in {"goal", "victory", "ace", "clutch"}:
+            base_score = 78
+        elif lbl in {"scoreboard"}:
+            base_score = 64
+        else:
+            base_score = 68
+        score = int(round(max(1, min(99, base_score + e.confidence * 18))))
         m, s = divmod(int(e.t), 60)
         label = e.label.replace("_", " ").title()
         out.append(GameplayClip(
@@ -940,12 +967,32 @@ def _overlap(a: "GameplayClip", b: "GameplayClip") -> float:
 def _merge(priority: list["GameplayClip"], rest: list["GameplayClip"],
            limit: int, *, max_overlap: float = 0.4) -> list["GameplayClip"]:
     kept: list[GameplayClip] = []
-    for c in sorted(priority, key=lambda c: c.score, reverse=True) + \
-             sorted(rest, key=lambda c: c.score, reverse=True):
+    max_priority = max(1, int(limit * 0.5))  # guarantee at least 50% slots for raw audio gameplay
+    priority_sorted = sorted(priority, key=lambda c: c.score, reverse=True)
+    rest_sorted = sorted(rest, key=lambda c: c.score, reverse=True)
+
+    # 1. Take corroborated / audio-backed priority events first
+    for c in priority_sorted:
+        if c.features.get("corroborated") or c.features.get("supporting_audio"):
+            if all(_overlap(c, k) <= max_overlap for k in kept):
+                kept.append(c)
+            if len(kept) >= max_priority:
+                break
+
+    # 2. Add top audio energy highlights (real goals, screamers, crowd roars)
+    for c in rest_sorted:
         if all(_overlap(c, k) <= max_overlap for k in kept):
             kept.append(c)
         if len(kept) >= limit:
             break
+
+    # 3. Fill any remaining slots with other priority events (if slots remain)
+    for c in priority_sorted:
+        if c not in kept and all(_overlap(c, k) <= max_overlap for k in kept):
+            kept.append(c)
+        if len(kept) >= limit:
+            break
+
     return kept
 
 

@@ -680,6 +680,137 @@ def find_events(wav_path: str, duration: float, *, window: float = 6.0,
         return []
 
 
+def batch_event_scores(wav_path: str, spans: list[tuple[float, float]], *,
+                       profile: str | None = None,
+                       language: str | None = None,
+                       positive_prompts: list[str] | tuple[str, ...] | None = None,
+                       negative_prompts: list[str] | tuple[str, ...] | None = None
+                       ) -> list[tuple[float, str] | None]:
+    """Batch-score audio spans for hype/crowd/action events.
+
+    Uses PANNs when available (accumulating sliced audio into an (N, samples)
+    array for a single GPU/CPU forward pass), then CLAP as a zero-shot fallback
+    for any spans that didn't trigger a PANNs event.
+    """
+    if not spans:
+        return []
+    if not available() or not wav_path:
+        return [None] * len(spans)
+
+    results: list[tuple[float, str] | None] = [None] * len(spans)
+    loaded = _load() if get_settings().has_audio_events else None
+
+    # 1. Batched PANNs inference
+    if loaded is not None:
+        try:
+            import numpy as np
+
+            tagger, labels = loaded
+            slices_32k: list[np.ndarray | None] = []
+
+            # Attempt fast in-memory slicing via soundfile
+            try:
+                import soundfile as sf
+                with sf.SoundFile(wav_path) as sf_in:
+                    sr = sf_in.samplerate
+                    total_frames = len(sf_in)
+                    for start, end in spans:
+                        dur = max(end - start, 0.2)
+                        s_idx = max(0, min(total_frames, int(round(start * sr))))
+                        e_idx = max(0, min(total_frames, int(round((start + dur) * sr))))
+                        if e_idx <= s_idx:
+                            slices_32k.append(None)
+                            continue
+                        sf_in.seek(s_idx)
+                        raw = sf_in.read(e_idx - s_idx, dtype="float32")
+                        if raw.ndim > 1:
+                            raw = np.mean(raw, axis=1)
+                        if sr != 32000:
+                            from scipy.signal import resample_poly
+                            raw = resample_poly(raw, 32000, sr).astype(np.float32)
+                        slices_32k.append(raw)
+            except Exception as e:
+                log.debug("soundfile batch slice failed, fallback to ffmpeg: %s", e)
+                slices_32k = []
+                import tempfile
+                import wave
+                from pathlib import Path
+                from ..media import ffmpeg
+
+                with tempfile.TemporaryDirectory() as tmp:
+                    tmp_dir = Path(tmp)
+                    for i, (start, end) in enumerate(spans):
+                        dur = max(end - start, 0.2)
+                        seg = tmp_dir / f"panns_{i:04d}.wav"
+                        try:
+                            ffmpeg.run(["-ss", f"{max(start, 0):.3f}", "-i", wav_path,
+                                        "-t", f"{dur:.3f}", "-ac", "1",
+                                        "-ar", "32000", "-c:a", "pcm_s16le", str(seg)], timeout=60)
+                            with wave.open(str(seg), "rb") as wf:
+                                raw_bytes = wf.readframes(wf.getnframes())
+                            arr = np.frombuffer(raw_bytes, dtype=np.int16).astype(np.float32) / 32768.0
+                            slices_32k.append(arr if arr.size else None)
+                        except Exception:
+                            slices_32k.append(None)
+
+            chunk_size = 32
+            for offset in range(0, len(spans), chunk_size):
+                chunk_entries = [
+                    (offset + idx, arr)
+                    for idx, arr in enumerate(slices_32k[offset:offset + chunk_size])
+                    if arr is not None and arr.size > 0
+                ]
+                if not chunk_entries:
+                    continue
+                max_len = max(len(arr) for _, arr in chunk_entries)
+                batch_arr = np.zeros((len(chunk_entries), max_len), dtype=np.float32)
+                for b_i, (_, arr) in enumerate(chunk_entries):
+                    batch_arr[b_i, :len(arr)] = arr
+
+                clipwise, _ = tagger.inference(batch_arr)
+                for b_i, (orig_idx, _) in enumerate(chunk_entries):
+                    probs = {labels[k]: float(clipwise[b_i][k]) for k in range(len(labels))}
+                    pann = reduce_scores(probs)
+                    if pann is not None:
+                        results[orig_idx] = pann
+        except Exception as e:
+            log.warning("batched PANNs scoring failed (%s)", e)
+
+    # 2. CLAP fallback for any spans not scored by PANNs
+    missing_indices = [i for i, r in enumerate(results) if r is None]
+    if missing_indices and get_settings().has_clap:
+        try:
+            import tempfile
+            from pathlib import Path
+            from ..media import ffmpeg
+
+            with tempfile.TemporaryDirectory() as tmp:
+                tmp_dir = Path(tmp)
+                clap_segs: list[tuple[int, str]] = []
+                for orig_idx in missing_indices:
+                    start, end = spans[orig_idx]
+                    dur = max(end - start, 0.4)
+                    seg = tmp_dir / f"clap_{orig_idx:04d}.wav"
+                    try:
+                        ffmpeg.run(["-ss", f"{max(start, 0):.3f}", "-i", wav_path,
+                                    "-t", f"{dur:.3f}", "-ac", "1",
+                                    "-ar", "48000", "-c:a", "pcm_s16le", str(seg)], timeout=45)
+                        clap_segs.append((orig_idx, str(seg)))
+                    except Exception as e:
+                        log.debug("CLAP segment extraction failed at span %d: %s", orig_idx, e)
+
+                for orig_idx, seg_path in clap_segs:
+                    cres = _clap_score(seg_path, profile=profile, language=language,
+                                       positive_prompts=positive_prompts,
+                                       negative_prompts=negative_prompts)
+                    if cres is not None:
+                        results[orig_idx] = cres
+        except Exception as e:
+            log.warning("CLAP fallback scoring failed (%s)", e)
+
+    return results
+
+
 def event_score(wav_path: str, start: float, end: float, *,
                 profile: str | None = None,
                 language: str | None = None,
@@ -691,44 +822,10 @@ def event_score(wav_path: str, start: float, end: float, *,
     Uses PANNs when available, then CLAP as a zero-shot fallback. Reads only the
     clip's span so it stays cheap per clip.
     """
-    if not available():
-        return None
-    try:
-        import tempfile
-        from pathlib import Path
-
-        import numpy as np
-
-        from ..media import ffmpeg
-
-        with tempfile.TemporaryDirectory() as tmp:
-            seg = Path(tmp) / "seg.wav"
-            # PANNs likes 32 kHz mono; CLAP accepts normal wav files too.
-            ffmpeg.run(["-ss", f"{max(start, 0):.3f}", "-i", wav_path,
-                        "-t", f"{max(end - start, 0.2):.3f}", "-ac", "1",
-                        "-ar", "32000", "-c:a", "pcm_s16le", str(seg)], timeout=60)
-            loaded = _load() if get_settings().has_audio_events else None
-            if loaded is not None:
-                import wave
-
-                tagger, labels = loaded
-                with wave.open(str(seg), "rb") as wf:
-                    raw = wf.readframes(wf.getnframes())
-                audio = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
-                if audio.size:
-                    clipwise, _ = tagger.inference(audio[None, :])
-                    probs = {labels[i]: float(clipwise[0][i]) for i in range(len(labels))}
-                    pann = reduce_scores(probs)
-                    if pann is not None:
-                        return pann
-            if get_settings().has_clap:
-                return _clap_score(str(seg), profile=profile, language=language,
-                                   positive_prompts=positive_prompts,
-                                   negative_prompts=negative_prompts)
-            return None
-    except Exception as e:
-        log.warning("audio-event scoring failed (%s)", e)
-        return None
+    scores = batch_event_scores(
+        wav_path, [(start, end)], profile=profile, language=language,
+        positive_prompts=positive_prompts, negative_prompts=negative_prompts)
+    return scores[0] if scores else None
 
 
 def apply_event_bonus(score: int, factors: list[ScoreFactor],

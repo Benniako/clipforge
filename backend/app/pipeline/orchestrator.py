@@ -7,6 +7,7 @@ stage and every finished clip so the UI shows real, legible movement rather than
 a fake spinner.
 """
 from __future__ import annotations
+from typing import Any
 
 from collections.abc import Callable
 import concurrent.futures
@@ -607,38 +608,10 @@ class Engine:
             with self._pause_condition:
                 self._pause_condition.wait(timeout=0.5)
 
-    # -- the pipeline -----------------------------------------------------
-    def _process(self, project_id: str) -> None:
-        project = store.get(project_id)
-        if project is None or project.source is None:
-            raise RuntimeError("project or source media missing")
-        self._wait_if_paused(project_id)
-        self._raise_if_cancelled(project_id)
-        # Record wall-clock start so the "done" message can show elapsed time.
-        self._start_times[project_id] = time.monotonic()
-        settings = get_settings()
-        src_path = str(settings.media_dir / project.source.path)
-        info = ffmpeg.probe(src_path)
-
-        # Auto-detect game profile from on-screen text when set to "auto"
-        # (overrides the static "auto"→"generic" alias so cue templates, audio
-        # weights, and OCR lexicon matches are game-specific from the start).
-        if project.settings.game_profile == "auto":
-            try:
-                detected = gameplay_mod.auto_detect_profile(src_path)
-                if detected and detected != "generic":
-                    with store.mutate(project_id) as p:
-                        p.settings.game_profile = detected
-                    project.settings.game_profile = detected
-                    log.info("detected game_profile=%s from on-screen text for %s",
-                             detected, project_id)
-            except Exception as e:
-                log.debug("game profile auto-detect skipped: %s", e)
-
-        # 1. transcribe ---------------------------------------------------
-        # The wav lives in the project dir (not a TemporaryDirectory) so the
-        # gameplay detector can reuse it — decoding an hour-long VOD's audio
-        # twice costs minutes. Deleted as soon as detection is done.
+    # -- the pipeline stages ----------------------------------------------
+    def _stage_transcribe(self, project_id: str, project, info, src_path: str
+                          ) -> tuple[Transcript, str | None, bool]:
+        """Stage 1: Extract audio, run ASR, refine word boundaries with VAD."""
         self._advance(project_id, 0, "Extracting audio…", force=True)
         wav = ingest.project_dir(project_id) / "audio16k.wav"
         wav_path: str | None = None
@@ -646,9 +619,6 @@ class Engine:
             ffmpeg.extract_audio_wav(src_path, wav)
             self._advance(project_id, 0, "Transcribing audio…", 0.02, force=True)
             wav_path = str(wav)
-            # Submit ASR to the dedicated GPU worker thread so other pipeline
-            # workers can start detection/scoring on other projects while this
-            # one transcribes (the ASR thread owns the GPU model exclusively).
             _asr_future = self.submit_asr(
                 project_id, wav_path,
                 language=project.settings.language,
@@ -656,25 +626,15 @@ class Engine:
                 progress=lambda f: self._advance(project_id, 0,
                                                  f"Transcribing… {int(f*100)}%", f),
             )
-            # The worker can do I/O work (probe info, VAD prep) while the ASR
-            # thread transcribes.  For now this is a no-op placeholder — the
-            # future result blocks until transcription finishes.
             try:
                 transcript = _asr_future.result()
             except CancelledProject:
-                raise  # let _loop() handle it as a cancellation
+                raise
             self._raise_if_cancelled(project_id)
         else:
-            # No audio track — skip ASR entirely, go straight to synthetic.
             transcript = transcribe_mod.synthetic_transcript(
                 src_path, lang=project.settings.language)
 
-        # Pin caption words to the *exact* speech with Silero VAD: clamp each
-        # word to its speech region and drop words stuck in silence, so captions
-        # start/stop precisely when the speaker is talking. VAD also strips
-        # Whisper's classic silence hallucinations ("thank you for watching").
-        # It's now a hard dep; if it's somehow absent we warn the user that
-        # captions may drift rather than fail silently.
         vad_absent_warned = False
         if wav_path and transcript.provider != "synthetic":
             from ..providers import vad as vad_mod
@@ -689,10 +649,6 @@ class Engine:
                 log.warning("VAD refine failed: %s", e)
             transcript.words = vad_mod.sanitize_word_timings(transcript.words)
 
-        # Light LLM proofread: fix individual misheard words while keeping
-        # every other word's timing and speaker intact. A single Ollama call
-        # per project (~2-5 s) — only fires when Ollama is available and the
-        # transcript is long enough to benefit.
         try:
             if len(transcript.words) >= 20:
                 from ..providers import correct as correct_mod
@@ -712,18 +668,27 @@ class Engine:
                     "Install it (pip install silero-vad) and re-process for "
                     "accurate captions.", severity="warning")
 
-        # Decide talking vs gameplay (auto-detect unless forced).
+        return transcript, wav_path, vad_absent_warned
+
+    def _stage_classify_and_cam(self, project_id: str, project, info, src_path: str,
+                                transcript: Transcript, vad_absent_warned: bool
+                                ) -> tuple[str, Any]:
+        """Stage 1b: Classify content type (talking vs gameplay) and detect facecam overlay."""
         forced = project.settings.content_type
         if forced == ContentType.auto:
-            self._advance(project_id, 1, "Analyzing footage…")
-            kind, _metrics = classify.detect_content_type(src_path, info, transcript)
+            prof = getattr(project.settings, "game_profile", "auto")
+            if prof and prof not in {"auto", "generic"}:
+                kind = "gameplay"
+            else:
+                self._advance(project_id, 1, "Analyzing footage…")
+                kind, _metrics = classify.detect_content_type(src_path, info, transcript)
         else:
             kind = forced.value
+
         synthetic_caption_warning = (
             kind == "talking" and info.has_audio
             and transcript.provider == "synthetic")
-        # Gameplay with a streamer cam: find the overlay once for the whole
-        # source — it drives the split/framed layouts and reaction scoring.
+
         cam_rect = None
         if kind == "gameplay" and project.settings.facecam_layout != "off":
             self._advance(project_id, 1, "Looking for a facecam…")
@@ -731,16 +696,14 @@ class Engine:
                 cam_rect = facecam_mod.detect_facecam(src_path, info.duration)
             except Exception as e:
                 log.warning("facecam detection failed: %s", e)
+
         with store.mutate(project_id) as p:
             p.content_type = kind
             p.facecam = cam_rect
-            # Preserve warnings from earlier stages (e.g. VAD not installed)
-            # when resetting the warning list at stage boundaries.
             _existing_warnings = list(p.warnings)
             p.warnings = []
             if _existing_warnings:
                 p.warnings.extend(_existing_warnings)
-            # Placeholder captions are a real degradation — flag as error.
             if synthetic_caption_warning:
                 p.add_warning(
                     "Speech recognition didn't run, so captions are placeholder "
@@ -748,7 +711,13 @@ class Engine:
                     "model), then re-process.", severity="error",
                     code="synthetic_transcript")
 
-        # 2. detect + 3. score (branch on content type) -------------------
+        return kind, cam_rect
+
+    def _stage_detect_and_score(self, project_id: str, project, info, src_path: str,
+                                transcript: Transcript, wav_path: str | None,
+                                kind: str, cam_rect: Any
+                                ) -> tuple[list[Clip], list[str], list[str], Any]:
+        """Stage 2 + 3: Highlight moment detection, scoring, audio events & visual boost."""
         plat = project.settings.platform.value
         ocr_labels: list[str] = []
         ocr_texts: list[str] = []
@@ -769,17 +738,12 @@ class Engine:
                         p.add_warning(msg, severity="warn", code="detector")
             if not gcs:
                 raise RuntimeError("no highlights found in this footage")
-            # Collect OCR labels + raw text from detected on-screen text
-            # events so hashtags capture both the canonical marker (e.g.
-            # "victory") AND the actual in-game text ("Ace", "1v5 Clutch")
-            # the transcript alone doesn't contain.
+
             ocr_labels = [e.label for e in detected
                           if getattr(e, "source", "") == "ocr" and e.label]
             ocr_texts = [e.detail for e in detected
                          if getattr(e, "source", "") == "ocr" and e.detail]
-            # Learn reusable AUDIO cues from the on-screen (OCR) events: snip the
-            # game sound at each banner and save it, so the cheap audio matcher
-            # catches that event on future videos even with OCR off.
+
             if info.has_audio and project.settings.cue_learning:
                 ocr_evs = [e for e in detected if getattr(e, "source", "") == "ocr"]
                 if ocr_evs:
@@ -792,14 +756,11 @@ class Engine:
                                      len(learned), ", ".join(learned))
                     except Exception as e:
                         log.warning("cue learning failed: %s", e)
+
             if cam_rect is not None:
-                # Re-score with the facecam reaction folded in (cue-matched
-                # clips keep their exact-sound score).
                 self._advance(project_id, 2, "Reading facecam reactions…")
                 gweights = gameplay_mod.with_reaction(gweights)
                 for gc in gcs:
-                    # Exact-event clips (cue / OCR) keep their guaranteed score —
-                    # the audio scorer would zero them out (their RMS feats are 0).
                     if gc.features.get("cue", 0.0) > 0.0 or gc.features.get("ocr", 0.0) > 0.0:
                         continue
                     r = facecam_mod.reaction_energy(src_path, cam_rect,
@@ -808,29 +769,26 @@ class Engine:
                         gc.features["reaction"] = round(r, 4)
                     gc.score, gc.factors = gameplay_mod.score_audio(
                         gc.features, gweights)
+
             clips = []
             real_speech = transcript.provider != "synthetic"
             for gc in gcs:
                 words = ([w for w in transcript.words if w.end > gc.start and w.t < gc.end]
-                         if real_speech else [])  # never carry filler text
+                         if real_speech else [])
                 features = dict(gc.features)
                 features["evidence_t"] = round(float(gc.peak_t), 3)
                 clips.append(Clip(
                     start=gc.start, end=gc.end, title=gc.title,
                     kind="gameplay", score=gc.score, factors=gc.factors,
                     features=features,
-                    # Mute captions around matched game sounds — the announcer
-                    # saying "Double Kill" isn't the streamer talking.
                     caption_mute=[[round(t - 0.4, 3), round(t + 2.6, 3)]
                                   for t in gc.cue_ts],
                     transcript_excerpt=" ".join(w.text for w in words)[:400]))
-            # Snap each highlight's start to a nearby hard cut (killcam wipe,
-            # replay transition) so the clip opens on a fresh shot.
+
             self._advance(project_id, 2, "Snapping to scene cuts…")
             try:
                 min_t = max(min(c.start for c in clips) - 2.0, 0.0) if clips else 0.0
                 max_t = max(c.start for c in clips) + 2.0 if clips else 0.0
-                # If clips are clustered or video <= 900s, detect once to avoid N ffmpeg decodes
                 if clips and (max_t - min_t <= 600.0 or info.duration <= 900.0):
                     span_start = 0.0 if info.duration <= 900.0 else min_t
                     span_end = info.duration if info.duration <= 900.0 else max_t
@@ -849,10 +807,10 @@ class Engine:
                             clip.start = round(ns, 3)
             except Exception as e:
                 log.warning("scene snap failed: %s", e)
+
             self._advance(project_id, 2, "Ranking highlights by intensity…")
             bscope = feedback.bound_scope("gameplay", project.settings.game_profile)
         else:
-            # Personalised weights from prior feedback (cold-start safe).
             weights = feedback.learned_weights(
                 feedback.score_scope("talking", plat), score_mod.base_weights(project.settings))
             self._advance(project_id, 1, "Scanning transcript for moments…")
@@ -871,15 +829,10 @@ class Engine:
                 clip.score, clip.factors, clip.features = score_mod.score_clip(
                     words, clip.duration, project.settings,
                     lang=transcript.language, weights=weights)
-                # Reward a clean, loopable ending (rewatch signal).
                 clip.score, clip.factors = score_mod.apply_replay_bonus(
                     clip.score, clip.factors, words, clip.duration,
                     lang=transcript.language)
-            # Optional: a local LLM (Ollama) gives a second opinion on virality
-            # (re-ranks within ±12 pts, explainable) and writes sharper titles —
-            # concurrent, budgeted so a slow model can't stall the pipeline.
-            # When a tool-calling agent is wired (agent_virality), its multi-step
-            # read (OCR + audio + facecam) takes priority over the single-shot LLM.
+
             if llm_mod.available():
                 self._advance(project_id, 2, "AI reading virality…")
                 reads = llm_mod.score_virals(
@@ -893,14 +846,13 @@ class Engine:
                     [c.transcript_excerpt for c in clips], lang=transcript.language)
                 for i, t in titles.items():
                     clips[i].title = t
-            # Fallback: auto-generate titles for clips that still have none.
+
             if llm_mod.available():
                 for clip in clips:
                     if not clip.title:
                         clip.title = llm_mod.generate_title(
                             clip.transcript_excerpt, lang=transcript.language)
-            # Hook/first-3s analysis: warn the user if their opener is weak.
-            # Gated by the AI Boost hookCheck toggle (default on).
+
             if clips and project.settings.ai_boost.hookCheck:
                 first = clips[0]
                 hook_words = [w for w in transcript.words
@@ -913,9 +865,7 @@ class Engine:
                             severity="warning", code="hook")
             bscope = feedback.bound_scope("talking", plat)
 
-        # Optional speech-emotion excitement (emotion2vec): a high-arousal
-        # delivery — laughter, hype, rage — is the short-form viral driver, so
-        # fold it in as an explainable factor. Cheap per-clip, no-op when absent.
+        settings = get_settings()
         if settings.has_emotion and wav_path:
             try:
                 from ..providers import emotion as emo_mod
@@ -928,9 +878,7 @@ class Engine:
             except Exception as e:
                 log.warning("emotion scoring failed: %s", e)
 
-        # Optional audio-event detection (PANNs): hear the *sounds* that signal a
-        # highlight — cheering, laughter, applause, an explosion — and fold them
-        # in as an explainable factor. Zero-shot, so it needs no per-game cue.
+        # Batched audio-event detection (PANNs / CLAP)
         from ..providers import audio_events as ae_mod
         if project.settings.use_audio_events and ae_mod.available() and wav_path:
             try:
@@ -938,31 +886,26 @@ class Engine:
                 aecfg = getattr(project.settings, "game_config", None)
                 ae_pos = getattr(aecfg, "audio_prompts", None) if aecfg else None
                 ae_neg = getattr(aecfg, "audio_negative_prompts", None) if aecfg else None
-                for clip in clips:
-                    # Skip clips born from an audio event already — they carry
-                    # the CLAP signal in their baseline score, so a second
-                    # apply_event_bonus would double-count the same evidence.
-                    if clip.features.get("audio_event", 0.0) > 0.0:
-                        continue
-                    res = ae_mod.event_score(
-                        wav_path, clip.start, clip.end,
+                eligible = [c for c in clips if c.features.get("audio_event", 0.0) <= 0.0]
+                if eligible:
+                    spans = [(c.start, c.end) for c in eligible]
+                    batch_res = ae_mod.batch_event_scores(
+                        wav_path, spans,
                         profile=project.settings.game_profile,
                         language=project.settings.language,
                         positive_prompts=ae_pos, negative_prompts=ae_neg)
-                    if res is not None:
-                        hype, reason = res
-                        clip.score, clip.factors = ae_mod.apply_event_bonus(
-                            clip.score, clip.factors, hype, reason)
-                        clip.features["audio_event"] = round(hype, 4)
+                    for clip, res in zip(eligible, batch_res):
+                        if res is not None:
+                            hype, reason = res
+                            clip.score, clip.factors = ae_mod.apply_event_bonus(
+                                clip.score, clip.factors, hype, reason)
+                            clip.features["audio_event"] = round(hype, 4)
             except Exception as e:
                 log.warning("audio-event scoring failed: %s", e)
 
-        wav.unlink(missing_ok=True)  # audio no longer needed past detection
+        wav = ingest.project_dir(project_id) / "audio16k.wav"
+        wav.unlink(missing_ok=True)
 
-        # Optional vision-language second opinion (Ollama VLM): score how each
-        # clip *looks* from a few keyframes — expression, action, framing — and
-        # blend it like the text read (bounded ±, explainable). No-op without a
-        # local vision model.
         try:
             from ..providers import vlm as vlm_mod
             if project.settings.use_vlm and vlm_mod.available():
@@ -981,7 +924,6 @@ class Engine:
         except Exception as e:
             log.warning("VLM scoring failed: %s", e)
 
-        # Learned boundary correction — nudge toward where you actually trim.
         cs, ce = feedback.boundary_correction(bscope)
         for clip in clips:
             clip.raw_start, clip.raw_end = clip.start, clip.end
@@ -991,12 +933,8 @@ class Engine:
                 if ne - ns >= max(project.settings.min_len * 0.5, 1.0):
                     clip.start, clip.end = round(ns, 3), round(ne, 3)
 
-        # ASR word timestamps can drift past EOF; a span beyond the file renders
-        # empty or fails, so clamp every clip to the real media duration.
         if info.duration > 0:
             for clip in clips:
-                # Clamp both ends — a start past EOF would render an empty span
-                # before the duration filter below could drop it.
                 clip.start = round(max(0.0, min(clip.start, info.duration)), 3)
                 clip.end = round(min(clip.end, info.duration), 3)
             clips = [c for c in clips if c.end - c.start >= 1.0]
@@ -1008,11 +946,7 @@ class Engine:
             gameplay_mod.apply_title_fallbacks(clips)
 
         clips.sort(key=lambda c: c.score, reverse=True)
-        # B-roll candidate selection: find strong visual moments (scene cuts and
-        # high-motion regions) that could serve as PiP cutaways during static
-        # talking spans. The actual render-time composite is future work — the
-        # selection runs here so the data is available on each clip as
-        # ``clip.broll_overlay``.
+
         if kind == "talking" and settings.has_scenedetect:
             try:
                 from . import broll as broll_mod
@@ -1021,15 +955,11 @@ class Engine:
                     cands = list(broll_mod.candidates_from_cuts(
                         all_cuts, window=1.5, clip_end=info.duration))
                     for clip in clips:
-                        # Pick the B-roll window closest to the middle of the
-                        # clip but at least 2s in (viewer has settled after the
-                        # hook). Skip clips shorter than 5s.
                         dur = clip.end - clip.start
                         if dur < 5.0 or not cands:
                             clip.broll_overlay = None
                             continue
                         mid = clip.start + dur / 2
-                        # Find candidates that actually fall within this clip.
                         valid = [c for c in cands
                                  if c.start >= clip.start and c.end <= clip.end]
                         if not valid:
@@ -1043,15 +973,19 @@ class Engine:
                             }
             except Exception as e:
                 log.debug("b-roll selection skipped: %s", e)
+
         with store.mutate(project_id) as p:
             p.clips = clips
             if kind == "gameplay":
                 p.events = gameplay_mod.accepted_events_for_clips(detected, clips)
 
-        # 4. reframe ------------------------------------------------------
+        return clips, ocr_labels, ocr_texts, bscope
+
+    def _stage_reframe(self, project_id: str, project, info, src_path: str,
+                       clips: list[Clip], kind: str, cam_rect: Any,
+                       transcript: Transcript) -> None:
+        """Stage 4: Reframe clips into target aspect ratio (tracking / facecam layout)."""
         out_w, out_h = project.settings.dims()
-        # Pre-compute face tracks for the entire source in one ffmpeg pass,
-        # instead of each clip decoding its own segment separately.
         if kind != "gameplay" and info.has_video and info.duration > 0:
             reframe_mod.precompute_face_tracks(src_path, info.duration)
         for i, clip in enumerate(clips):
@@ -1070,23 +1004,21 @@ class Engine:
         if kind == "gameplay":
             self._advance(project_id, 3, "Framing clips…", 1.0)
 
-        # 5. caption (+ tighten + hashtags) --------------------------------
+    def _stage_caption(self, project_id: str, project, clips: list[Clip],
+                       kind: str, transcript: Transcript,
+                       ocr_labels: list[str], ocr_texts: list[str]) -> str:
+        """Stage 5: Build word-timed animated captions, hashtags, and optional Demucs denoise."""
         self._advance(project_id, 4, "Building captions…")
         style_id = project.settings.default_style_id
-        # A synthetic transcript means no real speech was recognized. For talking
-        # content we keep it (and warn loudly); for gameplay, burning filler text
-        # over kills/goals would be pure noise — leave those clips caption-free.
         skip_captions = kind == "gameplay" and transcript.provider == "synthetic"
         do_tighten = (project.settings.tighten and kind == "talking"
                       and transcript.provider != "synthetic")
         for clip in clips:
-            # Speakers present in the clip (for the editor's per-speaker toggles)
-            # and the current keep-set (None = all) for caption building.
             if not skip_captions and transcript.provider != "synthetic":
                 clip.speakers = captionize.speakers_in(transcript, clip.start, clip.end)
             spk = set(clip.caption_speakers) if clip.caption_speakers is not None else None
             if skip_captions:
-                clip.captions.style_id = style_id  # keep the empty CaptionSet
+                clip.captions.style_id = style_id
             elif do_tighten:
                 segs = captionize.compute_tight_segments(transcript, clip.start, clip.end)
                 if len(segs) >= 2:
@@ -1094,7 +1026,6 @@ class Engine:
                     clip.tightened_duration = round(sum(b - a for a, b in segs), 3)
                     clip.captions = captionize.build_tight_caption_set(
                         transcript, segs, style_id, speakers=spk)
-                    # Remap speaker-tracking keyframes onto the tightened timeline.
                     for kf in clip.reframe.keyframes:
                         kf.t = round(captionize.map_to_tight(clip.start + kf.t, segs), 3)
                 else:
@@ -1106,7 +1037,6 @@ class Engine:
                     exclude=[(a, b) for a, b in clip.caption_mute] or None,
                     speakers=spk)
                 if kind == "gameplay":
-                    # Strip stock announcer/agent lines the ASR picked up.
                     clip.captions.words = captionize.remove_phrases(
                         clip.captions.words,
                         captionize.game_noise(project.settings.game_profile))
@@ -1115,29 +1045,31 @@ class Engine:
                 content_type=kind, platform=project.settings.platform.value,
                 game=project.settings.game_profile if kind == "gameplay" else None,
                 ocr_terms=(ocr_labels + ocr_texts) or None)
+
         with store.mutate(project_id) as p:
-            # The user may have edited a clip (title, trim, speakers, layout)
-            # while the pipeline advanced; don't wipe their changes.
             _preserve_user_clip_edits(clips, p.clips)
             p.clips = clips
 
-        # Optional Demucs vocal isolation: separate the voice once and render
-        # from a denoised copy (video stream copied, untouched) so every clip
-        # gets studio-clean speech. Falls back to the original on any failure.
-        render_src = src_path
+        render_src = str(get_settings().media_dir / project.source.path)
+        settings = get_settings()
+        info = ffmpeg.probe(render_src)
         if project.settings.denoise and settings.has_demucs and info.has_audio:
             self._advance(project_id, 5, "Isolating voice (Demucs)…")
             try:
                 from ..providers import separate as sep_mod
                 dst_path = ingest.project_dir(project_id) / "source.denoised.mp4"
                 dst = str(dst_path)
-                cleaned = dst if dst_path.exists() else sep_mod.denoise_source(src_path, dst)
+                cleaned = dst if dst_path.exists() else sep_mod.denoise_source(render_src, dst)
                 if cleaned:
                     render_src = cleaned
             except Exception as e:
                 log.warning("denoise failed: %s", e)
 
-        # 6. render (parallel per clip) ----------------------------------
+        return render_src
+
+    def _stage_render(self, project_id: str, project, info,
+                      render_src: str, clips: list[Clip]) -> None:
+        """Stage 6: Parallel render clips and update store."""
         out_w, out_h = project.settings.dims()
         self._advance(project_id, 5, "Rendering clips…")
         self._render_all(project_id, clips, render_src, info, out_w, out_h,
@@ -1147,6 +1079,60 @@ class Engine:
 
         self._finish_render_progress(project_id)
         log.info("project %s complete", project_id)
+
+    # -- the pipeline -----------------------------------------------------
+    def _process(self, project_id: str) -> None:
+        project = store.get(project_id)
+        if project is None or project.source is None:
+            raise RuntimeError("project or source media missing")
+        self._wait_if_paused(project_id)
+        self._raise_if_cancelled(project_id)
+        self._start_times[project_id] = time.monotonic()
+        settings = get_settings()
+        src_path = str(settings.media_dir / project.source.path)
+        info = ffmpeg.probe(src_path)
+
+        # Auto-detect game profile if set to "auto"
+        if project.settings.game_profile == "auto":
+            try:
+                detected = gameplay_mod.auto_detect_profile(src_path)
+                if detected and detected != "generic":
+                    with store.mutate(project_id) as p:
+                        p.settings.game_profile = detected
+                    project.settings.game_profile = detected
+                    log.info("detected game_profile=%s from on-screen text for %s",
+                             detected, project_id)
+            except Exception as e:
+                log.debug("game profile auto-detect skipped: %s", e)
+
+        # 1. transcribe
+        self._raise_if_cancelled(project_id)
+        transcript, wav_path, vad_warned = self._stage_transcribe(
+            project_id, project, info, src_path)
+
+        # 1b. classify content type and find facecam if gameplay
+        self._raise_if_cancelled(project_id)
+        kind, cam_rect = self._stage_classify_and_cam(
+            project_id, project, info, src_path, transcript, vad_warned)
+
+        # 2. detect + 3. score
+        self._raise_if_cancelled(project_id)
+        clips, ocr_labels, ocr_texts, bscope = self._stage_detect_and_score(
+            project_id, project, info, src_path, transcript, wav_path, kind, cam_rect)
+
+        # 4. reframe
+        self._raise_if_cancelled(project_id)
+        self._stage_reframe(
+            project_id, project, info, src_path, clips, kind, cam_rect, transcript)
+
+        # 5. caption (+ tighten + hashtags)
+        self._raise_if_cancelled(project_id)
+        render_src = self._stage_caption(
+            project_id, project, clips, kind, transcript, ocr_labels, ocr_texts)
+
+        # 6. render
+        self._raise_if_cancelled(project_id)
+        self._stage_render(project_id, project, info, render_src, clips)
 
     # First-person games keep the action at the crosshair — never chase motion.
     _CENTERED_PROFILES = {"valorant", "cs2", "cs", "horror"}

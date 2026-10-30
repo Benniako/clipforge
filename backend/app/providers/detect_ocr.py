@@ -75,9 +75,8 @@ _GENERIC: dict[str, tuple[str, ...]] = {
              "bombe gelegt", "bombe entschärft", "bombe entscharft"),
     "record": ("new record", "personal best", "high score", "level up",
                "neuer rekord", "persoenlicher rekord", "level aufstieg"),
-    "goal": ("goal", "go!", "tor", "tore", "touchdown", "score",
-             "auswechslung", "vorlage", "hattrick",
-             "elfer", "elfmeter", "abpfiff"),
+    "goal": ("goal", "goooal", "tor", "tore", "tooor", "toooor", "touchdown", "score",
+             "hattrick", "what a goal"),
     "penalty": ("penalty", "red card", "yellow card", "gelbe karte",
                 "rote karte", "freistoss", "foul",
                 "full time", "half time", "halbzeit", "schlusspfiff"),
@@ -118,11 +117,13 @@ _PROFILE_EXTRA: dict[str, dict[str, tuple[str, ...]]] = {
                 "counter terrorists gewinnen", "runde gewonnen", "sieg"),
     },
     "eafc": {
-        "goal": ("goal", "go!", "full time", "half time", "penalty", "red card",
-                 "tor", "halbzeit", "abpfiff", "elfmeter", "rote karte",
-                 "gelbe karte", "freistoss", "freistos",
-                 "auswechslung", "vorlage", "hattrick",
-                 "sieg", "gewonnen"),
+        "goal": ("goal", "goooal", "gol", "but", "tor", "tore", "tooor", "toooor",
+                 "hattrick", "what a goal", "equalizer", "penalty goal", "header", "volley"),
+        "penalty": ("penalty", "red card", "yellow card", "elfmeter", "elfer",
+                    "rote karte", "gelbe karte", "freistoss", "freistos", "foul"),
+        "victory": ("sieg", "gewonnen", "match won", "victory", "champion", "champions"),
+        "match_event": ("full time", "half time", "halbzeit", "abpfiff", "schlusspfiff"),
+        "substitution": ("auswechslung", "substitution", "sub"),
     },
     "rocketleague": {
         "goal": ("goal", "what a save", "save", "demolished", "epic save"),
@@ -799,6 +800,12 @@ def _ocr_frame_images(frame: Path, tmpd: Path, idx: int,
                 ("center_banner", (int(w * 0.16), int(h * 0.22),
                                    int(w * 0.84), int(h * 0.72))),
             ])
+        elif name in {"eafc", "fifa"}:
+            specs.extend([
+                ("scoreboard", (int(w * 0.04), int(h * 0.03), int(w * 0.38), int(h * 0.16))),
+                ("center_banner", (int(w * 0.18), int(h * 0.25), int(w * 0.82), int(h * 0.72))),
+                ("lower_third", (int(w * 0.10), int(h * 0.72), int(w * 0.90), int(h * 0.96))),
+            ])
         for label, regions in saved_regions.items():
             for r_i, region in enumerate(regions):
                 try:
@@ -1006,14 +1013,16 @@ def find_text_events(src_path: str, info: MediaInfo,
                         conf = 0.9 if roi != "full" else 0.8
                     matches = match_keywords(text, profile)
                     matches.extend(_manual_matches(text, manual_cues))
-                    # Scoreboard change detection: if the text in this ROI
-                    # changed since the last frame, it might be a goal / round
-                    # win / event worth tracking. Only fire when the new text
-                    # isn't trivially short (noise) and differs from the prev.
+                    # Scoreboard change detection: only track on dedicated scoreboard or
+                    # killfeed ROIs, NEVER on "full" frame (camera movement across stadium is not a score change).
+                    # Also skip if the text matches common menu screens.
                     prev = prev_roi_text.get(roi)
-                    if prev is not None and len(text) > 3 and text != prev:
-                        # Label with the first keyword that matches, or
-                        # "scoreboard" as a generic fallback.
+                    _is_menu_like = any(w in text.lower() for w in (
+                        "team", "taktik", "management", "spieler", "rollen", "ansicht",
+                        "settings", "menu", "lobby", "store", "hub", "draft", "transfer",
+                        "chemie", "aufgaben", "fortschritt", "karriere", "rivals"))
+                    if (roi in {"scoreboard", "killfeed"} and not _is_menu_like
+                            and prev is not None and len(text) > 3 and text != prev):
                         change_label = matches[0][0] if matches else "scoreboard"
                         events.append(OcrEvent(
                             t=round(t, 3), label=change_label,

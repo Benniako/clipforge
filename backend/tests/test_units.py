@@ -2388,6 +2388,29 @@ def test_event_score_forwards_custom_audio_prompts_to_clap():
     assert seen["neg"] == ["inventory click loop"]
 
 
+def test_batch_event_scores_returns_results_for_all_spans():
+    from app.providers import audio_events as AE
+    assert AE.batch_event_scores("nonexistent.wav", []) == []
+    old_avail = AE.available
+    AE.available = lambda: False
+    try:
+        res = AE.batch_event_scores("nonexistent.wav", [(1.0, 5.0), (10.0, 15.0)])
+        assert res == [None, None]
+    finally:
+        AE.available = old_avail
+
+
+def test_orchestrator_decomposed_stages_exist():
+    from app.pipeline.orchestrator import Engine
+    eng = Engine()
+    assert hasattr(eng, "_stage_transcribe")
+    assert hasattr(eng, "_stage_classify_and_cam")
+    assert hasattr(eng, "_stage_detect_and_score")
+    assert hasattr(eng, "_stage_reframe")
+    assert hasattr(eng, "_stage_caption")
+    assert hasattr(eng, "_stage_render")
+
+
 def test_clap_prompts_include_game_and_german_context():
     from app.providers import audio_events as AE
 
