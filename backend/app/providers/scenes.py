@@ -99,3 +99,58 @@ def snap(t: float, cuts: list[float], *, window: float) -> float:
         if abs(c - t) <= window and (best is None or abs(c - t) < abs(best - t)):
             best = c
     return best if best is not None else t
+
+
+def snap_dual(start: float, end: float, cuts: list[float],
+              words=None,
+              *, window: float = 1.2, min_dur: float = 3.0) -> tuple[float, float]:
+    """Snap both start and end boundaries to shot cuts and speech closure.
+
+    Start:
+      - Dead-air elimination: if the first word starts > 0.35s in,
+        advance start towards the word onset (keeping 0.12s room).
+      - Visual cut: snaps start to the nearest cut within ±window that occurs before speech.
+    End:
+      - Speech completion: if words finish with terminal punctuation within 0.8s
+        after end, extends end to finish the sentence naturally.
+      - Visual cut: snaps end to a nearby cut within ±window after speech ends.
+    Ensures end - start >= min_dur.
+    """
+    s = float(start)
+    e = float(end)
+
+    words_in = [w for w in (words or []) if getattr(w, "end", 0.0) > s and getattr(w, "t", 0.0) < e + 1.0]
+
+    if words_in:
+        w0 = words_in[0]
+        if w0.t - s > 0.35:
+            s = max(s, round(w0.t - 0.12, 3))
+        cand_start_cuts = [c for c in cuts if c <= w0.t - 0.04]
+        if cand_start_cuts:
+            snapped_s = snap(s, cand_start_cuts, window=window)
+            if snapped_s != s and e - snapped_s >= min_dur:
+                s = snapped_s
+    elif cuts:
+        snapped_s = snap(s, cuts, window=window)
+        if snapped_s != s and e - snapped_s >= min_dur:
+            s = snapped_s
+
+    if words_in and words is not None:
+        nearby_after = [w for w in words if e <= getattr(w, "t", 0.0) <= e + 0.8]
+        for w_next in nearby_after:
+            txt = getattr(w_next, "text", "").strip()
+            if txt.endswith((".", "!", "?")):
+                e = round(getattr(w_next, "end", e) + 0.20, 3)
+                break
+        last_speech_t = max((getattr(w, "end", s) for w in words_in if getattr(w, "t", 0.0) < e), default=s)
+        cand_end_cuts = [c for c in cuts if c >= last_speech_t]
+        if cand_end_cuts:
+            snapped_e = snap(e, cand_end_cuts, window=window)
+            if snapped_e != e and snapped_e - s >= min_dur:
+                e = snapped_e
+    elif cuts:
+        snapped_e = snap(e, cuts, window=window)
+        if snapped_e != e and snapped_e - s >= min_dur:
+            e = snapped_e
+
+    return round(s, 3), round(e, 3)

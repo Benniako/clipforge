@@ -74,6 +74,7 @@ def _segment_sentences(words: list[Word], *, pause: float = 0.65) -> list[Senten
 def _salience(words: list[Word], duration: float, st: ImportSettings,
               lex: signals.Lexicon, weights: dict[str, float] | None = None) -> float:
     vals = {
+        "hpi": signals.hook_potential_index(words, duration, lex)[0],
         "instant_hook": signals.instant_hook(words, lex)[0],
         "swipe": signals.swipe_resistance(words, duration, lex)[0],
         "hook": signals.hook_strength(words, lex)[0],
@@ -89,11 +90,11 @@ def _salience(words: list[Word], duration: float, st: ImportSettings,
     if weights:  # personalised ranking — same weights as scoring
         vals["list"] = signals.list_payoff(words, lex)[0]
         return sum(v * weights.get(k, 0.0) for k, v in vals.items())
-    return (0.18 * vals["instant_hook"] + 0.12 * vals["swipe"]
-            + 0.16 * vals["hook"] + 0.12 * vals["emotion"]
-            + 0.14 * vals["clarity"] + 0.08 * vals["quote"]
+    return (0.12 * vals["hpi"] + 0.12 * vals["instant_hook"] + 0.10 * vals["swipe"]
+            + 0.14 * vals["hook"] + 0.12 * vals["emotion"]
+            + 0.13 * vals["clarity"] + 0.08 * vals["quote"]
             + 0.04 * vals["length"] + 0.04 * vals["pace"]
-            + 0.06 * vals["list"] + 0.03 * vals["controversy"]
+            + 0.05 * vals["list"] + 0.03 * vals["controversy"]
             + 0.03 * vals["qa"])
 
 

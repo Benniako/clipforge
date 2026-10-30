@@ -32,6 +32,7 @@ _X264 = ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
 
 from ..config import get_settings
 from ..media import ffmpeg
+from ..media.audio import audio_fade_filter
 from ..media.ffmpeg import MediaInfo
 from ..models import Clip, LayoutType, Rect, StyleTemplate
 from . import captions as captions_mod
@@ -385,9 +386,10 @@ def render_clip(clip: Clip, src_path: str, info: MediaInfo, style: StyleTemplate
             base = ["-ss", f"{clip.start:.3f}", "-i", src_abs,
                     "-t", f"{clip.duration:.3f}",
                     "-filter_complex_script", "graph.txt", "-map", "[vo]"]
+            fade = audio_fade_filter(clip.duration)
             audio = (["-map", "0:a?", "-af",
-                      "loudnorm=I=-16:TP=-1.5:LRA=11,"
-                      "acompressor=threshold=0.3:ratio=4:attack=5:release=100",
+                      f"loudnorm=I=-16:TP=-1.5:LRA=11,"
+                      f"acompressor=threshold=0.3:ratio=4:attack=5:release=100,{fade}",
                       "-c:a", "aac", "-b:a", "128k", "-ac", "2"]
                      if info.has_audio else ["-an"])
         elif tightened:
@@ -409,9 +411,10 @@ def render_clip(clip: Clip, src_path: str, info: MediaInfo, style: StyleTemplate
             if info.has_audio:
                 pairs = "".join(f"[v{i}][a{i}]" for i in range(n))
                 lines.append(f"{pairs}concat=n={n}:v=1:a=1[vc][ac];")
+                fade = audio_fade_filter(eff_dur)
                 lines.append(
-                    "[ac]loudnorm=I=-16:TP=-1.5:LRA=11,"
-                    "acompressor=threshold=0.3:ratio=4:attack=5:release=100[ao];")
+                    f"[ac]loudnorm=I=-16:TP=-1.5:LRA=11,"
+                    f"acompressor=threshold=0.3:ratio=4:attack=5:release=100,{fade}[ao];")
             else:
                 pairs = "".join(f"[v{i}]" for i in range(n))
                 lines.append(f"{pairs}concat=n={n}:v=1:a=0[vc];")
@@ -459,10 +462,11 @@ def render_clip(clip: Clip, src_path: str, info: MediaInfo, style: StyleTemplate
                 base = ["-ss", f"{clip.start:.3f}", "-i", src_abs,
                         "-t", f"{clip.duration:.3f}", "-filter_script:v", "graph.txt"]
             if info.has_audio:
-                # Normalise + compress for consistent, punchy sound across a batch.
+                # Normalise + compress with 7ms raised-cosine Tukey crossfades for click-free audio.
+                fade = audio_fade_filter(clip.duration)
                 audio = ["-af",
-                         "loudnorm=I=-16:TP=-1.5:LRA=11,"
-                         "acompressor=threshold=0.3:ratio=4:attack=5:release=100",
+                         f"loudnorm=I=-16:TP=-1.5:LRA=11,"
+                         f"acompressor=threshold=0.3:ratio=4:attack=5:release=100,{fade}",
                          "-c:a", "aac", "-b:a", "128k", "-ac", "2"]
             else:
                 audio = ["-an"]

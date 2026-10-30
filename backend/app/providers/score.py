@@ -24,6 +24,7 @@ BASE_WEIGHTS: dict[Platform, dict[str, float]] = {
 }
 
 FEATURE_LABELS = {
+    "hpi": "hook potential index",
     "instant_hook": "first 2s hook",
     "swipe": "swipe resistance",
     "hook": "hook",
@@ -47,6 +48,7 @@ def extract_features(words: list[Word], duration: float, settings: ImportSetting
     """Return {feature: (value 0..1, human reason)} for a candidate span."""
     lex = signals.get_lexicon(lang)
     return {
+        "hpi": signals.hook_potential_index(words, duration, lex),
         "instant_hook": signals.instant_hook(words, lex),
         "swipe": signals.swipe_resistance(words, duration, lex),
         "hook": signals.hook_strength(words, lex),

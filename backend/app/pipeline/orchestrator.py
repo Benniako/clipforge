@@ -24,6 +24,7 @@ from pathlib import Path
 from .. import feedback, store
 from ..config import get_settings
 from ..media import ffmpeg
+from ..media.audio import find_zero_crossing_in_file
 from ..media.ffmpeg import MediaInfo
 from ..models import (ASPECTS, Clip, ClipStatus, ContentType, JobProgress,
                       LayoutType, ProjectStatus, Reframe, ReframeKeyframe,
@@ -718,6 +719,7 @@ class Engine:
                                 kind: str, cam_rect: Any
                                 ) -> tuple[list[Clip], list[str], list[str], Any]:
         """Stage 2 + 3: Highlight moment detection, scoring, audio events & visual boost."""
+        settings = get_settings()
         plat = project.settings.platform.value
         ocr_labels: list[str] = []
         ocr_texts: list[str] = []
@@ -788,23 +790,22 @@ class Engine:
             self._advance(project_id, 2, "Snapping to scene cuts…")
             try:
                 min_t = max(min(c.start for c in clips) - 2.0, 0.0) if clips else 0.0
-                max_t = max(c.start for c in clips) + 2.0 if clips else 0.0
+                max_t = max(c.end for c in clips) + 2.0 if clips else 0.0
                 if clips and (max_t - min_t <= 600.0 or info.duration <= 900.0):
                     span_start = 0.0 if info.duration <= 900.0 else min_t
                     span_end = info.duration if info.duration <= 900.0 else max_t
                     all_cuts = scenes_mod.scene_cuts(src_path, span_start, span_end)
                     for clip in clips:
-                        nearby = [c for c in all_cuts if max(clip.start - 2.0, 0.0) <= c <= clip.start + 2.0]
-                        ns = scenes_mod.snap(clip.start, nearby, window=1.5)
-                        if ns != clip.start and clip.end - ns >= 3.0:
-                            clip.start = round(ns, 3)
+                        clip_words = [w for w in transcript.words if w.end > clip.start and w.t < clip.end + 1.0]
+                        ns, ne = scenes_mod.snap_dual(clip.start, clip.end, all_cuts, words=clip_words, window=1.2, min_dur=3.0)
+                        clip.start, clip.end = ns, ne
                 else:
                     for clip in clips:
                         cuts = scenes_mod.scene_cuts(
-                            src_path, max(clip.start - 2.0, 0.0), clip.start + 2.0)
-                        ns = scenes_mod.snap(clip.start, cuts, window=1.5)
-                        if ns != clip.start and clip.end - ns >= 3.0:
-                            clip.start = round(ns, 3)
+                            src_path, max(clip.start - 2.0, 0.0), clip.end + 2.0)
+                        clip_words = [w for w in transcript.words if w.end > clip.start and w.t < clip.end + 1.0]
+                        ns, ne = scenes_mod.snap_dual(clip.start, clip.end, cuts, words=clip_words, window=1.2, min_dur=3.0)
+                        clip.start, clip.end = ns, ne
             except Exception as e:
                 log.warning("scene snap failed: %s", e)
 
@@ -863,6 +864,15 @@ class Engine:
                         p.add_warning(
                             f"Hook: {h['suggestion']}",
                             severity="warning", code="hook")
+            if settings.has_scenedetect:
+                try:
+                    all_cuts = scenes_mod.scene_cuts(src_path, 0.0, info.duration)
+                    for clip in clips:
+                        clip_words = [w for w in transcript.words if w.end > clip.start and w.t < clip.end + 1.0]
+                        ns, ne = scenes_mod.snap_dual(clip.start, clip.end, all_cuts, words=clip_words, window=1.0, min_dur=3.0)
+                        clip.start, clip.end = ns, ne
+                except Exception as e:
+                    log.debug("talking scene snap skipped: %s", e)
             bscope = feedback.bound_scope("talking", plat)
 
         settings = get_settings()
@@ -902,6 +912,14 @@ class Engine:
                             clip.features["audio_event"] = round(hype, 4)
             except Exception as e:
                 log.warning("audio-event scoring failed: %s", e)
+
+        if wav_path:
+            try:
+                for clip in clips:
+                    clip.start = find_zero_crossing_in_file(wav_path, clip.start)
+                    clip.end = find_zero_crossing_in_file(wav_path, clip.end)
+            except Exception as e:
+                log.debug("zero crossing alignment skipped: %s", e)
 
         wav = ingest.project_dir(project_id) / "audio16k.wav"
         wav.unlink(missing_ok=True)

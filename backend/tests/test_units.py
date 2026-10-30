@@ -1103,6 +1103,67 @@ def test_scene_showinfo_parse_and_snap():
     assert scenes.snap(5.0, [], window=2.0) == 5.0       # no cuts at all
 
 
+def test_audio_zero_crossing_and_fade_filter():
+    import numpy as np
+    from app.media import audio
+
+    sr = 16000
+    # 1 second of 100 Hz sine wave: zero crossings happen every 0.005s (0.0, 0.005, 0.010, ...)
+    t = np.linspace(0, 1.0, sr, endpoint=False)
+    wave = np.sin(2 * np.pi * 100 * t)
+    # Search for zero crossing near 0.0048s
+    zc = audio.find_zero_crossing(wave, sr, 0.0048, max_offset_s=0.005)
+    assert abs(zc - 0.005) < 0.0005
+
+    # Test fade filter
+    fade_str = audio.audio_fade_filter(10.0, fade_s=0.007)
+    assert "afade=t=in:ss=0:d=0.007:curve=hsin" in fade_str
+    assert "afade=t=out:st=9.993:d=0.007:curve=hsin" in fade_str
+
+
+def test_signals_hook_potential_index():
+    from app.models import Word
+    from app.providers import signals
+
+    # Strong curiosity opener
+    strong_words = [
+        Word(t=0.0, d=0.4, text="Why"),
+        Word(t=0.4, d=0.4, text="does"),
+        Word(t=0.8, d=0.5, text="everyone"),
+        Word(t=1.3, d=0.5, text="fail"),
+        Word(t=1.8, d=0.4, text="this?"),
+    ]
+    hpi_strong, reason_strong = signals.hook_potential_index(strong_words, 15.0)
+    assert 0.6 <= hpi_strong <= 1.0
+    assert "question" in reason_strong.lower() or "hook" in reason_strong.lower()
+
+    # Weak opener with filler and delayed speech (high VOT)
+    weak_words = [
+        Word(t=1.2, d=0.4, text="Um"),
+        Word(t=1.6, d=0.4, text="so"),
+        Word(t=2.0, d=0.5, text="yeah"),
+    ]
+    hpi_weak, reason_weak = signals.hook_potential_index(weak_words, 15.0, clip_start=0.0)
+    assert hpi_weak < hpi_strong
+    assert 0.0 <= hpi_weak <= 0.4
+
+
+def test_scenes_snap_dual_boundaries():
+    from app.models import Word
+    from app.providers import scenes
+
+    cuts = [4.8, 15.2]
+    words = [
+        Word(t=5.0, d=0.5, text="Hello"),
+        Word(t=5.5, d=0.5, text="world"),
+        Word(t=14.5, d=0.5, text="goodbye."),
+    ]
+    # Start at 5.0 (cut at 4.8 before speech), end at 15.0 (cut at 15.2 after sentence completion)
+    ns, ne = scenes.snap_dual(5.0, 15.0, cuts, words=words, window=1.0, min_dur=3.0)
+    assert ns == 4.8
+    assert ne == 15.2
+
+
 def test_status_ws_reports_missing_project():
     from starlette.testclient import TestClient
     from app import store

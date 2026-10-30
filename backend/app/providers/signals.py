@@ -393,6 +393,74 @@ def swipe_resistance(words: list[Word], duration: float,
     return _clamp(raw), reason
 
 
+def hook_potential_index(words: list[Word], duration: float,
+                         lex: Lexicon = _EN, *,
+                         clip_start: float | None = None) -> tuple[float, str]:
+    """Algorithmic Hook Potential Index (HPI) over the opening 3-5 seconds.
+
+    Combines linguistic curiosity (S_ling), speech pacing (S_pace),
+    Voice Onset Time penalty (Phi_VOT for silence before speech), and filler deductions.
+    Strictly bounded in [0.0, 1.0].
+    """
+    if not words or duration <= 0:
+        return 0.0, ""
+
+    start = words[0].t
+    head_3s = [w for w in words if w.t - start < 3.5] or words[:8]
+    toks = _tokens(head_3s)
+    if not toks:
+        return 0.0, ""
+
+    # 1. Linguistic Curiosity (S_ling)
+    hooks = sum(t in lex.hook for t in toks)
+    second_person = sum(t in lex.second_person for t in toks)
+    question = any(w.text.strip().endswith("?") for w in head_3s)
+    has_num = _has_number(head_3s)
+    first_tok = toks[0]
+    is_filler = first_tok in (lex.dangling | _FILLER_OPENERS)
+
+    s_ling = 0.35 * min(hooks, 2) / 2.0 + 0.25 * min(second_person, 2) / 2.0
+    s_ling += 0.25 * float(question) + 0.15 * float(has_num)
+    if is_filler:
+        s_ling = max(0.0, s_ling - 0.25)
+    s_ling = min(1.0, s_ling)
+
+    # 2. Speech Pacing (S_pace): Target 165 - 205 WPM (2.75 - 3.4 words/s)
+    window_dur = max(head_3s[-1].end - start, 0.5)
+    wps = len(head_3s) / window_dur
+    if 2.4 <= wps <= 3.8:
+        s_pace = 1.0
+    elif 1.8 <= wps < 2.4 or 3.8 < wps <= 4.5:
+        s_pace = 0.75
+    elif wps < 1.4:
+        s_pace = 0.35
+    else:
+        s_pace = 0.50
+
+    # 3. Voice Onset Time penalty (Phi_VOT)
+    vot_mult = 1.0
+    if clip_start is not None and clip_start >= 0:
+        vot = max(0.0, start - clip_start)
+        if vot > 0.25:
+            import math
+            vot_mult = max(0.1, min(1.0, math.exp(-(vot - 0.25) / 0.40)))
+
+    # Composite HPI
+    hpi = (0.55 * s_ling + 0.45 * s_pace) * vot_mult
+    if is_filler:
+        hpi = max(0.0, hpi - 0.15)
+    hpi = max(0.0, min(1.0, hpi))
+
+    reason = ("High-energy curiosity hook" if hpi >= 0.75 and (hooks or question) else
+              "Immediate question opener" if question else
+              "Direct address hook" if second_person else
+              "Fast, engaging opening pace" if s_pace >= 0.9 else
+              "Delayed speech onset" if vot_mult < 0.7 else
+              "Clean opening beat" if not is_filler else "Soft opener with filler")
+
+    return round(hpi, 4), reason
+
+
 def emotional_payoff(words: list[Word], lex: Lexicon = _EN) -> tuple[float, str]:
     toks = _tokens(words)
     if not toks:
