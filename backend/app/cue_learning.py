@@ -78,6 +78,32 @@ def _snippet_rms(wav_path: str) -> float:
     return float(np.sqrt((data * data).mean() + 1e-12)) if data.size else 0.0
 
 
+def _normalize_snippet(wav_path: Path) -> bool:
+    """Normalize a small wav so low-volume streams yield valid cues. Returns False if silent."""
+    try:
+        import numpy as np
+        with wave.open(str(wav_path), 'rb') as wf:
+            raw = wf.readframes(wf.getnframes())
+            if not raw:
+                return False
+            data = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+            sr = wf.getframerate()
+        peak = float(np.max(np.abs(data))) if len(data) else 0.0
+        if peak < 0.0001:
+            return False
+        norm = (data / peak) * 0.707
+        int16_data = (norm * 32767).astype(np.int16)
+        with wave.open(str(wav_path), 'wb') as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(sr)
+            wf.writeframes(int16_data.tobytes())
+        return True
+    except Exception as e:
+        log.warning("snippet normalize failed: %s", e)
+        return True
+
+
 def save_audio_cues_from_ocr(src_path: str, ocr_events: list, profile: str) -> list[str]:
     """Snip and install an audio cue for each new on-screen event label.
 
@@ -94,24 +120,27 @@ def save_audio_cues_from_ocr(src_path: str, ocr_events: list, profile: str) -> l
 
     todo = pending_labels(ocr_events, existing_cue_labels(profile))
     saved: list[str] = []
+    is_sports = (profile or "").lower() in {"eafc", "fifa", "sports"}
     for label in todo:
         t = first_t.get(label)
         if t is None:
             continue
+        t_cue = max(0.0, t - 4.5) if (is_sports and label == "goal") else t
+        snip_len = 1.2 if (is_sports and label == "goal") else SNIPPET_LEN
         try:
             with tempfile.TemporaryDirectory() as tmp:
                 snip = Path(tmp) / "snip.wav"
-                ffmpeg.run(["-ss", f"{max(t - SNIPPET_PRE, 0.0):.3f}",
-                            "-i", src_path, "-t", f"{SNIPPET_LEN:.3f}",
+                ffmpeg.run(["-ss", f"{max(t_cue - SNIPPET_PRE, 0.0):.3f}",
+                            "-i", src_path, "-t", f"{snip_len:.3f}",
                             "-vn", "-ac", "1", "-ar", "16000",
                             "-c:a", "pcm_s16le", str(snip)], timeout=30)
-                if _snippet_rms(str(snip)) < MIN_RMS:
+                if not _normalize_snippet(snip):
                     log.info("cue-learn: '%s' snippet too quiet — skipped", label)
                     continue
                 game_packs.install_cue(_scan_dir(profile), f"{AUTO_PREFIX}{label}", str(snip))
                 saved.append(label)
                 log.info("cue-learn: saved audio cue for '%s' @ %.1fs (%s)",
-                         label, t, profile)
+                         label, t_cue, profile)
         except Exception as e:
             log.warning("cue-learn: could not save '%s': %s", label, e)
     return saved

@@ -74,6 +74,7 @@ def _band_spectrogram(samples):
         lo, hi = edges[b], max(edges[b + 1], edges[b] + 1)
         bands[:, b] = mag[:, lo:hi].sum(axis=1)
     bands = np.log1p(bands)
+    bands = bands - np.mean(bands, axis=1, keepdims=True)
     norm = np.linalg.norm(bands, axis=1, keepdims=True) + 1e-6
     return bands / norm
 

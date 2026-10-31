@@ -760,15 +760,17 @@ def _cue_events(wav_path: str, settings: ImportSettings) -> list:
         return []
     base = get_settings().data_dir / "game_cues"
     events = []
+    prof = getattr(settings, "game_profile", "auto")
+    threshold = 0.88 if prof in {"eafc", "fifa", "rocketleague", "sports"} else 0.84
     for sub in {_cue_dir(settings.game_profile), "common"}:
         try:
-            events += detect_cues.find_events(wav_path, base / sub)
+            events += detect_cues.find_events(wav_path, base / sub, threshold=threshold)
         except Exception as e:
             log.warning("cue matching failed for %s: %s", sub, e)
     extra = _reference_cue_files(settings, base)
     if extra:
         try:
-            events += detect_cues.match_templates(wav_path, extra)
+            events += detect_cues.match_templates(wav_path, extra, threshold=threshold)
         except Exception as e:
             log.warning("reference-audio cue matching failed: %s", e)
     return events
@@ -904,8 +906,9 @@ def _cue_clips(events: list, info: MediaInfo, lead: float, tail: float,
         max_cap = 99 if n >= 3 else 88
         score = int(round(max(1, min(max_cap, 58 + cue_strength * 120 + streak_bonus))))
         m, s = divmod(int(first.t), 60)
-        label = first.label.replace("_", " ").title()
-        labels = {e.label for e in grp}
+        clean_name = first.label.removeprefix("auto_").replace("_", " ").title()
+        label = clean_name
+        labels = {e.label.removeprefix("auto_") for e in grp}
         if n == 1:
             title = f"{label} — {m}:{s:02d}"
         elif len(labels) == 1:
@@ -914,7 +917,7 @@ def _cue_clips(events: list, info: MediaInfo, lead: float, tail: float,
         else:
             title = f"{label} + {n - 1} cues — {m}:{s:02d}"
 
-        factors = [ScoreFactor(label=f"Matched '{first.label}' sound",
+        factors = [ScoreFactor(label=f"Matched '{clean_name}' sound",
                                weight=round(max(0.0, sim - 0.80) * 50, 1),
                                detail=f"{int(sim*100)}% audio match to your reference cue")]
         if n >= 2:
