@@ -11,7 +11,7 @@ import threading
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse, PlainTextResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from .. import feedback, store
 from ..config import get_settings
@@ -24,6 +24,7 @@ from ..pipeline import montage as montage_mod
 from ..pipeline import reframe as reframe_mod
 from ..pipeline.orchestrator import engine
 from ..providers import score as score_mod
+from ..services import audio_waveform, suggestions_copilot
 from .. import user_styles
 
 router = APIRouter(prefix="/api", tags=["clips"])
@@ -488,3 +489,322 @@ def publish_content(project_id: str, clip_id: str, platform: str = "generic"):
         "hashtags": ai_tags,
         "excerpt": excerpt[:200],
     }
+
+
+# --------------------------------------------------------------------------- #
+# Interactive Studio Endpoints (Waveform, Storyboard, Suggestions, Batch)
+# --------------------------------------------------------------------------- #
+
+@router.get("/projects/{project_id}/clips/{clip_id}/waveform")
+def get_clip_waveform(project_id: str, clip_id: str) -> dict:
+    project = store.get(project_id)
+    if not project:
+        raise HTTPException(404, "project not found")
+    clip = project.clip(clip_id)
+    if not clip:
+        raise HTTPException(404, "clip not found")
+    return audio_waveform.extract_clip_waveform(project, clip)
+
+
+@router.get("/projects/{project_id}/clips/{clip_id}/storyboard")
+def get_clip_storyboard(project_id: str, clip_id: str) -> dict:
+    project = store.get(project_id)
+    if not project:
+        raise HTTPException(404, "project not found")
+    clip = project.clip(clip_id)
+    if not clip:
+        raise HTTPException(404, "clip not found")
+
+    settings = get_settings()
+    dur = max(0.1, round(clip.duration, 3))
+    cols = 5
+    rows = 2
+    total_frames = cols * rows
+    interval_s = round(dur / total_frames, 2)
+    tile_w = 160
+    tile_h = 90
+
+    # Destination sprite path
+    rel_sprite = f"clips/{clip_id}_storyboard.jpg"
+    dest_path = settings.media_dir / project_id / rel_sprite
+    dest_path.parent.mkdir(parents=True, exist_ok=True)
+    sprite_url = f"/media/{project_id}/{rel_sprite}"
+
+    if not dest_path.exists():
+        src_file = None
+        is_clip_export = False
+        if clip.export_url and clip.export_url.startswith("/media/"):
+            cand = settings.media_dir / clip.export_url[len("/media/"):]
+            if cand.exists():
+                src_file = cand
+                is_clip_export = True
+        if not src_file and project.source and project.source.path:
+            cand = settings.media_dir / project.source.path
+            if cand.exists():
+                src_file = cand
+
+        if src_file and getattr(settings, "ffmpeg", None):
+            try:
+                import subprocess
+                ss_args = [] if is_clip_export else ["-ss", str(clip.start), "-to", str(clip.end)]
+                cmd = [
+                    settings.ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+                    *ss_args,
+                    "-i", str(src_file),
+                    "-vf", f"fps=1/{max(0.1, interval_s)},scale={tile_w}:{tile_h},tile={cols}x{rows}",
+                    "-frames:v", "1",
+                    str(dest_path)
+                ]
+                subprocess.run(cmd, check=True, timeout=10, capture_output=True)
+            except Exception:
+                pass
+
+    if not dest_path.exists():
+        sprite_url = clip.thumb_url or f"/media/{project_id}/{rel_sprite}"
+
+    return {
+        "clip_id": clip_id,
+        "sprite_url": sprite_url,
+        "cols": cols,
+        "rows": rows,
+        "tile_w": tile_w,
+        "tile_h": tile_h,
+        "interval_s": interval_s,
+        "total_frames": total_frames,
+        "duration_s": dur,
+    }
+
+
+@router.get("/projects/{project_id}/clips/{clip_id}/suggestions")
+def get_clip_suggestions(project_id: str, clip_id: str) -> dict:
+    project = store.get(project_id)
+    if not project:
+        raise HTTPException(404, "project not found")
+    clip = project.clip(clip_id)
+    if not clip:
+        raise HTTPException(404, "clip not found")
+    suggestions = suggestions_copilot.generate_clip_suggestions(project, clip)
+    return {
+        "clip_id": clip_id,
+        "suggestions": suggestions,
+    }
+
+
+class SuggestionApplyBody(BaseModel):
+    patch: dict | None = None
+
+
+@router.post("/projects/{project_id}/clips/{clip_id}/suggestions/{suggestion_id}/apply")
+def apply_clip_suggestion(project_id: str, clip_id: str, suggestion_id: str,
+                          body: SuggestionApplyBody | None = None) -> dict:
+    project = store.get(project_id)
+    if not project:
+        raise HTTPException(404, "project not found")
+    clip = project.clip(clip_id)
+    if not clip:
+        raise HTTPException(404, "clip not found")
+
+    suggestions = suggestions_copilot.generate_clip_suggestions(project, clip)
+    matching = next((s for s in suggestions if s["id"] == suggestion_id), None)
+
+    patch = {}
+    if matching:
+        patch = dict(matching.get("patch", {}))
+    if body and body.patch:
+        patch.update(body.patch)
+
+    if not matching and not patch:
+        raise HTTPException(404, f"suggestion '{suggestion_id}' not found")
+
+    updated_fields: list[str] = []
+    src_dur = project.source.duration if project.source else clip.end
+    span_changed = False
+
+    # 1. Start boundary trim
+    if "start_t" in patch or "start" in patch:
+        new_start = float(patch.get("start_t", patch.get("start")))
+        new_start = max(0.0, min(clip.end - 1.0, new_start))
+        if new_start != clip.start:
+            clip.start = round(new_start, 3)
+            span_changed = True
+            updated_fields.append("start_t")
+
+    # 2. End boundary trim
+    if "end_t" in patch or "end" in patch:
+        new_end = float(patch.get("end_t", patch.get("end")))
+        new_end = max(clip.start + 1.0, min(src_dur, new_end))
+        if new_end != clip.end:
+            clip.end = round(new_end, 3)
+            span_changed = True
+            updated_fields.append("end_t")
+
+    # 3. Layout reframe
+    if "layout" in patch:
+        try:
+            lay = LayoutType(patch["layout"])
+            if lay in (LayoutType.split, LayoutType.framed):
+                cam = clip.reframe.facecam or project.facecam
+                if cam:
+                    clip.reframe.facecam = cam
+            clip.reframe.layout = lay
+            clip.reframe.overridden = True
+            updated_fields.append("layout")
+        except ValueError:
+            raise HTTPException(400, f"unknown layout '{patch['layout']}'")
+
+    # 4. Teaser loop
+    if "teaser_loop" in patch:
+        clip.teaser_loop = bool(patch["teaser_loop"])
+        updated_fields.append("teaser_loop")
+
+    # 5. Dead air tighten
+    if "tighten" in patch:
+        if "segments" in patch and patch["segments"]:
+            clip.segments = patch["segments"]
+        elif project.transcript:
+            segs = captionize.compute_tight_segments(project.transcript, clip.start, clip.end)
+            clip.segments = [[round(a, 3), round(b, 3)] for a, b in segs]
+        updated_fields.append("tighten")
+
+    # 6. Manual cx override
+    if "reframe_cx" in patch:
+        cx = max(0.0, min(1.0, float(patch["reframe_cx"])))
+        clip.reframe = Reframe(layout=clip.reframe.layout,
+                               keyframes=[ReframeKeyframe(t=0.0, cx=cx)],
+                               tracked=False, overridden=True,
+                               cx_overridden=True,
+                               facecam=clip.reframe.facecam)
+        updated_fields.append("reframe_cx")
+
+    # If span changed, re-derive captions
+    if span_changed and project.transcript:
+        spk = set(clip.caption_speakers) if clip.caption_speakers is not None else None
+        sid = clip.captions.style_id
+        if clip.kind == "gameplay":
+            if project.transcript.provider != "synthetic":
+                clip.captions = captionize.build_caption_set(
+                    project.transcript, clip.start, clip.end, sid,
+                    exclude=[(a, b) for a, b in clip.caption_mute] or None, speakers=spk)
+        elif clip.segments:
+            clip.captions = captionize.build_tight_caption_set(
+                project.transcript, [(a, b) for a, b in clip.segments], sid, speakers=spk)
+        else:
+            clip.captions = captionize.build_caption_set(
+                project.transcript, clip.start, clip.end, sid, speakers=spk)
+
+    clip.status = ClipStatus.rendering
+    clip.error = None
+
+    with store.mutate(project_id) as p:
+        existing = p.clip(clip_id)
+        if existing is None:
+            raise HTTPException(404, "clip not found")
+        clip.export_url = existing.export_url or clip.export_url
+        clip.thumb_url = existing.thumb_url or clip.thumb_url
+        p.clips[p.clips.index(existing)] = clip
+
+    threading.Thread(target=engine.rerender_clip, args=(project_id, clip_id),
+                     daemon=True).start()
+
+    return {
+        "success": True,
+        "clip": clip.model_dump(),
+        "updated_fields": updated_fields,
+    }
+
+
+class BatchClipOperation(BaseModel):
+    clip_ids: list[str]
+    action: str  # "rate" | "export" | "tag" | "delete" | "sequence"
+    payload: dict = Field(default_factory=dict)
+
+
+@router.post("/projects/{project_id}/clips/batch")
+def batch_clip_operations(project_id: str, body: BatchClipOperation) -> dict:
+    project = store.get(project_id)
+    if not project:
+        raise HTTPException(404, "project not found")
+
+    if not body.clip_ids:
+        raise HTTPException(400, "clip_ids list cannot be empty")
+
+    valid_actions = {"rate", "export", "tag", "delete", "sequence"}
+    if body.action not in valid_actions:
+        raise HTTPException(400, f"unsupported batch action '{body.action}'. Must be one of {valid_actions}")
+
+    target_ids = set(body.clip_ids)
+    affected_ids: list[str] = [c.id for c in project.clips if c.id in target_ids]
+
+    if body.action == "rate":
+        rating_raw = body.payload.get("rating")
+        if rating_raw is None:
+            raise HTTPException(400, "payload must contain 'rating' (e.g. 1-5 or 'up'/'down')")
+        with store.mutate(project_id) as p:
+            for cid in affected_ids:
+                c = p.clip(cid)
+                if c:
+                    if isinstance(rating_raw, (int, float)):
+                        val = int(rating_raw)
+                        c.score = min(100, max(0, val * 20))
+                        c.feedback = "up" if val >= 4 else ("down" if val <= 2 else None)
+                    elif str(rating_raw).lower() in ("up", "down"):
+                        c.feedback = str(rating_raw).lower()
+                    else:
+                        c.feedback = None
+
+    elif body.action == "tag":
+        tags = body.payload.get("tags") or body.payload.get("hashtags") or []
+        if not isinstance(tags, list):
+            raise HTTPException(400, "'tags' in payload must be a list of strings")
+        clean_tags = [str(t).strip() for t in tags if str(t).strip()]
+        with store.mutate(project_id) as p:
+            for cid in affected_ids:
+                c = p.clip(cid)
+                if c:
+                    for t in clean_tags:
+                        if t not in c.hashtags:
+                            c.hashtags.append(t)
+
+    elif body.action == "delete":
+        with store.mutate(project_id) as p:
+            p.clips = [c for c in p.clips if c.id not in target_ids]
+
+    elif body.action == "sequence":
+        if "order" in body.payload:
+            order_list = body.payload["order"]
+            if not isinstance(order_list, list) or not all(isinstance(x, str) for x in order_list):
+                raise HTTPException(400, "'order' in payload must be a list of clip ID strings")
+        else:
+            order_list = body.clip_ids
+
+        seen: set[str] = set()
+        deduped_order: list[str] = []
+        for cid in order_list:
+            if cid not in seen:
+                seen.add(cid)
+                deduped_order.append(cid)
+
+        with store.mutate(project_id) as p:
+            id_to_clip = {c.id: c for c in p.clips}
+            ordered_clips = [id_to_clip[cid] for cid in deduped_order if cid in id_to_clip]
+            remaining = [c for c in p.clips if c.id not in seen]
+            p.clips = ordered_clips + remaining
+
+    elif body.action == "export":
+        with store.mutate(project_id) as p:
+            for cid in affected_ids:
+                c = p.clip(cid)
+                if c:
+                    c.status = ClipStatus.rendering
+                    c.error = None
+        threading.Thread(target=engine.rerender_clips, args=(project_id, affected_ids),
+                         daemon=True).start()
+
+    updated_project = store.get(project_id)
+    return {
+        "success": True,
+        "action": body.action,
+        "affected_clip_ids": affected_ids,
+        "project": updated_project.model_dump(),
+    }
+

@@ -10,6 +10,13 @@ import Toast, { type ToastMsg } from "../components/Toast";
 import ScoreBadge from "../components/ScoreBadge";
 import PublishPanel from "../components/PublishPanel";
 import Waveform from "../components/Waveform";
+import InteractiveCanvas from "../components/InteractiveCanvas";
+import AudioWaveformHeatmap from "../components/AudioWaveformHeatmap";
+import AiSuggestionsCoPilot, { type AiSuggestion } from "../components/AiSuggestionsCoPilot";
+import PhoneSimulator from "../components/PhoneSimulator";
+import MontageTimeline from "../components/MontageTimeline";
+import StreamerWorkflowBar, { isInputIsolated } from "../components/StreamerWorkflowBar";
+import type { PlatformType } from "../lib/collision";
 
 type EditableCaptionWord = Pick<CaptionWord, "t" | "d" | "text" | "speaker">;
 
@@ -59,6 +66,19 @@ export default function ClipEditor() {
   const [loopPreviewSeconds, setLoopPreviewSeconds] = useState(0);
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [showSafeGuides, setShowSafeGuides] = useState(false);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [captionY, setCaptionY] = useState(0.78);
+  const [activeSimulatorPlatform, setActiveSimulatorPlatform] = useState<PlatformType>("tiktok");
+  const [showPhoneSimulator, setShowPhoneSimulator] = useState<boolean>(true);
+  const [showMontageTimeline, setShowMontageTimeline] = useState<boolean>(false);
+
+  const activeStyle = useMemo(() => styles.find((s) => s.id === styleId), [styles, styleId]);
+
+  useEffect(() => {
+    if (activeStyle?.y_frac) {
+      setCaptionY(activeStyle.y_frac);
+    }
+  }, [activeStyle]);
 
   // Undo/redo history.
   const undo = useUndo({
@@ -93,9 +113,8 @@ export default function ClipEditor() {
   
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      // Don't capture when typing in an input or textarea.
-      const tag = (e.target as HTMLElement).tagName;
-      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      // Don't capture when typing in an input, textarea, contenteditable, or caption word input.
+      if (isInputIsolated(e.target)) return;
 
       const st = keyboardRefs.current;
       const video = videoRef.current;
@@ -103,39 +122,6 @@ export default function ClipEditor() {
       const dur = st.srcDur;
 
       switch (e.code) {
-        case "Space":
-          e.preventDefault();
-          if (video) {
-            if (video.paused) video.play();
-            else video.pause();
-          }
-          break;
-        case "KeyJ":
-          e.preventDefault();
-          if (video) {
-            video.playbackRate = Math.max(0.25, video.playbackRate - 0.5);
-            if (video.paused) video.play();
-          }
-          break;
-        case "KeyK":
-          e.preventDefault();
-          if (video) { video.pause(); video.playbackRate = 1; }
-          break;
-        case "KeyL":
-          e.preventDefault();
-          if (video) {
-            video.playbackRate = Math.min(4, video.playbackRate + 0.5);
-            if (video.paused) video.play();
-          }
-          break;
-        case "KeyI":
-          e.preventDefault();
-          if (video) setStart(Math.max(0, Math.min(video.currentTime, st.end - 1)));
-          break;
-        case "KeyO":
-          e.preventDefault();
-          if (video) setEnd(Math.max(st.start + 1, Math.min(video.currentTime, dur)));
-          break;
         case "ArrowLeft":
           e.preventDefault();
           if (video) video.currentTime = Math.max(0, video.currentTime - step);
@@ -447,6 +433,95 @@ export default function ClipEditor() {
         </div>
       </div>
 
+      {/* Streamer Quick Workflow Bar: Hotkeys, Tactile/HUD Feedback, Batch Toolbar */}
+      <div style={{ marginBottom: 14 }}>
+        <StreamerWorkflowBar
+          projectId={projectId}
+          clips={project?.clips}
+          activeClipId={clipId}
+          currentTime={currentTime}
+          duration={srcDur}
+          start={start}
+          end={end}
+          currentRating={clip?.score ? Math.round(clip.score / 20) : (fb === "up" ? 5 : (fb === "down" ? 1 : null))}
+          videoRef={videoRef}
+          listenToKeyboard={true}
+          onPlayToggle={(playing) => {
+            if (videoRef.current) {
+              if (playing && videoRef.current.paused) videoRef.current.play();
+              else if (!playing && !videoRef.current.paused) videoRef.current.pause();
+            }
+          }}
+          onShuttleRewind={(newT) => {
+            if (newT !== undefined) setCurrentTime(newT);
+          }}
+          onShuttlePause={() => {
+            if (videoRef.current) {
+              videoRef.current.pause();
+              videoRef.current.playbackRate = 1.0;
+            }
+          }}
+          onShuttleForward={(newT) => {
+            if (newT !== undefined) setCurrentTime(newT);
+          }}
+          onMarkIn={(t) => {
+            const absT = previewMode === "rendered" ? start + t : t;
+            const nextStart = Math.max(0, Math.min(absT, end - 1));
+            setStart(nextStart);
+            undo.set({ ...undo.state, start: nextStart });
+          }}
+          onMarkOut={(t) => {
+            const absT = previewMode === "rendered" ? start + t : t;
+            const nextEnd = Math.max(start + 1, Math.min(absT, srcDur));
+            setEnd(nextEnd);
+            undo.set({ ...undo.state, end: nextEnd });
+          }}
+          onRate={async (score) => {
+            const nextFb = score >= 4 ? "up" : (score <= 2 ? "down" : null);
+            setFb(nextFb);
+            if (clip) {
+              clip.score = score * 20;
+              clip.feedback = nextFb;
+            }
+            if (projectId && clipId) {
+              await api.rateClip(projectId, clipId, nextFb ?? "none").catch(() => {});
+            }
+            setMsg({ text: `Clip rated ${score} stars (${score * 20} pts)`, type: "success", duration: 2000 });
+          }}
+          onBatchAction={async (action, clipIds, payload) => {
+            if (!projectId) return;
+            try {
+              const res = await fetch(`/api/projects/${projectId}/clips/batch`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  clip_ids: clipIds,
+                  action: action === "rate_up" ? "rate" : action,
+                  payload: payload || {},
+                }),
+              });
+              if (!res.ok) {
+                const errJson = await res.json().catch(() => ({}));
+                throw new Error(errJson.detail || `Batch ${action} failed`);
+              }
+              const data = await res.json();
+              if (data.project) {
+                setProject(data.project);
+                const updated = data.project.clips.find((c: Clip) => c.id === clipId);
+                if (updated) hydrate(updated);
+              }
+              setMsg({
+                text: `Batch ${action} applied to ${clipIds.length} clip(s)`,
+                type: "success",
+                duration: 3000,
+              });
+            } catch (e: any) {
+              setMsg({ text: e.message || `Batch ${action} failed`, type: "error" });
+            }
+          }}
+        />
+      </div>
+
       <div className="editor">
         <div className="preview-pane">
           <div className="row" style={{ justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
@@ -464,34 +539,207 @@ export default function ClipEditor() {
                 {t("ce.tabOriginal")}
               </button>
             </div>
-            <button
-              className={"btn ghost sm" + (showSafeGuides ? " on" : "")}
-              onClick={() => setShowSafeGuides(!showSafeGuides)}
-              title="Toggle safe zone guide overlay for TikTok and YouTube Shorts"
-            >
-              🎯 Safe Zone: {showSafeGuides ? "ON" : "OFF"}
-            </button>
+            <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+              <button
+                className={"btn ghost sm" + (showPhoneSimulator ? " on" : "")}
+                onClick={() => setShowPhoneSimulator(!showPhoneSimulator)}
+                data-testid="toggle-phone-simulator"
+                title="Toggle Phone Platform Simulator overlay"
+              >
+                📱 Simulator: {showPhoneSimulator ? "ON" : "OFF"}
+              </button>
+              <button
+                className={"btn ghost sm" + (showSafeGuides ? " on" : "")}
+                onClick={() => setShowSafeGuides(!showSafeGuides)}
+                title="Toggle safe zone guide overlay for TikTok and YouTube Shorts"
+              >
+                🎯 Safe Zone: {showSafeGuides ? "ON" : "OFF"}
+              </button>
+              <button
+                className={"btn ghost sm" + (showMontageTimeline ? " on" : "")}
+                onClick={() => setShowMontageTimeline(!showMontageTimeline)}
+                data-testid="toggle-montage-timeline-btn"
+                title="Toggle Smart Montage Timeline sequencer"
+              >
+                🎞️ Montage {showMontageTimeline ? "▲" : "▼"}
+              </button>
+            </div>
           </div>
-          <Waveform src={videoSrc || ""} start={start} end={end} onSeek={(t) => { if (videoRef.current) videoRef.current.currentTime = t; }} />
+          <AudioWaveformHeatmap
+            projectId={projectId}
+            clipId={clipId}
+            start={start}
+            end={end}
+            currentTime={currentTime}
+            duration={end - start}
+            videoSrc={videoSrc}
+            previewMode={previewMode}
+            onSeek={(absT, relT) => {
+              if (videoRef.current) {
+                if (previewMode === "rendered") {
+                  videoRef.current.currentTime = relT;
+                } else {
+                  videoRef.current.currentTime = absT;
+                }
+                setCurrentTime(videoRef.current.currentTime);
+              }
+            }}
+          />
           <div className="video-wrap" ref={videoWrapperRef} style={{ position: "relative" }}>
-            {showSafeGuides && (
-              <div className="safe-zone-guides">
-                <span className="safe-zone-label">TikTok / Shorts Safe Zone</span>
-              </div>
-            )}
             {videoSrc ? (
-              <video
-                key={videoSrc}
-                ref={videoRef}
-                src={videoSrc}
-                controls
-                playsInline
-                poster={previewMode === "rendered" ? clip.thumb_url ?? undefined : undefined}
-              />
+              showPhoneSimulator && previewMode === "rendered" ? (
+                <PhoneSimulator
+                  platform={activeSimulatorPlatform}
+                  onPlatformChange={(p) => setActiveSimulatorPlatform(p)}
+                  captionYFrac={captionY}
+                  captionWords={words}
+                  facecamRect={layout !== "center" ? cam : null}
+                  currentTime={currentTime}
+                  creatorHandle="@streamer"
+                  clipTitle={title || clip.title}
+                  onNudgeCaption={(_safeRect, safeYFrac) => {
+                    setCaptionY(safeYFrac);
+                    if (activeStyle) {
+                      activeStyle.y_frac = safeYFrac;
+                    }
+                    undo.set({ ...undo.state });
+                    setMsg({ text: "Captions auto-nudged to safe zone!", type: "success" });
+                  }}
+                  onNudgeFacecam={(safeCam) => {
+                    setCam(safeCam);
+                    undo.set({ ...undo.state, cam: safeCam });
+                    setMsg({ text: "Facecam auto-nudged to safe zone!", type: "success" });
+                  }}
+                >
+                  <InteractiveCanvas
+                    facecam={layout !== "center" ? cam : null}
+                    onFacecamChange={(nextCam) => {
+                      setCam(nextCam);
+                      undo.set({ ...undo.state, cam: nextCam });
+                    }}
+                    showFacecam={layout !== "center" && !!cam}
+                    cropCx={cx}
+                    onCropCxChange={(nextCx) => {
+                      setCx(nextCx);
+                      undo.set({ ...undo.state, cx: nextCx });
+                    }}
+                    showCropOverlay={false}
+                    captionWords={words}
+                    onCaptionWordsChange={(nextWords) => {
+                      setWords(nextWords);
+                      undo.set({ ...undo.state, words: nextWords });
+                    }}
+                    captionYFrac={captionY}
+                    onCaptionYFracChange={(nextY) => {
+                      setCaptionY(nextY);
+                      if (activeStyle) {
+                        activeStyle.y_frac = nextY;
+                      }
+                    }}
+                    showCaptions={true}
+                    currentTime={currentTime}
+                    activeStyle={activeStyle}
+                    showSafeGuides={showSafeGuides}
+                    onUndo={() => {
+                      const prev = undo.undo();
+                      if (prev) applyUndo(prev);
+                    }}
+                    onRedo={() => {
+                      const next = undo.redo();
+                      if (next) applyUndo(next);
+                    }}
+                    canUndo={undo.canUndo}
+                    canRedo={undo.canRedo}
+                  >
+                    <video
+                      key={videoSrc}
+                      ref={videoRef}
+                      src={videoSrc}
+                      controls
+                      playsInline
+                      onTimeUpdate={(e) => setCurrentTime(e.currentTarget.currentTime)}
+                      poster={clip.thumb_url ?? undefined}
+                      style={{ width: "100%", height: "100%", display: "block" }}
+                    />
+                  </InteractiveCanvas>
+                </PhoneSimulator>
+              ) : (
+                <InteractiveCanvas
+                  facecam={layout !== "center" ? cam : null}
+                  onFacecamChange={(nextCam) => {
+                    setCam(nextCam);
+                    undo.set({ ...undo.state, cam: nextCam });
+                  }}
+                  showFacecam={layout !== "center" && !!cam}
+                  cropCx={cx}
+                  onCropCxChange={(nextCx) => {
+                    setCx(nextCx);
+                    undo.set({ ...undo.state, cx: nextCx });
+                  }}
+                  showCropOverlay={previewMode === "original"}
+                  captionWords={words}
+                  onCaptionWordsChange={(nextWords) => {
+                    setWords(nextWords);
+                    undo.set({ ...undo.state, words: nextWords });
+                  }}
+                  captionYFrac={captionY}
+                  onCaptionYFracChange={(nextY) => {
+                    setCaptionY(nextY);
+                    if (activeStyle) {
+                      activeStyle.y_frac = nextY;
+                    }
+                  }}
+                  showCaptions={true}
+                  currentTime={currentTime}
+                  activeStyle={activeStyle}
+                  showSafeGuides={showSafeGuides}
+                  onUndo={() => {
+                    const prev = undo.undo();
+                    if (prev) applyUndo(prev);
+                  }}
+                  onRedo={() => {
+                    const next = undo.redo();
+                    if (next) applyUndo(next);
+                  }}
+                  canUndo={undo.canUndo}
+                  canRedo={undo.canRedo}
+                >
+                  <video
+                    key={videoSrc}
+                    ref={videoRef}
+                    src={videoSrc}
+                    controls
+                    playsInline
+                    onTimeUpdate={(e) => setCurrentTime(e.currentTarget.currentTime)}
+                    poster={previewMode === "rendered" ? clip.thumb_url ?? undefined : undefined}
+                    style={{ width: "100%", height: "100%", display: "block" }}
+                  />
+                </InteractiveCanvas>
+              )
             ) : (
               <div className="empty">{t("ce.notRendered")}</div>
             )}
           </div>
+          {showMontageTimeline && (
+            <div style={{ marginTop: 14 }}>
+              <MontageTimeline
+                projectId={projectId}
+                clips={project?.clips && project.clips.length > 0 ? project.clips : [clip]}
+                onSequenceChange={(reordered) => {
+                  setMsg({
+                    text: `Montage sequence updated (${reordered.length} clips)`,
+                    type: "info",
+                  });
+                }}
+                onTransitionsChange={() => {
+                  setMsg({
+                    text: "Timeline transition updated",
+                    type: "info",
+                  });
+                }}
+              />
+            </div>
+          )}
           <div className="panel section" style={{ marginTop: 14 }}>
             <div className="row" style={{ justifyContent: "space-between", marginBottom: 10 }}>
               <ScoreBadge score={clip.score} />
@@ -521,6 +769,59 @@ export default function ClipEditor() {
         </div>
 
         <div className="controls-pane">
+          {/* AI Suggestions Co-Pilot Panel */}
+          <div
+            className="panel section"
+            style={{
+              border: "1px solid rgba(139, 92, 246, 0.4)",
+              background: "rgba(17, 22, 36, 0.75)",
+            }}
+          >
+            <AiSuggestionsCoPilot
+              projectId={projectId}
+              clipId={clipId}
+              clip={clip}
+              onApplySuggestion={(sug, updatedClip) => {
+                const patch = sug.patch || {};
+                let nextUndo = { ...undo.state };
+
+                if (patch.start_t !== undefined || patch.start !== undefined) {
+                  const newStart = Number(patch.start_t ?? patch.start);
+                  setStart(newStart);
+                  nextUndo = { ...nextUndo, start: newStart };
+                }
+                if (patch.end_t !== undefined || patch.end !== undefined) {
+                  const newEnd = Number(patch.end_t ?? patch.end);
+                  setEnd(newEnd);
+                  nextUndo = { ...nextUndo, end: newEnd };
+                }
+                if (patch.layout) {
+                  setLayout(patch.layout);
+                  if (patch.layout !== "center" && !cam) {
+                    setCam(project?.facecam ?? { x: 0.02, y: 0.55, w: 0.24, h: 0.34 });
+                  }
+                  nextUndo = { ...nextUndo, layout: patch.layout };
+                }
+                if (patch.reframe_cx !== undefined) {
+                  const newCx = Number(patch.reframe_cx);
+                  setCx(newCx);
+                  nextUndo = { ...nextUndo, cx: newCx };
+                }
+                if (patch.teaser_loop !== undefined) {
+                  const loopSec = patch.teaser_loop ? 2 : 0;
+                  setLoopPreviewSeconds(loopSec);
+                  nextUndo = { ...nextUndo, loopPreviewSeconds: loopSec };
+                }
+                undo.set(nextUndo);
+
+                if (updatedClip) {
+                  setClip((prev) => (prev ? { ...prev, ...updatedClip } : prev));
+                }
+                setMsg({ text: `Applied: ${sug.title}`, type: "success", duration: 3000 });
+              }}
+            />
+          </div>
+
           <div className="panel section">
             <h3>{t("ce.titleHook")}</h3>
             <input className="input" value={title} onChange={(e) => setTitle(e.target.value)} />
@@ -617,13 +918,46 @@ export default function ClipEditor() {
               {cx === null
                 ? t("ce.cropAuto")
                 : t("ce.cropManual", { pct: Math.round(cx * 100) })}
+              {cx !== null && Math.abs(cx - 0.5) < 0.005 && " 🎯 (Center Snapped)"}
             </div>
-            <div className="range-row">
-              <span className="tiny muted">{t("ce.left")}</span>
-              <input type="range" min={0} max={1} step={0.01}
-                value={cx ?? 0.5}
-                onChange={(e) => setCx(Number(e.target.value))} />
-              <span className="tiny muted">{t("ce.right")}</span>
+            {/* Visual On-Canvas Crop Presets & Indicator (Replaces raw range slider) */}
+            <div className="row" style={{ gap: 6, marginBottom: 8 }}>
+              <button
+                className={"btn sm ghost" + (cx !== null && Math.abs(cx - 0.25) < 0.03 ? " on" : "")}
+                onClick={() => {
+                  const nextCx = 0.25;
+                  setCx(nextCx);
+                  undo.set({ ...undo.state, cx: nextCx });
+                }}
+                title="Align 9:16 crop window to left (25%)"
+              >
+                ◀ Left (25%)
+              </button>
+              <button
+                className={"btn sm ghost" + (cx !== null && Math.abs(cx - 0.5) < 0.01 ? " on" : "")}
+                onClick={() => {
+                  const nextCx = 0.5;
+                  setCx(nextCx);
+                  undo.set({ ...undo.state, cx: nextCx });
+                }}
+                title="Snap 9:16 crop window to center (50%)"
+              >
+                🎯 Center (50%)
+              </button>
+              <button
+                className={"btn sm ghost" + (cx !== null && Math.abs(cx - 0.75) < 0.03 ? " on" : "")}
+                onClick={() => {
+                  const nextCx = 0.75;
+                  setCx(nextCx);
+                  undo.set({ ...undo.state, cx: nextCx });
+                }}
+                title="Align 9:16 crop window to right (75%)"
+              >
+                Right (75%) ▶
+              </button>
+            </div>
+            <div className="tiny muted" style={{ marginBottom: 10 }}>
+              💡 Drag the 9:16 crop window directly on the video canvas (under Original preview) with magnetic center snapping.
             </div>
             {cx !== null && (
               <button className="btn ghost sm" style={{ marginTop: 10 }} onClick={() => setCx(null)}>
@@ -674,46 +1008,118 @@ export default function ClipEditor() {
               </div>
               {layout !== "center" && cam && (
                 <>
-                  <div style={{ position: "relative", marginBottom: 10 }}>
-                    <img
-                      src={`/media/${projectId}/source.jpg`}
-                      alt="source frame"
-                      style={{ width: "100%", borderRadius: 8, display: "block" }}
-                      onError={(e) => ((e.target as HTMLImageElement).style.display = "none")}
-                    />
-                    <div
-                      style={{
-                        position: "absolute",
-                        border: "2px solid var(--accent)",
-                        borderRadius: 4,
-                        pointerEvents: "none",
-                        left: `${cam.x * 100}%`,
-                        top: `${cam.y * 100}%`,
-                        width: `${cam.w * 100}%`,
-                        height: `${cam.h * 100}%`,
+                  <div
+                    style={{
+                      position: "relative",
+                      marginBottom: 10,
+                      borderRadius: 8,
+                      overflow: "hidden",
+                      border: "1px solid var(--border)",
+                    }}
+                  >
+                    <InteractiveCanvas
+                      facecam={cam}
+                      onFacecamChange={(nextCam) => {
+                        setCam(nextCam);
+                        undo.set({ ...undo.state, cam: nextCam });
                       }}
-                    />
-                  </div>
-                  {(
-                    [
-                      ["x", "ce.camX", 0, 0.95],
-                      ["y", "ce.camY", 0, 0.95],
-                      ["w", "ce.camW", 0.05, 0.6],
-                      ["h", "ce.camH", 0.05, 0.6],
-                    ] as const
-                  ).map(([k, labelKey, min, max]) => (
-                    <div className="range-row" key={k}>
-                      <span className="tiny muted" style={{ width: 48 }}>{t(labelKey)}</span>
-                      <input
-                        type="range"
-                        min={min}
-                        max={max}
-                        step={0.005}
-                        value={cam[k]}
-                        onChange={(e) => setCam({ ...cam, [k]: Number(e.target.value) })}
+                      showFacecam={true}
+                      showCaptions={false}
+                      showCropOverlay={false}
+                      canvasWidth={400}
+                      canvasHeight={225}
+                    >
+                      <img
+                        src={`/media/${projectId}/source.jpg`}
+                        alt="source frame"
+                        style={{ width: "100%", display: "block" }}
+                        onError={(e) => ((e.target as HTMLImageElement).style.display = "none")}
                       />
-                    </div>
-                  ))}
+                    </InteractiveCanvas>
+                  </div>
+                  {/* Live Coordinates Readout & Quick Positioning Controls (Replacing raw sliders) */}
+                  <div
+                    className="row"
+                    style={{
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                      marginBottom: 8,
+                      fontSize: 11,
+                    }}
+                  >
+                    <span className="pill" style={{ fontFamily: "monospace" }}>
+                      X: {(cam.x * 100).toFixed(0)}% Y: {(cam.y * 100).toFixed(0)}%
+                    </span>
+                    <span className="pill" style={{ fontFamily: "monospace" }}>
+                      W: {(cam.w * 100).toFixed(0)}% H: {(cam.h * 100).toFixed(0)}%
+                    </span>
+                  </div>
+                  <div className="row" style={{ gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
+                    <button
+                      className="btn sm ghost"
+                      style={{ fontSize: 11, padding: "2px 8px" }}
+                      onClick={() => {
+                        const next = { ...cam, x: 0.02, y: 0.04 };
+                        setCam(next);
+                        undo.set({ ...undo.state, cam: next });
+                      }}
+                      title="Move facecam to top-left corner"
+                    >
+                      ↖ Top-Left
+                    </button>
+                    <button
+                      className="btn sm ghost"
+                      style={{ fontSize: 11, padding: "2px 8px" }}
+                      onClick={() => {
+                        const next = { ...cam, x: Math.max(0, 0.98 - cam.w), y: 0.04 };
+                        setCam(next);
+                        undo.set({ ...undo.state, cam: next });
+                      }}
+                      title="Move facecam to top-right corner"
+                    >
+                      ↗ Top-Right
+                    </button>
+                    <button
+                      className="btn sm ghost"
+                      style={{ fontSize: 11, padding: "2px 8px" }}
+                      onClick={() => {
+                        const next = { ...cam, x: 0.02, y: Math.max(0, 0.96 - cam.h) };
+                        setCam(next);
+                        undo.set({ ...undo.state, cam: next });
+                      }}
+                      title="Move facecam to bottom-left corner"
+                    >
+                      ↙ Bottom-Left
+                    </button>
+                    <button
+                      className="btn sm ghost"
+                      style={{ fontSize: 11, padding: "2px 8px" }}
+                      onClick={() => {
+                        const next = {
+                          ...cam,
+                          x: Math.max(0, 0.98 - cam.w),
+                          y: Math.max(0, 0.96 - cam.h),
+                        };
+                        setCam(next);
+                        undo.set({ ...undo.state, cam: next });
+                      }}
+                      title="Move facecam to bottom-right corner"
+                    >
+                      ↘ Bottom-Right
+                    </button>
+                    <button
+                      className="btn sm ghost"
+                      style={{ fontSize: 11, padding: "2px 8px" }}
+                      onClick={() => {
+                        const def = project.facecam ?? { x: 0.02, y: 0.55, w: 0.24, h: 0.34 };
+                        setCam(def);
+                        undo.set({ ...undo.state, cam: def });
+                      }}
+                      title="Reset facecam to project default"
+                    >
+                      ↺ Reset
+                    </button>
+                  </div>
                   <span className="muted tiny">
                     {layout === "split" ? t("ce.camMarkSplit") : t("ce.camMarkPip")}
                   </span>
@@ -852,6 +1258,7 @@ export default function ClipEditor() {
                 ["L", "ce.shortcutForward"],
                 ["I", "ce.shortcutIn"],
                 ["O", "ce.shortcutOut"],
+                ["1-5", "ce.shortcutRating"],
                 ["← →", "ce.shortcutStepBack"],
                 ["⇧ ← →", "ce.shortcutFineBack"],
                 ["⌘Z", "ce.shortcutUndo"],

@@ -152,7 +152,7 @@ export default function ProjectView() {
             <button className={viewMode === "grid" ? "on" : ""} onClick={() => setViewMode("grid")}>
               ⊞ Studio Grid
             </button>
-            <button className={viewMode === "swipe" ? "on" : ""} onClick={() => setViewMode("swipe")}>
+            <button className={(viewMode as string) === "swipe" ? "on" : ""} onClick={() => setViewMode("swipe")}>
               📱 Phone Simulator
             </button>
           </div>
