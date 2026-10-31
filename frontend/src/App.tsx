@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link, Route, Routes } from "react-router-dom";
+import { Link, Navigate, Route, Routes } from "react-router-dom";
 import { api } from "./lib/api";
 import type { Health } from "./lib/types";
 import { capabilityReadiness, capabilitySummary } from "./lib/capabilities";
@@ -69,6 +69,19 @@ export default function App() {
           <span className="btn-icon">🎮</span> {t("nav.cues")}
         </button>
         <LanguageToggle />
+        <Link
+          to="/p/proj_demo/clip/c_demo_ace"
+          className="btn ghost sm studio-nav-demo-btn"
+          title="Open Interactive Streamer Studio Demo"
+          style={{
+            borderColor: "rgba(6, 182, 212, 0.45)",
+            background: "rgba(6, 182, 212, 0.1)",
+            color: "var(--accent-cyan, #06b6d4)",
+            fontWeight: 700,
+          }}
+        >
+          <span className="btn-icon">🎮</span> Studio Demo
+        </Link>
         <Link to="/" className="btn primary sm">
           <span className="btn-icon">✨</span> {t("nav.newProject")}
         </Link>
@@ -77,6 +90,7 @@ export default function App() {
       {showDiag && <DiagnosticsPanel onClose={() => setShowDiag(false)} />}
       <Routes>
         <Route path="/" element={<Upload health={health} />} />
+        <Route path="/demo" element={<Navigate to="/p/proj_demo/clip/c_demo_ace" replace />} />
         <Route path="/p/:projectId" element={<ProjectView />} />
         <Route path="/p/:projectId/clip/:clipId" element={<ClipEditor />} />
       </Routes>

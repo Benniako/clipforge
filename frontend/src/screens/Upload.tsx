@@ -369,6 +369,102 @@ export default function Upload({ health }: { health: Health | null }) {
 
   return (
     <div className="container">
+      {/* ================================================================ */}
+      {/* 🎮 Interactive Creator Studio 2.0 Showcase & Quick Launch Hub     */}
+      {/* ================================================================ */}
+      <div className="studio-hero-banner">
+        <div className="studio-hero-left">
+          <div className="studio-badge-live">
+            <span className="live-dot" />
+            <span>INTERACTIVE STUDIO 2.0 LIVE</span>
+          </div>
+          <h2 className="studio-hero-title">
+            Smart Interactive Interface for Streamers
+          </h2>
+          <p className="studio-hero-desc">
+            Directly manipulate facecam &amp; gameplay bounding boxes, test safe-zone collisions on TikTok/Shorts phone simulators, scrub 10 Hz climax audio heatmaps, and auto-apply AI retention suggestions.
+          </p>
+          <div className="studio-hero-actions">
+            <button
+              className="btn primary lg studio-launch-btn"
+              onClick={() => nav("/p/proj_demo/clip/c_demo_ace")}
+            >
+              <span>🎮 Launch Interactive Studio Demo</span>
+              <span className="arrow">→</span>
+            </button>
+            <button
+              className="btn ghost lg"
+              onClick={() => nav("/p/proj_demo")}
+              title="Review clips in vertical TikTok swipe mode"
+            >
+              <span>📱 Phone Simulator Review</span>
+            </button>
+          </div>
+        </div>
+
+        <div className="studio-hero-features-grid">
+          <div
+            className="studio-feature-card"
+            onClick={() => nav("/p/proj_demo/clip/c_demo_ace")}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") nav("/p/proj_demo/clip/c_demo_ace"); }}
+          >
+            <div className="feature-icon">📐</div>
+            <div className="feature-title">8-Point Drag &amp; Drop Canvas</div>
+            <div className="feature-desc">
+              Visual handles for facecam re-framing, 9:16 crop box, and WYSIWYG caption position.
+            </div>
+            <span className="feature-tag">Interactive</span>
+          </div>
+
+          <div
+            className="studio-feature-card"
+            onClick={() => nav("/p/proj_demo/clip/c_demo_ace")}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") nav("/p/proj_demo/clip/c_demo_ace"); }}
+          >
+            <div className="feature-icon">📱</div>
+            <div className="feature-title">TikTok &amp; Shorts Simulator</div>
+            <div className="feature-desc">
+              Live collision warnings against platform UI with 1-click auto-nudge into safe zones.
+            </div>
+            <span className="feature-tag">Safe Zones</span>
+          </div>
+
+          <div
+            className="studio-feature-card"
+            onClick={() => nav("/p/proj_demo/clip/c_demo_ace")}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") nav("/p/proj_demo/clip/c_demo_ace"); }}
+          >
+            <div className="feature-icon">📊</div>
+            <div className="feature-title">10 Hz Climax Heatmap</div>
+            <div className="feature-desc">
+              Decibel curve with scream, crowd roar, and multi-kill markers plus continuous hover scrub.
+            </div>
+            <span className="feature-tag">Audio Waveform</span>
+          </div>
+
+          <div
+            className="studio-feature-card"
+            onClick={() => nav("/p/proj_demo/clip/c_demo_ace")}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") nav("/p/proj_demo/clip/c_demo_ace"); }}
+          >
+            <div className="feature-icon">🤖</div>
+            <div className="feature-title">AI Suggestions Co-Pilot</div>
+            <div className="feature-desc">
+              Viral hook retention checks, pacing score, and 1-click auto-apply suggestions.
+            </div>
+            <span className="feature-tag">Viral AI</span>
+          </div>
+        </div>
+      </div>
+
       <div className="hero">
         <h1>{t("up.heroTitle")}</h1>
         <p>{t("up.heroText")}</p>

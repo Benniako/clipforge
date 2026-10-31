@@ -36,12 +36,19 @@ class SPAStaticFiles(StaticFiles):
                 # Missing JS/CSS/images should 404, not return index.html.
                 if any(path.lower().endswith(ext) for ext in self._ASSET_EXTS):
                     raise
-                return await super().get_response("index.html", scope)
-            raise
+                response = await super().get_response("index.html", scope)
+            else:
+                raise
         if response.status_code == 404:
             if any(path.lower().endswith(ext) for ext in self._ASSET_EXTS):
                 return response
-            return await super().get_response("index.html", scope)
+            response = await super().get_response("index.html", scope)
+
+        is_html = path in ("", "index.html") or not any(path.lower().endswith(ext) for ext in self._ASSET_EXTS)
+        if is_html:
+            response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate, max-age=0"
+            response.headers["Pragma"] = "no-cache"
+            response.headers["Expires"] = "0"
         return response
 
 from . import feedback, store
@@ -60,6 +67,11 @@ __version__ = "0.1.0"
 async def lifespan(app: FastAPI):
     store.init_db()
     feedback.init_db()
+    try:
+        from . import demo
+        demo.ensure_demo_project()
+    except Exception as exc:
+        log.warning("failed to seed demo project: %s", exc)
     # Clean up stale temp files from crashed pipelines (files older than 1 hour).
     _data = get_settings().data_dir
     for _p in _data.rglob("*.tmp"):
@@ -136,6 +148,14 @@ def create_app() -> FastAPI:
         only need to know that FastAPI finished booting and can serve the SPA.
         """
         return {"ok": True, "version": __version__}
+
+    @app.get("/api/demo", tags=["meta"])
+    def demo_info() -> dict:
+        """Get or seed the interactive streamer studio demo project."""
+        from . import demo
+        p = demo.ensure_demo_project()
+        clip_id = p.clips[0].id if p.clips else "c_demo_ace"
+        return {"project_id": p.id, "clip_id": clip_id, "clip_count": len(p.clips)}
 
     @app.get("/api/capabilities", tags=["meta"])
     def capabilities() -> dict:

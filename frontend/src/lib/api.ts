@@ -169,6 +169,12 @@ function parseXhrError(xhr: XMLHttpRequest): Error {
 export const api = {
   health: () => fetchWithTimeout("/api/health").then((r) => json<Health>(r)),
 
+  /** Pre-seeded interactive streamer studio demo project */
+  demo: () =>
+    fetchWithTimeout("/api/demo").then((r) =>
+      json<{ project_id: string; clip_id: string; clip_count: number }>(r),
+    ),
+
   /** AI-generated publish-ready content for a clip (titles, description, hashtags). */
   publishContent: (projectId: string, clipId: string, platform?: string) =>
     fetchWithTimeout(`/api/projects/${projectId}/clips/${clipId}/publish-content?platform=${encodeURIComponent(platform ?? "generic")}`)
