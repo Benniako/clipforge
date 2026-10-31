@@ -117,12 +117,12 @@ _PROFILE_EXTRA: dict[str, dict[str, tuple[str, ...]]] = {
                 "counter terrorists gewinnen", "runde gewonnen", "sieg"),
     },
     "eafc": {
-        "goal": ("goal", "goooal", "gol", "but", "tor", "tore", "tooor", "toooor",
+        "goal": ("goal", "goooal", "gol", "but", "tor", "tooor", "toooor",
                  "hattrick", "what a goal", "equalizer", "penalty goal", "header", "volley"),
         "penalty": ("penalty", "red card", "yellow card", "elfmeter", "elfer",
                     "rote karte", "gelbe karte", "freistoss", "freistos", "foul"),
-        "victory": ("sieg", "gewonnen", "match won", "victory", "champion", "champions"),
-        "match_event": ("full time", "half time", "halbzeit", "abpfiff", "schlusspfiff"),
+        "victory": ("sieg", "gewonnen", "match won", "spiel gewonnen", "victory"),
+        "match_event": ("full time", "abpfiff", "schlusspfiff"),
         "substitution": ("auswechslung", "substitution", "sub"),
     },
     "rocketleague": {

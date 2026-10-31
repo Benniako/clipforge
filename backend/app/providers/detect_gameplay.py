@@ -175,6 +175,12 @@ MENU_OCR_WORDS = {
     "karriere", "karrieremodus", "rivals", "champions", "weekend league",
     "anstoß", "kick-off", "playstyles", "chemie-stil", "trainer", "verträge",
     "active squad", "player bio", "taktik", "zuweisungen", "auswechslungen",
+    "galerie", "galerie-level", "top-scorer", "ausw", "auswechselbank", "substitutes",
+    "spiel fortsetzen", "spielinfo", "einstellun", "bedienungshilfe",
+    "favoriten", "kader", "zum ueberspringen", "zum überspringen",
+    "ueberspringen halten", "überspringen halten", "partie nicht verfuegbar",
+    "partie nicht verfügbar", "halbzeit", "half time", "4-1-2-1-2", "4-3-1-2",
+    "4-2-1-3", "4-3-3", "4-4-2", "4-2-3-1", "4-2-2-2", "3-5-2", "5-3-2", "5-2-3",
 }
 
 
@@ -443,9 +449,12 @@ def detect_gameplay(src_path: str, info: MediaInfo, settings: ImportSettings,
     hop = float(times[1] - times[0]) if len(times) > 1 else 0.1
     pre_n = max(int(2.0 / hop), 1)         # ~2s window before the peak
 
+    menu_times = [float(e.t) for e in ocr_events if _is_menu_ocr_event(e)]
     clips: list[GameplayClip] = []
     for idx in peaks:
         pt = float(times[idx])
+        if menu_times and any(abs(pt - mt) <= MENU_CONTEXT_WINDOW * 2.0 for mt in menu_times):
+            continue
         start = max(0.0, pt - lead)
         end = min(info.duration, pt + tail)
         if end - start < settings.min_len:
@@ -628,7 +637,15 @@ def _is_menu_ocr_event(event) -> bool:
             return True
         if not any(c.isdigit() for c in detail):
             return True
-    return any(word in detail for word in MENU_OCR_WORDS)
+    if any(word in detail for word in MENU_OCR_WORDS):
+        return True
+    import re
+    if re.search(r'\b\d-\d-\d(-\d)?\b', detail):
+        return True
+    card_attrs = sum(1 for attr in ("tem", "sch", "pas", "dri", "def", "phy") if f" {attr} " in f" {detail} ")
+    if card_attrs >= 2:
+        return True
+    return False
 
 
 def _suppress_audio_events_near_menu(audio_events: list, ocr_events: list,
@@ -1004,11 +1021,25 @@ def _merge(priority: list["GameplayClip"], rest: list["GameplayClip"],
         if len(kept) >= limit:
             return kept
 
-    # 2. Fill remaining slots with the highest-energy audio clips
+    # 2. Fill remaining slots with high-energy audio clips
+    # When confirmed in-game events exist, do not flood the user with uncorroborated filler peaks
+    max_filler = limit - len(kept)
+    if kept:
+        max_filler = min(max_filler, 2)
+
     for c in sorted(rest, key=lambda c: c.score, reverse=True):
+        feats = getattr(c, "features", {}) or {}
+        has_evidence = (
+            feats.get("corroborated")
+            or float(feats.get("excitement", 0.0)) >= 0.70
+            or float(feats.get("reaction", 0.0)) >= 0.60
+            or float(feats.get("audio_event", 0.0)) >= 0.25
+        )
+        if kept and not has_evidence:
+            continue
         if all(_overlap(c, k) <= max_overlap for k in kept):
             kept.append(c)
-        if len(kept) >= limit:
+        if len(kept) >= len(priority) + max_filler or len(kept) >= limit:
             break
 
     return kept
