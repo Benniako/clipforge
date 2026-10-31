@@ -761,16 +761,22 @@ def _cue_events(wav_path: str, settings: ImportSettings) -> list:
     base = get_settings().data_dir / "game_cues"
     events = []
     prof = getattr(settings, "game_profile", "auto")
-    threshold = 0.88 if prof in {"eafc", "fifa", "rocketleague", "sports"} else 0.84
+    kw = {"threshold": 0.88} if prof in {"eafc", "fifa", "rocketleague", "sports"} else {}
     for sub in {_cue_dir(settings.game_profile), "common"}:
         try:
-            events += detect_cues.find_events(wav_path, base / sub, threshold=threshold)
+            try:
+                events += detect_cues.find_events(wav_path, base / sub, **kw)
+            except TypeError:
+                events += detect_cues.find_events(wav_path, base / sub)
         except Exception as e:
             log.warning("cue matching failed for %s: %s", sub, e)
     extra = _reference_cue_files(settings, base)
     if extra:
         try:
-            events += detect_cues.match_templates(wav_path, extra, threshold=threshold)
+            try:
+                events += detect_cues.match_templates(wav_path, extra, **kw)
+            except TypeError:
+                events += detect_cues.match_templates(wav_path, extra)
         except Exception as e:
             log.warning("reference-audio cue matching failed: %s", e)
     return events
