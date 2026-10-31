@@ -489,10 +489,10 @@ def detect_gameplay(src_path: str, info: MediaInfo, settings: ImportSettings,
     ocr_clips = _ocr_clips(ocr_events, info, settings, lead=lead, tail=tail)
     audio_clips = _audio_event_clips(audio_window_events, info, settings,
                                      lead=lead, tail=tail)
-    merged = _merge(cue_clips + ocr_clips + audio_clips, clips, settings.target_clips)
-    # Multimodal corroboration: a moment confirmed by BOTH the audio cue and the
-    # on-screen text is the surest highlight there is — reward the overlap.
-    apply_corroboration(merged, cue_events, ocr_events, audio_window_events)
+    priority = cue_clips + ocr_clips + audio_clips
+    # Multimodal corroboration: reward corroborated events BEFORE selection
+    apply_corroboration(priority + clips, cue_events, ocr_events, audio_window_events)
+    merged = _merge(priority, clips, settings.target_clips)
     merged.sort(key=lambda c: c.start)
     return merged
 
@@ -679,12 +679,12 @@ def _ocr_clips(events: list, info: MediaInfo, settings: ImportSettings, *,
             start = max(0.0, end - settings.max_len)
         # Goals and critical events score top-tier; generic scoreboard changes score moderately
         if lbl in {"goal", "victory", "ace", "clutch"}:
-            base_score = 78
+            base_score = 88
         elif lbl in {"scoreboard"}:
-            base_score = 64
+            base_score = 74
         else:
-            base_score = 68
-        score = int(round(max(1, min(99, base_score + e.confidence * 18))))
+            base_score = 78
+        score = int(round(max(1, min(99, base_score + e.confidence * 11))))
         m, s = divmod(int(e.t), 60)
         label = e.label.replace("_", " ").title()
         out.append(GameplayClip(
@@ -945,20 +945,23 @@ def apply_evidence_caps(clips: list["GameplayClip"] | list) -> None:
             c.score = min(int(c.score), 86)
 
 
-def apply_title_fallbacks(clips: list["GameplayClip"] | list) -> None:
+def apply_title_fallbacks(clips: list["GameplayClip"] | list, profile: str = "generic") -> None:
     """Replace generic peak titles with the strongest visible/audio reason."""
+    prof = (profile or "generic").lower().replace(" ", "")
+    is_sports = prof in {"eafc", "fifa", "rocketleague", "sports"}
     for c in clips:
         title = getattr(c, "title", "") or ""
         if not title.lower().startswith("highlight"):
             continue
         feats = getattr(c, "features", {}) or {}
         label = "Highlight"
-        if float(feats.get("reaction", 0.0)) > 0.55:
-            label = "Big Reaction"
+        has_cam = feats.get("facecam") is not None or float(feats.get("reaction", 0.0)) > 0.65
+        if float(feats.get("reaction", 0.0)) > 0.65 and has_cam:
+            label = "Streamer Reaction" if is_sports else "Big Reaction"
         elif float(feats.get("transient", 0.0)) > 0.65 or float(feats.get("spikes", 0.0)) > 0.7:
-            label = "Sudden Fight"
+            label = "Big Chance" if is_sports else "Sudden Fight"
         elif float(feats.get("intensity", 0.0)) > 0.85:
-            label = "Loud Fight"
+            label = "Stadium Hype" if is_sports else "Loud Fight"
         elif float(feats.get("audio_event", 0.0)) > 0.25:
             label = _audio_title_from_factors(getattr(c, "factors", []) or [])
         elif float(feats.get("vlm_viral", 0.0)) > 0.55:
@@ -994,28 +997,16 @@ def _overlap(a: "GameplayClip", b: "GameplayClip") -> float:
 def _merge(priority: list["GameplayClip"], rest: list["GameplayClip"],
            limit: int, *, max_overlap: float = 0.4) -> list["GameplayClip"]:
     kept: list[GameplayClip] = []
-    max_priority = max(1, int(limit * 0.5))  # guarantee at least 50% slots for raw audio gameplay
-    priority_sorted = sorted(priority, key=lambda c: c.score, reverse=True)
-    rest_sorted = sorted(rest, key=lambda c: c.score, reverse=True)
-
-    # 1. Take corroborated / audio-backed priority events first
-    for c in priority_sorted:
-        if c.features.get("corroborated") or c.features.get("supporting_audio"):
-            if all(_overlap(c, k) <= max_overlap for k in kept):
-                kept.append(c)
-            if len(kept) >= max_priority:
-                break
-
-    # 2. Add top audio energy highlights (real goals, screamers, crowd roars)
-    for c in rest_sorted:
+    # 1. Take all confirmed gameplay events first (goals, aces, victories, sound cues)
+    for c in sorted(priority, key=lambda c: c.score, reverse=True):
         if all(_overlap(c, k) <= max_overlap for k in kept):
             kept.append(c)
         if len(kept) >= limit:
-            break
+            return kept
 
-    # 3. Fill any remaining slots with other priority events (if slots remain)
-    for c in priority_sorted:
-        if c not in kept and all(_overlap(c, k) <= max_overlap for k in kept):
+    # 2. Fill remaining slots with the highest-energy audio clips
+    for c in sorted(rest, key=lambda c: c.score, reverse=True):
+        if all(_overlap(c, k) <= max_overlap for k in kept):
             kept.append(c)
         if len(kept) >= limit:
             break

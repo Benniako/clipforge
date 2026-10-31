@@ -34,6 +34,9 @@ SAMPLE_WIDTH = 640         # facecam faces are small; detect at a higher res
 MIN_PRESENCE = 0.55        # cluster must appear in >= this share of samples
 MAX_DRIFT = 0.025          # max std-dev of the cluster centre (fractions)
 MAX_FACE_FRAC = 0.22       # a "facecam" face wider than this is a talking head
+MIN_FACE_FRAC = 0.045      # a face smaller than 4.5% of frame width is an in-game HUD icon, player card, or radar
+MIN_CAM_W = 0.08          # a real streamer webcam overlay is at least 8% of the frame width
+MIN_CAM_H = 0.09          # a real streamer webcam overlay is at least 9% of the frame height
 # Face box -> overlay rectangle expansion (face sits upper-middle of the cam).
 EXPAND_W, EXPAND_H = 2.1, 2.5
 MIN_PERSON_PRESENCE = 0.35
@@ -96,6 +99,10 @@ def detect_facecam(src_path: str, duration: float) -> Rect | None:
         if person is None:
             return None
         cam = expand_person_to_overlay(person)
+    if cam.w < MIN_CAM_W or cam.h < MIN_CAM_H:
+        log.info("rejected sub-threshold facecam candidate w=%.3f h=%.3f (likely in-game HUD/radar)",
+                 cam.w, cam.h)
+        return None
     log.info("facecam detected at x=%.2f y=%.2f w=%.2f h=%.2f",
              cam.x, cam.y, cam.w, cam.h)
     return cam
@@ -138,7 +145,7 @@ def stable_face_cluster(
         ws = sorted(b[2] for b in cl)
         hs = sorted(b[3] for b in cl)
         w, h = ws[len(ws) // 2], hs[len(hs) // 2]
-        if w > MAX_FACE_FRAC:        # that's a talking head, not an overlay
+        if w > MAX_FACE_FRAC or w < MIN_FACE_FRAC:  # reject talking heads or tiny in-game HUD icons
             continue
         cx, cy = xs[len(xs) // 2], ys[len(ys) // 2]
         best = Rect(x=cx - w / 2, y=cy - h / 2, w=w, h=h).clamped()

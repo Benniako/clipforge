@@ -700,6 +700,10 @@ class Engine:
             self._advance(project_id, 1, "Looking for a facecam…")
             try:
                 cam_rect = facecam_mod.detect_facecam(src_path, info.duration)
+                if cam_rect is not None and (cam_rect.w < 0.08 or cam_rect.h < 0.09):
+                    log.info("ignoring invalid tiny facecam (w=%.3f, h=%.3f) — treating as no facecam",
+                             cam_rect.w, cam_rect.h)
+                    cam_rect = None
             except Exception as e:
                 log.warning("facecam detection failed: %s", e)
 
@@ -979,7 +983,7 @@ class Engine:
 
         if kind == "gameplay":
             gameplay_mod.apply_evidence_caps(clips)
-            gameplay_mod.apply_title_fallbacks(clips)
+            gameplay_mod.apply_title_fallbacks(clips, profile=project.settings.game_profile)
 
         clips.sort(key=lambda c: c.score, reverse=True)
 
@@ -1195,11 +1199,12 @@ class Engine:
                     cx = round(c, 4)
             except Exception as e:
                 log.warning("action centroid failed for %s: %s", clip.id, e)
+        has_valid_cam = (cam_rect is not None and getattr(cam_rect, "w", 0) >= 0.08 and getattr(cam_rect, "h", 0) >= 0.09)
         layout = LayoutType.center
-        if vertical and cam_rect is not None and settings.facecam_layout != "off":
+        if vertical and has_valid_cam and settings.facecam_layout != "off":
             layout = (LayoutType.framed if settings.facecam_layout == "framed"
                       else LayoutType.split)
-        return Reframe(layout=layout, tracked=False, facecam=cam_rect,
+        return Reframe(layout=layout, tracked=False, facecam=cam_rect if has_valid_cam else None,
                        keyframes=[ReframeKeyframe(t=0.0, cx=cx)])
 
     def _render_all(self, project_id: str, clips: list[Clip], src_path: str,

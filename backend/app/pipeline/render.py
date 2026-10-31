@@ -371,8 +371,9 @@ def render_clip(clip: Clip, src_path: str, info: MediaInfo, style: StyleTemplate
     eff_dur = _effective_duration(clip)
     # Facecam layouts (gameplay): cam + gameplay composed on a vertical canvas.
     cam = clip.reframe.facecam
+    is_valid_cam = (cam is not None and getattr(cam, "w", 0) >= 0.08 and getattr(cam, "h", 0) >= 0.09)
     composed = (clip.reframe.layout in (LayoutType.split, LayoutType.framed)
-                and cam is not None and out_h > out_w and not tightened)
+                and is_valid_cam and out_h > out_w and not tightened)
 
     with tempfile.TemporaryDirectory() as tmp:
         # Reference the .ass by a BARE filename and run ffmpeg with cwd=tmp, so

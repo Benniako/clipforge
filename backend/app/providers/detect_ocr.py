@@ -235,7 +235,7 @@ def focused_frame_times(duration: float, focus_times: list[float] | None, *,
     out: list[float] = []
     seen: set[int] = set()
     for t in sorted(float(x) for x in focus_times if 0.0 <= float(x) <= duration):
-        for off in (-1.0, 0.0, 1.5, 3.0):
+        for off in (-2.0, -1.0, 0.0, 1.5, 3.0, 4.5, 6.0, 7.5):
             tt = min(max(t + off, 0.25), max(duration - 0.25, 0.25))
             bucket = int(round(tt / 0.75))
             if bucket not in seen:
