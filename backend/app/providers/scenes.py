@@ -95,6 +95,32 @@ def scene_cuts(src: str, t0: float, t1: float, *,
 
 def _scenedetect_cuts(src: str, t0: float, dur: float) -> list[float] | None:
     """PySceneDetect adaptive-detector cut times (absolute), or None on failure."""
+    # Fast path: detect on a small proxy of just this span. Opening and seeking
+    # a 1440p60 source with PySceneDetect costs 10+ s per span; a 480-px proxy
+    # (GPU-decoded when possible) is written in about a second and gives the
+    # detector the same pictures, since it downscales internally anyway.
+    try:  # pragma: no cover - needs scenedetect and a real video
+        import tempfile
+        from pathlib import Path
+
+        from scenedetect import AdaptiveDetector, open_video, SceneManager
+
+        with tempfile.TemporaryDirectory() as tmp:
+            proxy = Path(tmp) / "span.mp4"
+            ffmpeg.run([*ffmpeg.hw_decode_args(src), "-ss", f"{t0:.3f}", "-i", src,
+                        "-t", f"{dur:.3f}", "-an", "-vf", "scale=480:-2",
+                        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
+                        str(proxy)], timeout=180)
+            video = open_video(str(proxy))
+            sm = SceneManager()
+            sm.add_detector(AdaptiveDetector())
+            sm.detect_scenes(video)
+            scenes = sm.get_scene_list()
+            del video
+            return [round(t0 + s[0].get_seconds(), 3) for s in scenes[1:]]
+    except Exception as e:
+        log.info("scene proxy unavailable (%s); reading the source directly", e)
+
     try:  # pragma: no cover - exercised only when scenedetect is installed
         from scenedetect import AdaptiveDetector, open_video, SceneManager
 

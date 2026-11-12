@@ -247,8 +247,14 @@ def transcribe(audio_path: str, *, language: str | None = None,
             with _asr_lock:
                 return _whisperx_transcribe(audio_path, lang, progress, batch_size)
         except Exception as e:
-            log.warning("whisperX failed (%s); falling back", e)
-            engine = "whisper" if s.has_whisper else "synthetic"
+            if "no aligned words" in str(e):
+                # whisperX ran but its VAD found no speech (gameplay without a
+                # voice track). A second model would find none either.
+                log.info("no speech found in the audio; skipping the whisper fallback")
+                engine = "synthetic"
+            else:
+                log.warning("whisperX failed (%s); falling back", e)
+                engine = "whisper" if s.has_whisper else "synthetic"
 
     if engine == "whisper":
         try:

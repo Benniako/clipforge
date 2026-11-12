@@ -746,9 +746,11 @@ class Settings:
         """
         if self.use_nvenc:
             if self.codec == "av1" and self.has_av1_nvenc:
-                return ["-c:v", "av1_nvenc", "-preset", "p5", "-rc", "vbr",
+                return ["-c:v", "av1_nvenc", "-preset", "p4", "-rc", "vbr",
                         "-cq", "30", "-b:v", "0", "-pix_fmt", "yuv420p"]
-            return ["-c:v", "h264_nvenc", "-preset", "p5", "-rc", "vbr",
+            # p4: measured 74% faster than p5 on an RTX 5060 Ti at the same
+            # output size for -cq 21 (1440p60 source -> 1080x1920).
+            return ["-c:v", "h264_nvenc", "-preset", "p4", "-rc", "vbr",
                     "-cq", "21", "-b:v", "0", "-pix_fmt", "yuv420p", "-profile:v", "high"]
         return ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
                 "-pix_fmt", "yuv420p", "-profile:v", "high"]

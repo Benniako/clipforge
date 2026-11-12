@@ -2717,7 +2717,12 @@ def test_vlm_keyframe_times_are_inside_span():
 
 def test_vlm_model_autopick_accepts_hyphenated_qwen_name():
     from app.providers import vlm
-    assert vlm._resolve_model(["qwen3-vl:8b", "qwen2.5vl:32b"]) == "qwen3-vl:8b"
+    assert vlm._resolve_model(["qwen3-vl:8b-instruct", "qwen2.5vl:32b"]) == "qwen3-vl:8b-instruct"
+    # The bare qwen3-vl size tag is the "thinking" build: it burns the short
+    # reply budget on hidden reasoning and returns nothing, so a model that
+    # answers directly wins, and it is only used when nothing else is installed.
+    assert vlm._resolve_model(["qwen3-vl:8b", "qwen2.5vl:7b"]) == "qwen2.5vl:7b"
+    assert vlm._resolve_model(["qwen3-vl:8b"]) == "qwen3-vl:8b"
     assert vlm._resolve_model(["qwen2.5-vl:7b", "llava:latest"]) == "qwen2.5-vl:7b"
     assert vlm._resolve_model(["qwen2.5vl:7b", "qwen2.5vl:32b"]) == "qwen2.5vl:32b"
 

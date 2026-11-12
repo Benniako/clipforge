@@ -89,6 +89,12 @@ def correct_transcript(transcript: Transcript, lang: str = "de") -> int:
     """
     from . import ollama_client as oc
 
+    # A synthetic transcript is filler for recordings without speech. Sending it
+    # to the LLM only loads a multi-GB model (measured: ~60 s next to Whisper)
+    # to "correct" words nobody said.
+    if getattr(transcript, "provider", "") == "synthetic":
+        return 0
+
     # Build the full transcript text (lowercase for matching)
     full_text = " ".join(w.text for w in transcript.words)
 

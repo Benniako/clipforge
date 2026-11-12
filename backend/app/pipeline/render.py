@@ -542,10 +542,12 @@ def render_clip(clip: Clip, src_path: str, info: MediaInfo, style: StyleTemplate
             # fallback because decode offload benefits every encoder.
             # Works with both h264_nvenc and av1_nvenc encoders without forcing
             # CUDA memory layout (which would break CPU-side filter chains).
-            hwaccel = ["-hwaccel", "cuda"]
-            base_gpu = hwaccel + base_gpu
+            # The first attempt names the NVDEC decoder explicitly (plain
+            # ``-hwaccel cuda`` silently decodes on the CPU on some setups);
+            # the fallback keeps the plain flag so ffmpeg can pick a decoder.
+            base_gpu = (ffmpeg.hw_decode_args(src_abs) or ["-hwaccel", "cuda"]) + base_gpu
             if s.use_nvenc:  # NVENC path gets it; x264 fallback gets it too
-                base_cpu = hwaccel + base_cpu
+                base_cpu = ["-hwaccel", "cuda"] + base_cpu
         encoders: list[tuple[list[str], list[str]]] = [(base_gpu, s.video_encoder_args())]
         if s.use_nvenc:                    # GPU path can fail at runtime -> CPU fallback
             encoders.append((base_cpu, _X264))

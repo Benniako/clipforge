@@ -42,16 +42,12 @@ _FACE_CACHE_MAX = 200   # max entries before eviction (LRU-style oldest-first)
 SAMPLE_FPS = 3.0          # frames/sec sampled for tracking
 SAMPLE_WIDTH = 480        # downscale for fast detection (cx is a fraction, so OK)
 
-def _hwaccel_args() -> list[str]:
+def _hwaccel_args(src: str | None = None) -> list[str]:
     """GPU decode flags for ffmpeg when an NVIDIA GPU is available."""
     try:
-        from ..config import get_settings as _gs
-        s = _gs()
-        if s.use_nvenc or s.has_nvidia:
-            return ["-hwaccel", "cuda"]
+        return ffmpeg.hw_decode_args(src)
     except Exception:
-        pass
-    return []
+        return []
 # One-Euro filter tuning. min_cutoff = heavy smoothing when the face is roughly
 # still (kills hand-held jitter); beta = how aggressively smoothing relaxes once
 # the face genuinely moves (low latency during a pan). The classic 1€ defaults
@@ -94,7 +90,7 @@ def precompute_face_tracks(src: str, duration: float) -> None:
         pattern = str(Path(tmp) / "pf_%05d.jpg")
         try:
             ffmpeg.run([
-                *_hwaccel_args(), "-i", src,
+                *_hwaccel_args(src), "-i", src,
                 "-vf", f"fps={SAMPLE_FPS},scale={SAMPLE_WIDTH}:-2",
                 "-q:v", "4", "-t", f"{duration:.3f}", pattern,
             ], timeout=min(duration * 2, 600))
@@ -262,7 +258,7 @@ def _track_faces(src: str, start: float, end: float,
         pattern = str(Path(tmp) / "f_%05d.jpg")
         try:
             ffmpeg.run([
-                *_hwaccel_args(),
+                *_hwaccel_args(src),
                 "-ss", f"{start:.3f}", "-i", src, "-t", f"{dur:.3f}",
                 "-vf", f"fps={SAMPLE_FPS},scale={SAMPLE_WIDTH}:-2",
                 "-q:v", "4", pattern,

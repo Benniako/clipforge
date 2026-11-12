@@ -41,11 +41,26 @@ def _is_vision(tag: str) -> bool:
     return any(name == p or name.startswith(p) for p in _VISION_PREFERRED)
 
 
-def _rank_vision_model(tag: str) -> tuple[int, int, float, str]:
+def _answers_directly(tag: str) -> bool:
+    """False for vision tags that spend the token budget on hidden reasoning.
+
+    Qwen3-VL ships "thinking" and "instruct" builds; the bare size tag
+    (``qwen3-vl:8b``) is the thinking one. It reasons for 150+ tokens even with
+    ``think: False``, so the short SCORE|REASON reply this module asks for
+    (``num_predict=60``) comes back empty.
+    """
+    low = tag.lower()
+    if low.startswith("qwen3-vl"):
+        return "instruct" in low
+    return "thinking" not in low
+
+
+def _rank_vision_model(tag: str) -> tuple[int, int, int, float, str]:
     low = tag.lower()
     family = next((i for i, name in enumerate(_VISION_PREFERRED)
                    if low == name or low.startswith(name)), len(_VISION_PREFERRED))
-    return (1 if _is_vision(low) else 0, -family, _oc.size_b(low), low)
+    return (1 if _is_vision(low) else 0, 1 if _answers_directly(low) else 0,
+            -family, _oc.size_b(low), low)
 
 
 def _resolve_model(tags: list[str]) -> str | None:

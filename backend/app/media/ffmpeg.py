@@ -15,6 +15,45 @@ from pathlib import Path
 from ..config import get_settings
 
 
+# NVDEC decoders that ffmpeg ships as standalone "cuvid" codecs. On some
+# GPU / driver / ffmpeg combinations (seen on an RTX 5060 Ti with ffmpeg 8.0.1)
+# plain ``-hwaccel cuda`` fails to initialise and ffmpeg silently decodes on the
+# CPU, while the matching cuvid decoder works. Naming the decoder explicitly
+# keeps decoding on the GPU in both cases.
+_CUVID_DECODERS = {"h264": "h264_cuvid", "hevc": "hevc_cuvid",
+                   "av1": "av1_cuvid", "vp9": "vp9_cuvid"}
+
+
+@lru_cache(maxsize=256)
+def _source_codec(path: str) -> str | None:
+    try:
+        return probe(path).codec
+    except Exception:
+        return None
+
+
+def hw_decode_args(src: str | Path | None = None, *, explicit: bool = True) -> list[str]:
+    """ffmpeg input flags for GPU decoding, or ``[]`` without an NVIDIA GPU.
+
+    With ``explicit`` (default) and a known source codec this returns
+    ``-hwaccel cuda -c:v <codec>_cuvid``. ``explicit=False`` returns only
+    ``-hwaccel cuda``, which lets ffmpeg fall back to software decoding by
+    itself; use it for a retry after the explicit decoder failed.
+    """
+    try:
+        s = get_settings()
+        if not (s.use_nvenc or s.has_nvidia):
+            return []
+    except Exception:
+        return []
+    args = ["-hwaccel", "cuda"]
+    if explicit and src is not None:
+        dec = _CUVID_DECODERS.get((_source_codec(str(src)) or "").lower())
+        if dec:
+            args += ["-c:v", dec]
+    return args
+
+
 _COMMON_ERRORS: dict[str, tuple[str, str]] = {
     "Invalid data found when processing": (
         "corrupt or non-video file",
@@ -253,15 +292,15 @@ def grab_frame(src: str | Path, dst: str | Path, *, t: float = 0.0,
     # GPU-accelerated decode for frame extraction: offloads H.264/HEVC decode
     # to NVDEC hardware, reducing CPU load. Only when an NVIDIA GPU is present
     # (the same condition render.py uses for its hwaccel path).
+    tail = args + [str(dst)]
+    hw = hw_decode_args(src)
     try:
-        from ..config import get_settings
-        s = get_settings()
-        if s.use_nvenc or s.has_nvidia:
-            args = ["-hwaccel", "cuda"] + args
-    except Exception:
-        pass  # settings not available yet (e.g. during import) — safe fallback
-    args.append(str(dst))
-    run(args, timeout=timeout)
+        run(hw + tail, timeout=timeout)
+    except FFmpegError:
+        if "-c:v" not in hw:
+            raise
+        # The explicit GPU decoder rejected this stream: let ffmpeg choose.
+        run(hw_decode_args(src, explicit=False) + tail, timeout=timeout)
 
     # Populate cache so subsequent callers skip the ffmpeg call entirely.
     try:
