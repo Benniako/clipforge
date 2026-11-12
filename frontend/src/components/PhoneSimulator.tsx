@@ -170,7 +170,7 @@ export default function PhoneSimulator({
           alignItems: "center",
           width: "100%",
           padding: "8px 12px",
-          background: "rgba(17, 22, 36, 0.95)",
+          background: "rgba(22, 24, 27, 0.95)",
           borderRadius: "10px 10px 0 0",
           border: "1px solid rgba(255, 255, 255, 0.1)",
           borderBottom: "none",
@@ -179,7 +179,7 @@ export default function PhoneSimulator({
         }}
       >
         <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-          <span style={{ fontSize: 12, fontWeight: 700, color: "var(--muted, #94a3b8)" }}>
+          <span style={{ fontSize: 12, fontWeight: 700, color: "var(--muted, #979ea8)" }}>
             📱 Platform:
           </span>
           <div className="seg platform-tabs" style={{ display: "flex", background: "rgba(0,0,0,0.4)", borderRadius: 6, padding: 2 }}>
@@ -189,8 +189,8 @@ export default function PhoneSimulator({
               className={activePlatform === "tiktok" ? "on" : ""}
               onClick={() => handleSelectPlatform("tiktok")}
               style={{
-                background: activePlatform === "tiktok" ? "var(--accent, #8b5cf6)" : "transparent",
-                color: activePlatform === "tiktok" ? "#ffffff" : "var(--muted, #94a3b8)",
+                background: activePlatform === "tiktok" ? "var(--accent, #ff6a2b)" : "transparent",
+                color: activePlatform === "tiktok" ? "#ffffff" : "var(--muted, #979ea8)",
                 border: "none",
                 borderRadius: 4,
                 padding: "4px 10px",
@@ -209,7 +209,7 @@ export default function PhoneSimulator({
               onClick={() => handleSelectPlatform("shorts")}
               style={{
                 background: activePlatform === "shorts" ? "#ef4444" : "transparent",
-                color: activePlatform === "shorts" ? "#ffffff" : "var(--muted, #94a3b8)",
+                color: activePlatform === "shorts" ? "#ffffff" : "var(--muted, #979ea8)",
                 border: "none",
                 borderRadius: 4,
                 padding: "4px 10px",
@@ -227,8 +227,8 @@ export default function PhoneSimulator({
               className={activePlatform === "reels" ? "on" : ""}
               onClick={() => handleSelectPlatform("reels")}
               style={{
-                background: activePlatform === "reels" ? "#ec4899" : "transparent",
-                color: activePlatform === "reels" ? "#ffffff" : "var(--muted, #94a3b8)",
+                background: activePlatform === "reels" ? "#f2b53a" : "transparent",
+                color: activePlatform === "reels" ? "#ffffff" : "var(--muted, #979ea8)",
                 border: "none",
                 borderRadius: 4,
                 padding: "4px 10px",
@@ -249,9 +249,9 @@ export default function PhoneSimulator({
             data-testid="toggle-overlay"
             onClick={handleToggleOverlay}
             style={{
-              background: overlayVisible ? "rgba(6, 182, 212, 0.2)" : "rgba(255, 255, 255, 0.05)",
-              color: overlayVisible ? "#06b6d4" : "var(--muted, #94a3b8)",
-              border: "1px solid rgba(6, 182, 212, 0.3)",
+              background: overlayVisible ? "rgba(127, 183, 220, 0.2)" : "rgba(255, 255, 255, 0.05)",
+              color: overlayVisible ? "#7fb7dc" : "var(--muted, #979ea8)",
+              border: "1px solid rgba(127, 183, 220, 0.3)",
               borderRadius: 6,
               padding: "4px 10px",
               fontSize: 12,
@@ -342,7 +342,7 @@ export default function PhoneSimulator({
         {nudgeFeedback && (
           <span
             data-testid="nudge-feedback"
-            style={{ color: "#38bdf8", fontSize: 11, fontWeight: 700 }}
+            style={{ color: "#7fb7dc", fontSize: 11, fontWeight: 700 }}
           >
             {nudgeFeedback}
           </span>
@@ -377,7 +377,7 @@ export default function PhoneSimulator({
             transform: "translateX(-50%)",
             width: 80,
             height: 14,
-            background: "#111827",
+            background: "#16181b",
             borderRadius: 10,
             zIndex: 40,
             pointerEvents: "none",
@@ -387,7 +387,7 @@ export default function PhoneSimulator({
             gap: 6,
           }}
         >
-          <div style={{ width: 5, height: 5, borderRadius: "50%", background: "#1f2937" }} />
+          <div style={{ width: 5, height: 5, borderRadius: "50%", background: "#25282d" }} />
           <div style={{ width: 6, height: 6, borderRadius: "50%", background: "#065f46" }} />
         </div>
 
@@ -492,7 +492,7 @@ export default function PhoneSimulator({
                         <span style={{ fontWeight: 800, fontSize: 13 }}>{creatorHandle}</span>
                         <span
                           style={{
-                            background: "var(--accent, #8b5cf6)",
+                            background: "var(--accent, #ff6a2b)",
                             color: "#fff",
                             fontSize: 9,
                             fontWeight: 800,
@@ -551,7 +551,7 @@ export default function PhoneSimulator({
                           width: 36,
                           height: 36,
                           borderRadius: "50%",
-                          background: "linear-gradient(135deg, #8b5cf6, #ec4899)",
+                          background: "linear-gradient(135deg, #ff6a2b, #f2b53a)",
                           border: "2px solid #ffffff",
                           display: "grid",
                           placeItems: "center",

@@ -97,7 +97,7 @@ export default function ProcessingView({
       <div className="panel" style={{ padding: 22, marginTop: 16 }}>
         {/* ETA + run info — the headline the user asked for. */}
         <div className="row" style={{ justifyContent: "space-between", alignItems: "baseline", marginBottom: 8, flexWrap: "wrap", gap: 8 }}>
-          <strong style={{ fontSize: 18 }}>
+          <strong className="eta">
             {paused
               ? t("proc.titlePaused")
               : etaSeconds != null

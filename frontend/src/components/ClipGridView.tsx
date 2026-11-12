@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../lib/api";
 import type { ImportSettings, PowerMode, Project } from "../lib/types";
@@ -261,29 +261,31 @@ export default function ClipGridView({
 
   return (
     <div className="container">
-      <div className="row" style={{ justifyContent: "space-between" }}>
+      <div className="project-head">
         <div className="col">
           <div className="row">
             <h2>{project.name}</h2>
             {project.content_type && (
-              <span className="pill" style={{ color: project.content_type === "gameplay" ? "#ff9f43" : "var(--accent)" }}>
+              <span className="pill">
                 {project.content_type === "gameplay" ? "Gameplay" : "Sprache"}
               </span>
             )}
           </div>
-          <span className="muted tiny">
-            {fmtDuration(project.source?.duration ?? 0)} Quelle -{" "}
-            {project.clips.length} Clips - {ready} gerendert - {project.settings.aspect} -{" "}
-            {POWER_LABELS[project.settings.power_mode] ?? "Ausgewogen"}
-          </span>
+          <div className="project-meta">
+            <span><b>{fmtDuration(project.source?.duration ?? 0)}</b> Quelle</span>
+            <span><b>{project.clips.length}</b> Clips</span>
+            <span><b>{ready}</b> gerendert</span>
+            <span><b>{project.settings.aspect}</b></span>
+            <span>{POWER_LABELS[project.settings.power_mode] ?? "Ausgewogen"}</span>
+          </div>
         </div>
-        <div className="row">
+        <div className="project-actions">
           {learn && learn.total_ratings > 0 && (
             <span
-              className="pill"
+              className="pill ok"
               title={`Gelernt: ${learnTitle}. Klicken zum Zurücksetzen.`}
               onClick={resetLearning}
-              style={{ cursor: "pointer", color: "var(--good)" }}
+              style={{ cursor: "pointer" }}
             >
               Personalisiert - {learn.likes} gut {learn.dislikes} schlecht
               {learn.trims > 0 ? ` - ${learn.trims} Schnitte` : ""}
@@ -316,33 +318,293 @@ export default function ClipGridView({
           {project.warnings.map((w, i) => {
             const sev = typeof w === "string" ? "warn" : w.severity;
             const message = typeof w === "string" ? w : w.message;
-            const palette =
-              sev === "error"
-                ? { border: "#6b2f2f", background: "#2a1414", color: "#f5a8a8", tag: t("notice.error") }
-                : sev === "info"
-                ? { border: "#2b4a5a", background: "#142028", color: "#8ad0f5", tag: t("notice.info") }
-                : { border: "#5a4a2b", background: "#2a2414", color: "#f5d98a", tag: t("notice.warn") };
+            const tag = sev === "error" ? t("notice.error") : sev === "info" ? t("notice.info") : t("notice.warn");
             return (
-              <div
-                key={i}
-                style={{
-                  padding: "12px 16px", borderRadius: 10, fontSize: 13,
-                  border: `1px solid ${palette.border}`, background: palette.background,
-                  color: palette.color,
-                }}
-              >
-                <strong>{palette.tag}:</strong> {message}
+              <div key={i} className={"notice " + (sev === "error" ? "error" : sev === "info" ? "info" : "warn")}>
+                <strong>{tag}:</strong> {message}
               </div>
             );
           })}
         </div>
       )}
 
+      <div className="grid-head">
+        <div className="row" style={{ gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          <span className="eyebrow">Filter</span>
+          <div className="seg">
+            <button
+              className={minScore === 0 ? "on" : ""}
+              onClick={() => setMinScore(0)}
+            >
+              Alle ({project.clips.length})
+            </button>
+            <button
+              className={minScore === 85 ? "on" : ""}
+              onClick={() => setMinScore(85)}
+            >
+              Ultra Viral 85+ ({project.clips.filter((c) => c.score >= 85).length})
+            </button>
+            <button
+              className={minScore === 70 ? "on" : ""}
+              onClick={() => setMinScore(70)}
+            >
+              Highlights 70+ ({project.clips.filter((c) => c.score >= 70).length})
+            </button>
+          </div>
+        </div>
+
+        <div className="spacer" />
+
+        <div className="row" style={{ gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          <span className="eyebrow">Sortierung</span>
+          <div className="seg">
+            {(["score", "timeline", "duration"] as Sort[]).map((s) => (
+              <button
+                key={s}
+                className={sort === s ? "on" : ""}
+                style={{ minWidth: 72 }}
+                onClick={() => setSort(s)}
+              >
+                {SORT_LABELS[s]}
+              </button>
+            ))}
+          </div>
+
+          <select
+            className="input"
+            value={project.settings.aspect}
+            title="Ausgabeformat jetzt ändern - rendert alle Clips neu"
+            onChange={async (e) => {
+              try {
+                await api.setAspect(project.id, e.target.value);
+                window.location.reload();
+              } catch (err: any) {
+                setMontageErr(err?.message ?? "Format konnte nicht geändert werden.");
+              }
+            }}
+          >
+            <option value="9:16">9:16 vertikal</option>
+            <option value="4:5">4:5 Feed</option>
+            <option value="1:1">1:1 Quadrat</option>
+            <option value="16:9">16:9 breit</option>
+          </select>
+
+          <button className="btn ghost sm" onClick={refresh} title="Aktualisieren">
+            Aktualisieren
+          </button>
+          <button className="btn ghost sm" onClick={() => setSelected(clips.map((c) => c.id))} title="Alle auswählen">
+            Alle
+          </button>
+          {selected.length > 0 && (
+            <button className="btn ghost sm" onClick={() => setSelected([])} title="Auswahl aufheben">
+              Abwählen ({selected.length})
+            </button>
+          )}
+        </div>
+      </div>
+
+      {clips.length === 0 ? (
+        <div className="empty">Keine Clips passen zu diesem Filter. Senke den Mindest-Score.</div>
+      ) : (
+        <div className="clip-grid">
+          {clips.map((c) => (
+            <ClipCard
+              key={c.id}
+              clip={c}
+              projectId={project.id}
+              rank={scoreRank[c.id]}
+              selected={selected.includes(c.id)}
+              onToggleSelect={toggleSelect}
+            />
+          ))}
+        </div>
+      )}
+
+      {selectedClips.length > 0 && (
+        <div className="panel section selected-preview">
+          <div className="row" style={{ justifyContent: "space-between", marginBottom: 12 }}>
+            <div className="col">
+              <h3>Auswahl-Vorschau</h3>
+              <span className="muted tiny">
+                {selectedClips.length} Clip{selectedClips.length === 1 ? "" : "s"} in Montage-Reihenfolge
+              </span>
+            </div>
+            <div className="row selected-preview-actions">
+              <div className="seg preview-tabs">
+                <button
+                  className={selectedPreviewMode === "rendered" ? "on" : ""}
+                  onClick={() => setSelectedPreviewMode("rendered")}
+                >
+                  Gerendert
+                </button>
+                <button
+                  className={selectedPreviewMode === "original" ? "on" : ""}
+                  onClick={() => setSelectedPreviewMode("original")}
+                >
+                  Original
+                </button>
+              </div>
+              <button
+                className="btn ghost sm"
+                onClick={rerenderSelected}
+                disabled={rerenderingSelected}
+              >
+                {rerenderingSelected ? <><span className="spinner" /> Rendert neu...</> : "Auswahl neu rendern"}
+              </button>
+              <button className="btn ghost sm" onClick={() => setSelected([])}>
+                Leeren
+              </button>
+            </div>
+          </div>
+          <div className="row" style={{ gap: 8, marginTop: 8, flexWrap: "wrap" }}>
+            {/* Batch style change */}
+            <select className="input" style={{ width: "auto" }}
+              value=""
+              onChange={async (e) => {
+                const styleId = e.target.value;
+                if (!styleId) return;
+                e.target.value = "";
+                // Apply the selected style to all selected clips
+                for (const c of selectedClips) {
+                  try {
+                    await api.editClip(project.id, c.id, { style_id: styleId });
+                  } catch (err) {
+                    console.warn("Failed to update style for clip", c.id, err);
+                  }
+                }
+                // Refresh project
+                const p = await api.getProject(project.id);
+                onChange(p);
+              }}
+            >
+              <option value="">Stil auf alle anwenden…</option>
+              {[...new Set(project.clips.map(c => c.captions.style_id))].map(sid => (
+                <option key={sid} value={sid}>{sid}</option>
+              ))}
+            </select>
+            {/* Batch download as ZIP */}
+            {selectedClips.some(c => c.status === "ready" && c.export_url) && (
+              <a className="btn sm ghost" style={{ fontSize: 12 }}
+                href={api.exportBatchUrl(project.id)}
+                download>
+                Auswahl ZIP ({selectedClips.filter(c => c.export_url).length})
+              </a>
+            )}
+          </div>
+          <div className="selected-preview-layout">
+            <div className="selected-video">
+              {selectedPreviewSrc ? (
+                <video
+                  key={`${selectedPreviewMode}-${activeSelected?.id}-${selectedPreviewSrc}`}
+                  src={selectedPreviewSrc}
+                  controls
+                  playsInline
+                  poster={selectedPreviewMode === "rendered" ? activeSelected?.thumb_url ?? undefined : undefined}
+                />
+              ) : (
+                <div className="empty">Wähle einen Clip aus, um ihn hier anzusehen.</div>
+              )}
+            </div>
+            <div className="selected-list">
+              {selectedClips.map((c, i) => (
+                <button
+                  key={c.id}
+                  className={"selected-row" + (activeSelected?.id === c.id ? " on" : "")}
+                  onClick={() => setActiveSelectedId(c.id)}
+                >
+                  <span className="order">{i + 1}</span>
+                  <span
+                    className="mini-thumb"
+                    style={c.thumb_url ? { backgroundImage: `url(${c.thumb_url})` } : undefined}
+                  />
+                  <span className="selected-title">{c.title || "Unbenannter Clip"}</span>
+                  <span className="muted tiny">{fmtDuration(c.tightened_duration ?? c.end - c.start)}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Montage builder */}
+      <div className="montage-bar">
+        <span className="muted tiny">
+          {selected.length === 0
+            ? "Tipp: Wähle Clips aus, um sie zu einer Montage zu verbinden."
+            : `${selected.length} ausgewählt - sie spielen in deiner Auswahl-Reihenfolge.`}
+        </span>
+        <div className="spacer" style={{ flex: 1 }} />
+        {selected.length > 0 && (
+          <button className="btn ghost sm" onClick={() => setSelected([])}>
+            Leeren
+          </button>
+        )}
+        <button
+          className="btn primary sm"
+          onClick={makeMontage}
+          disabled={selected.length < 2 || montaging}
+        >
+          {montaging ? <><span className="spinner" /> Montage wird gebaut…</> : `Montage erstellen (${selected.length})`}
+        </button>
+      </div>
+
+      {montageErr && <div className="toast err">{montageErr}</div>}
+
+      {showCues && <CueModal onClose={() => setShowCues(false)} />}
+
+      {project.montages.length > 0 && (
+        <div style={{ marginTop: 28 }}>
+          <h3 className="section-title">Montagen</h3>
+          <div className="clip-grid">
+            {project.montages.map((m) => (
+              <div className="clip-card" key={m.id}>
+                <div
+                  className="thumb"
+                  style={{
+                    aspectRatio: "16 / 10",
+                    backgroundImage: m.thumb_url ? `url(${m.thumb_url})` : undefined,
+                  }}
+                >
+                  {m.status !== "ready" && (
+                    <span className="status-chip" style={{ color: m.status === "failed" ? "var(--bad)" : "var(--warn)" }}>
+                      {m.status === "failed" ? "Fehlgeschlagen" : "Rendering…"}
+                    </span>
+                  )}
+                  {m.status === "ready" && <span className="dur">{fmtDuration(m.duration)}</span>}
+                </div>
+                <div className="clip-body">
+                  <span className="score-badge" style={{ ["--c" as string]: scoreColor(m.score) }}>
+                    <span className="ring" style={{ ["--p" as string]: m.score }}>
+                      <i>{m.score}</i>
+                    </span>
+                    <span>Score</span>
+                  </span>
+                  <div className="clip-title">{m.title}</div>
+                  <div className="factors">
+                    {m.factors.slice(0, 2).map((f, i) => (
+                      <span className="factor" key={i} title={f.detail}>{f.label}<span className="w">+{Math.round(f.weight)}</span></span>
+                    ))}
+                  </div>
+                  {m.status === "ready" && m.export_url && (
+                    <div className="card-actions">
+                      <a className="btn sm" href={api.downloadMontageUrl(project.id, m.id)} download>
+                        Download
+                      </a>
+                    </div>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      <h3 className="section-title eyebrow">{t("up.secOutput")} &amp; {t("up.secDetect")}</h3>
       {(project.events?.length > 0 || (project.content_type === "gameplay" && project.source)) && (
-        <div className="panel section" style={{ marginTop: 16 }}>
+        <details className="fold">
+          <summary>{t("cg.scan")}</summary>
+          <div className="fold-body">
           <div className="row" style={{ justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
             <div className="col">
-              <h3>Scan-Kontrolle</h3>
               <span className="muted tiny">
                 Ereignisse prüfen, visuelle Cues kalibrieren und falsche Treffer entfernen.
               </span>
@@ -381,13 +643,15 @@ export default function ClipGridView({
           ) : (
             <VisualCueCalibration project={project} />
           )}
-        </div>
+          </div>
+        </details>
       )}
 
-      <div className="panel section render-controls" style={{ marginTop: 16 }}>
+      <details className="fold render-controls">
+        <summary>{t("cg.render")}</summary>
+        <div className="fold-body">
         <div className="row" style={{ justifyContent: "space-between", alignItems: "flex-start", gap: 14 }}>
           <div className="col">
-            <h3>Render-Steuerung</h3>
             <span className="muted tiny">
               Passe Modus oder Ausgabe an und starte dieses Material erneut.
             </span>
@@ -562,281 +826,7 @@ export default function ClipGridView({
           )}
         </div>
       </div>
-
-      <div className="grid-head" style={{ marginTop: 24, padding: "14px 16px", background: "rgba(18, 23, 38, 0.7)", border: "1px solid var(--border)", borderRadius: "var(--radius)" }}>
-        <div className="row" style={{ gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-          <span className="muted tiny" style={{ fontWeight: 700 }}>Filter:</span>
-          <div className="seg" style={{ width: "auto" }}>
-            <button
-              className={minScore === 0 ? "on" : ""}
-              onClick={() => setMinScore(0)}
-              style={{ padding: "5px 12px", fontSize: 12 }}
-            >
-              Alle ({project.clips.length})
-            </button>
-            <button
-              className={minScore === 85 ? "on" : ""}
-              onClick={() => setMinScore(85)}
-              style={{ padding: "5px 12px", fontSize: 12, color: minScore === 85 ? "#fff" : "var(--accent-gold)" }}
-            >
-              🔥 Ultra Viral 85+ ({project.clips.filter((c) => c.score >= 85).length})
-            </button>
-            <button
-              className={minScore === 70 ? "on" : ""}
-              onClick={() => setMinScore(70)}
-              style={{ padding: "5px 12px", fontSize: 12, color: minScore === 70 ? "#fff" : "var(--accent-cyan)" }}
-            >
-              ⚡ Highlights 70+ ({project.clips.filter((c) => c.score >= 70).length})
-            </button>
-          </div>
-        </div>
-
-        <div className="spacer" />
-
-        <div className="row" style={{ gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-          <span className="muted tiny">Sortierung:</span>
-          <div className="seg" style={{ width: "auto" }}>
-            {(["score", "timeline", "duration"] as Sort[]).map((s) => (
-              <button
-                key={s}
-                className={sort === s ? "on" : ""}
-                style={{ minWidth: 72, padding: "5px 10px", fontSize: 12, textTransform: "capitalize" }}
-                onClick={() => setSort(s)}
-              >
-                {SORT_LABELS[s]}
-              </button>
-            ))}
-          </div>
-
-          <select
-            className="input"
-            style={{ width: "auto", padding: "5px 10px", fontSize: 12 }}
-            value={project.settings.aspect}
-            title="Ausgabeformat jetzt ändern - rendert alle Clips neu"
-            onChange={async (e) => {
-              try {
-                await api.setAspect(project.id, e.target.value);
-                window.location.reload();
-              } catch (err: any) {
-                setMontageErr(err?.message ?? "Format konnte nicht geändert werden.");
-              }
-            }}
-          >
-            <option value="9:16">9:16 vertikal</option>
-            <option value="4:5">4:5 Feed</option>
-            <option value="1:1">1:1 Quadrat</option>
-            <option value="16:9">16:9 breit</option>
-          </select>
-
-          <button className="btn ghost sm" onClick={refresh} title="Aktualisieren">
-            🔄
-          </button>
-          <button className="btn ghost sm" onClick={() => setSelected(clips.map((c) => c.id))} title="Alle auswählen">
-            Alle
-          </button>
-          {selected.length > 0 && (
-            <button className="btn ghost sm" onClick={() => setSelected([])} title="Auswahl aufheben">
-              Abwählen ({selected.length})
-            </button>
-          )}
-        </div>
-      </div>
-
-      {clips.length === 0 ? (
-        <div className="empty">Keine Clips passen zu diesem Filter. Senke den Mindest-Score.</div>
-      ) : (
-        <div className="clip-grid">
-          {clips.map((c) => (
-            <ClipCard
-              key={c.id}
-              clip={c}
-              projectId={project.id}
-              rank={scoreRank[c.id]}
-              selected={selected.includes(c.id)}
-              onToggleSelect={toggleSelect}
-            />
-          ))}
-        </div>
-      )}
-
-      {selectedClips.length > 0 && (
-        <div className="panel section selected-preview">
-          <div className="row" style={{ justifyContent: "space-between", marginBottom: 12 }}>
-            <div className="col">
-              <h3>Auswahl-Vorschau</h3>
-              <span className="muted tiny">
-                {selectedClips.length} Clip{selectedClips.length === 1 ? "" : "s"} in Montage-Reihenfolge
-              </span>
-            </div>
-            <div className="row selected-preview-actions">
-              <div className="seg preview-tabs">
-                <button
-                  className={selectedPreviewMode === "rendered" ? "on" : ""}
-                  onClick={() => setSelectedPreviewMode("rendered")}
-                >
-                  Gerendert
-                </button>
-                <button
-                  className={selectedPreviewMode === "original" ? "on" : ""}
-                  onClick={() => setSelectedPreviewMode("original")}
-                >
-                  Original
-                </button>
-              </div>
-              <button
-                className="btn ghost sm"
-                onClick={rerenderSelected}
-                disabled={rerenderingSelected}
-              >
-                {rerenderingSelected ? <><span className="spinner" /> Rendert neu...</> : "Auswahl neu rendern"}
-              </button>
-              <button className="btn ghost sm" onClick={() => setSelected([])}>
-                Leeren
-              </button>
-            </div>
-          </div>
-          <div className="row" style={{ gap: 8, marginTop: 8, flexWrap: "wrap" }}>
-            {/* Batch style change */}
-            <select className="input" style={{ width: "auto", padding: "6px 10px", fontSize: 12 }}
-              value=""
-              onChange={async (e) => {
-                const styleId = e.target.value;
-                if (!styleId) return;
-                e.target.value = "";
-                // Apply the selected style to all selected clips
-                for (const c of selectedClips) {
-                  try {
-                    await api.editClip(project.id, c.id, { style_id: styleId });
-                  } catch (err) {
-                    console.warn("Failed to update style for clip", c.id, err);
-                  }
-                }
-                // Refresh project
-                const p = await api.getProject(project.id);
-                onChange(p);
-              }}
-            >
-              <option value="">Stil auf alle anwenden…</option>
-              {[...new Set(project.clips.map(c => c.captions.style_id))].map(sid => (
-                <option key={sid} value={sid}>{sid}</option>
-              ))}
-            </select>
-            {/* Batch download as ZIP */}
-            {selectedClips.some(c => c.status === "ready" && c.export_url) && (
-              <a className="btn sm ghost" style={{ fontSize: 12 }}
-                href={api.exportBatchUrl(project.id)}
-                download>
-                Auswahl ZIP ({selectedClips.filter(c => c.export_url).length})
-              </a>
-            )}
-          </div>
-          <div className="selected-preview-layout">
-            <div className="selected-video">
-              {selectedPreviewSrc ? (
-                <video
-                  key={`${selectedPreviewMode}-${activeSelected?.id}-${selectedPreviewSrc}`}
-                  src={selectedPreviewSrc}
-                  controls
-                  playsInline
-                  poster={selectedPreviewMode === "rendered" ? activeSelected?.thumb_url ?? undefined : undefined}
-                />
-              ) : (
-                <div className="empty">Wähle einen Clip aus, um ihn hier anzusehen.</div>
-              )}
-            </div>
-            <div className="selected-list">
-              {selectedClips.map((c, i) => (
-                <button
-                  key={c.id}
-                  className={"selected-row" + (activeSelected?.id === c.id ? " on" : "")}
-                  onClick={() => setActiveSelectedId(c.id)}
-                >
-                  <span className="order">{i + 1}</span>
-                  <span
-                    className="mini-thumb"
-                    style={c.thumb_url ? { backgroundImage: `url(${c.thumb_url})` } : undefined}
-                  />
-                  <span className="selected-title">{c.title || "Unbenannter Clip"}</span>
-                  <span className="muted tiny">{fmtDuration(c.tightened_duration ?? c.end - c.start)}</span>
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Montage builder */}
-      <div className="row" style={{ marginTop: 22, gap: 12, flexWrap: "wrap" }}>
-        <span className="muted tiny">
-          {selected.length === 0
-            ? "Tipp: Wähle Clips aus, um sie zu einer Montage zu verbinden."
-            : `${selected.length} ausgewählt - sie spielen in deiner Auswahl-Reihenfolge.`}
-        </span>
-        <div className="spacer" style={{ flex: 1 }} />
-        {selected.length > 0 && (
-          <button className="btn ghost sm" onClick={() => setSelected([])}>
-            Leeren
-          </button>
-        )}
-        <button
-          className="btn primary sm"
-          onClick={makeMontage}
-          disabled={selected.length < 2 || montaging}
-        >
-          {montaging ? <><span className="spinner" /> Montage wird gebaut…</> : `Montage erstellen (${selected.length})`}
-        </button>
-      </div>
-
-      {montageErr && <div className="toast err">{montageErr}</div>}
-
-      {showCues && <CueModal onClose={() => setShowCues(false)} />}
-
-      {project.montages.length > 0 && (
-        <div style={{ marginTop: 28 }}>
-          <h3 style={{ marginBottom: 12 }}>Montagen</h3>
-          <div className="clip-grid">
-            {project.montages.map((m) => (
-              <div className="clip-card" key={m.id}>
-                <div
-                  className="thumb"
-                  style={{
-                    aspectRatio: "16 / 10",
-                    backgroundImage: m.thumb_url ? `url(${m.thumb_url})` : undefined,
-                  }}
-                >
-                  {m.status !== "ready" && (
-                    <span className="status-chip" style={{ color: m.status === "failed" ? "var(--bad)" : "var(--warn)" }}>
-                      {m.status === "failed" ? "Fehlgeschlagen" : "Rendering…"}
-                    </span>
-                  )}
-                  {m.status === "ready" && <span className="dur">{fmtDuration(m.duration)}</span>}
-                </div>
-                <div className="clip-body">
-                  <span className="score-badge" style={{ ["--c" as string]: scoreColor(m.score) }}>
-                    <span className="ring" style={{ ["--p" as string]: m.score }}>
-                      <i>{m.score}</i>
-                    </span>
-                    <span>Score</span>
-                  </span>
-                  <div className="clip-title">{m.title}</div>
-                  <div className="factors">
-                    {m.factors.slice(0, 2).map((f, i) => (
-                      <span className="factor" key={i} title={f.detail}>{f.label}</span>
-                    ))}
-                  </div>
-                  {m.status === "ready" && m.export_url && (
-                    <div className="card-actions">
-                      <a className="btn sm" href={api.downloadMontageUrl(project.id, m.id)} download>
-                        Download
-                      </a>
-                    </div>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
+      </details>
     </div>
   );
 }

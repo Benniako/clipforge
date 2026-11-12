@@ -179,7 +179,7 @@ export default function AiSuggestionsCoPilot({
         style={{
           justifyContent: "space-between",
           alignItems: "center",
-          borderBottom: "1px solid var(--border, #1d2538)",
+          borderBottom: "1px solid var(--border, #25282d)",
           paddingBottom: 8,
         }}
       >
@@ -193,9 +193,9 @@ export default function AiSuggestionsCoPilot({
           className="pill"
           style={{
             fontSize: 10,
-            background: "rgba(139, 92, 246, 0.15)",
-            color: "var(--accent, #8b5cf6)",
-            border: "1px solid rgba(139, 92, 246, 0.3)",
+            background: "rgba(255, 106, 43, 0.15)",
+            color: "var(--accent, #ff6a2b)",
+            border: "1px solid rgba(255, 106, 43, 0.3)",
           }}
         >
           {visibleSuggestions.length} Insights Available
@@ -208,7 +208,7 @@ export default function AiSuggestionsCoPilot({
           style={{
             padding: 16,
             textAlign: "center",
-            background: "var(--panel, #111624)",
+            background: "var(--panel, #16181b)",
             borderRadius: 8,
           }}
         >
@@ -234,12 +234,12 @@ export default function AiSuggestionsCoPilot({
           // Card type badge and icon
           let typeIcon = "💡";
           let typeLabel = "AI Suggestion";
-          let accentColor = "var(--accent, #8b5cf6)";
+          let accentColor = "var(--accent, #ff6a2b)";
 
           if (sug.type === "trim_hook") {
             typeIcon = "✂️";
             typeLabel = "Silence Trimming";
-            accentColor = "var(--accent-cyan, #06b6d4)";
+            accentColor = "var(--accent-cyan, #7fb7dc)";
           } else if (sug.type === "hook_rating") {
             typeIcon = "🎯";
             typeLabel = "Hook Strength";
@@ -247,7 +247,7 @@ export default function AiSuggestionsCoPilot({
           } else if (sug.type === "climax_teaser") {
             typeIcon = "🔥";
             typeLabel = "Virality Cold-Open";
-            accentColor = "var(--accent-2, #ec4899)";
+            accentColor = "var(--accent-2, #f2b53a)";
           } else if (sug.type === "reframe_layout") {
             typeIcon = "📱";
             typeLabel = "Reframe Co-Pilot";
@@ -255,7 +255,7 @@ export default function AiSuggestionsCoPilot({
           } else if (sug.type === "tighten_dead_air") {
             typeIcon = "⚡";
             typeLabel = "Smart Jump Cuts";
-            accentColor = "var(--accent-cyan, #06b6d4)";
+            accentColor = "var(--accent-cyan, #7fb7dc)";
           }
 
           return (
@@ -266,10 +266,10 @@ export default function AiSuggestionsCoPilot({
               style={{
                 backgroundColor: isApplied
                   ? "rgba(16, 185, 129, 0.06)"
-                  : "var(--panel, #111624)",
+                  : "var(--panel, #16181b)",
                 border: isApplied
                   ? "1px solid rgba(16, 185, 129, 0.35)"
-                  : "1px solid var(--border, #1d2538)",
+                  : "1px solid var(--border, #25282d)",
                 borderRadius: 8,
                 padding: "10px 12px",
                 display: "flex",
@@ -337,7 +337,7 @@ export default function AiSuggestionsCoPilot({
                 <div
                   style={{
                     fontSize: 11,
-                    color: "var(--muted, #94a3b8)",
+                    color: "var(--muted, #979ea8)",
                     lineHeight: 1.4,
                   }}
                 >
@@ -354,7 +354,7 @@ export default function AiSuggestionsCoPilot({
                       justifyContent: "space-between",
                       fontSize: 10,
                       marginBottom: 4,
-                      color: "var(--muted, #94a3b8)",
+                      color: "var(--muted, #979ea8)",
                     }}
                   >
                     <span>Hook Quality Index</span>
@@ -381,7 +381,7 @@ export default function AiSuggestionsCoPilot({
                         height: "100%",
                         background:
                           hookScore >= 70
-                            ? "linear-gradient(90deg, #10b981, #06b6d4)"
+                            ? "linear-gradient(90deg, #10b981, #7fb7dc)"
                             : hookScore >= 50
                             ? "linear-gradient(90deg, #f59e0b, #10b981)"
                             : "linear-gradient(90deg, #ef4444, #f59e0b)",
@@ -431,7 +431,7 @@ export default function AiSuggestionsCoPilot({
                       display: "flex",
                       alignItems: "center",
                       gap: 4,
-                      boxShadow: "0 2px 8px rgba(139, 92, 246, 0.3)",
+                      boxShadow: "0 2px 8px rgba(255, 106, 43, 0.3)",
                     }}
                   >
                     {isApplying ? (
@@ -451,7 +451,7 @@ export default function AiSuggestionsCoPilot({
                   style={{
                     fontSize: 10,
                     padding: "2px 6px",
-                    color: "var(--muted-2, #64748b)",
+                    color: "var(--muted-2, #6a717b)",
                   }}
                   title="Dismiss suggestion"
                 >

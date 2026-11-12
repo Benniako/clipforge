@@ -1,4 +1,4 @@
-﻿import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../lib/api";
 import type { CuesStatus } from "../lib/api";
@@ -33,42 +33,42 @@ const GAME_PROFILES = [
   {
     id: "auto",
     name: "Auto Detect",
-    icon: "⚡",
+    icon: "AUTO",
     desc: "Adaptive multi-modal highlight detection",
     tag: "Universal",
   },
   {
     id: "eafc",
     name: "EA FC / FIFA",
-    icon: "⚽",
+    icon: "FC",
     desc: "-4.5s goal sync and crowd roar snapping",
     tag: "Delay -4.5s",
   },
   {
     id: "cs2",
     name: "CS2",
-    icon: "💣",
+    icon: "CS2",
     desc: "Multi-kill streak detection and clutch multipliers",
     tag: "Killstreaks",
   },
   {
     id: "valorant",
     name: "Valorant",
-    icon: "🎯",
+    icon: "VAL",
     desc: "ACE detector and round-win stingers",
     tag: "ACE Detection",
   },
   {
     id: "horror",
     name: "Horror",
-    icon: "😱",
+    icon: "HOR",
     desc: "Jump scares, scream burst and silence snap",
     tag: "Scream Spikes",
   },
   {
     id: "rocketleague",
     name: "Rocket League",
-    icon: "🚗",
+    icon: "RL",
     desc: "Goal explosions, aerial goals and save replays",
     tag: "Explosion Peak",
   },
@@ -86,35 +86,35 @@ const CAPTION_PRESETS = [
     id: "kinetic-bounce",
     name: "Kinetic Bounce",
     cls: "kinetic",
-    previewText: "SPRING ⚡",
+    previewText: "SPRING",
     tag: "Spring Bounce",
   },
   {
     id: "karaoke-pulse",
     name: "Karaoke Pulse",
     cls: "karaoke",
-    previewText: "KARAOKE 🎤",
+    previewText: "KARAOKE",
     tag: "Word Sweep",
   },
   {
     id: "beast-outline",
     name: "MrBeast Style",
     cls: "beast",
-    previewText: "BEAST 🐯",
+    previewText: "BEAST",
     tag: "Thick Stroke",
   },
   {
     id: "hormozi-yellow",
     name: "Hormozi Gold",
     cls: "hormozi",
-    previewText: "HORMOZI 💰",
+    previewText: "HORMOZI",
     tag: "Yellow Punch",
   },
   {
     id: "tiktok-bubble",
     name: "TikTok Bubble",
     cls: "tiktok",
-    previewText: "BUBBLE 💬",
+    previewText: "BUBBLE",
     tag: "Frosted Glass",
   },
 ];
@@ -369,121 +369,15 @@ export default function Upload({ health }: { health: Health | null }) {
 
   return (
     <div className="container">
-      {/* ================================================================ */}
-      {/* 🎮 Interactive Creator Studio 2.0 Showcase & Quick Launch Hub     */}
-      {/* ================================================================ */}
-      <div className="studio-hero-banner">
-        <div className="studio-hero-left">
-          <div className="studio-badge-live">
-            <span className="live-dot" />
-            <span>INTERACTIVE STUDIO 2.0 LIVE</span>
-          </div>
-          <h2 className="studio-hero-title">
-            Smart Interactive Interface for Streamers
-          </h2>
-          <p className="studio-hero-desc">
-            Directly manipulate facecam &amp; gameplay bounding boxes, test safe-zone collisions on TikTok/Shorts phone simulators, scrub 10 Hz climax audio heatmaps, and auto-apply AI retention suggestions.
-          </p>
-          <div className="studio-hero-actions">
-            <button
-              className="btn primary lg studio-launch-btn"
-              onClick={() => nav("/p/proj_demo/clip/c_demo_ace")}
-            >
-              <span>🎮 Launch Interactive Studio Demo</span>
-              <span className="arrow">→</span>
-            </button>
-            <button
-              className="btn ghost lg"
-              onClick={() => nav("/p/proj_demo")}
-              title="Review clips in vertical TikTok swipe mode"
-            >
-              <span>📱 Phone Simulator Review</span>
-            </button>
-          </div>
-        </div>
-
-        <div className="studio-hero-features-grid">
-          <div
-            className="studio-feature-card"
-            onClick={() => nav("/p/proj_demo/clip/c_demo_ace")}
-            role="button"
-            tabIndex={0}
-            onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") nav("/p/proj_demo/clip/c_demo_ace"); }}
-          >
-            <div className="feature-icon">📐</div>
-            <div className="feature-title">8-Point Drag &amp; Drop Canvas</div>
-            <div className="feature-desc">
-              Visual handles for facecam re-framing, 9:16 crop box, and WYSIWYG caption position.
-            </div>
-            <span className="feature-tag">Interactive</span>
-          </div>
-
-          <div
-            className="studio-feature-card"
-            onClick={() => nav("/p/proj_demo/clip/c_demo_ace")}
-            role="button"
-            tabIndex={0}
-            onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") nav("/p/proj_demo/clip/c_demo_ace"); }}
-          >
-            <div className="feature-icon">📱</div>
-            <div className="feature-title">TikTok &amp; Shorts Simulator</div>
-            <div className="feature-desc">
-              Live collision warnings against platform UI with 1-click auto-nudge into safe zones.
-            </div>
-            <span className="feature-tag">Safe Zones</span>
-          </div>
-
-          <div
-            className="studio-feature-card"
-            onClick={() => nav("/p/proj_demo/clip/c_demo_ace")}
-            role="button"
-            tabIndex={0}
-            onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") nav("/p/proj_demo/clip/c_demo_ace"); }}
-          >
-            <div className="feature-icon">📊</div>
-            <div className="feature-title">10 Hz Climax Heatmap</div>
-            <div className="feature-desc">
-              Decibel curve with scream, crowd roar, and multi-kill markers plus continuous hover scrub.
-            </div>
-            <span className="feature-tag">Audio Waveform</span>
-          </div>
-
-          <div
-            className="studio-feature-card"
-            onClick={() => nav("/p/proj_demo/clip/c_demo_ace")}
-            role="button"
-            tabIndex={0}
-            onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") nav("/p/proj_demo/clip/c_demo_ace"); }}
-          >
-            <div className="feature-icon">🤖</div>
-            <div className="feature-title">AI Suggestions Co-Pilot</div>
-            <div className="feature-desc">
-              Viral hook retention checks, pacing score, and 1-click auto-apply suggestions.
-            </div>
-            <span className="feature-tag">Viral AI</span>
-          </div>
+      <div className="page-head">
+        <div>
+          <h1>{t("up.pageTitle")}</h1>
+          <p>{t("up.heroText")}</p>
         </div>
       </div>
 
-      <div className="hero">
-        <h1>{t("up.heroTitle")}</h1>
-        <p>{t("up.heroText")}</p>
-        <div className="hero-badges">
-          <span className="hero-badge highlight">
-            <span className="dot" /> RTX 5060 Ti • NVDEC 650 FPS
-          </span>
-          <span className="hero-badge">
-            <span className="dot" /> Climax Delay Snapping
-          </span>
-          <span className="hero-badge">
-            <span className="dot" /> Kinetic Spring Captions
-          </span>
-          <span className="hero-badge">
-            <span className="dot" /> 100% Offline &amp; Private
-          </span>
-        </div>
-      </div>
-
+      <div className="import-layout">
+      <div className="import-main">
       <div
         className={"dropzone" + (drag ? " drag" : "")}
         onDragOver={(e) => {
@@ -533,7 +427,7 @@ export default function Upload({ health }: { health: Health | null }) {
             </div>
             <div style={{ marginTop: 18 }}>
               <button className="btn primary" onClick={() => fileRef.current?.click()}>
-                ✨ {t("up.chooseFiles")}
+                {t("up.chooseFiles")}
               </button>
             </div>
             <div className="or">{t("up.orPasteLink")}</div>
@@ -560,6 +454,10 @@ export default function Upload({ health }: { health: Health | null }) {
         />
       </div>
 
+      <section className="card">
+        <div className="card-head">
+          <h3><span className="card-step">01</span>{t("up.secOutput")}</h3>
+        </div>
       <div className="settings-grid">
         <div className="field wide">
           <label>{t("up.powerMode")}</label>
@@ -613,11 +511,19 @@ export default function Upload({ health }: { health: Health | null }) {
             <option value="16:9">{t("up.aspect169")}</option>
           </select>
         </div>
+      </div>
+      </section>
+
+      <section className="card">
+        <div className="card-head">
+          <h3><span className="card-step">02</span>{t("up.secDetect")}</h3>
+        </div>
+      <div className="settings-grid">
         {contentType !== "talking" && (
           <div className="field wide game-profiles-wrap">
             <div className="row" style={{ justifyContent: "space-between", alignItems: "baseline" }}>
-              <label style={{ fontSize: 13, fontWeight: 700, color: "var(--text)" }}>
-                🎮 {t("up.gameProfile")} <span className="muted tiny">{t("up.gameplayOnly")}</span>
+              <label>
+                {t("up.gameProfile")} <span className="muted tiny">{t("up.gameplayOnly")}</span>
               </label>
               {cues && cues[gameProfile] && (
                 <span className="muted tiny" title={t("up.cuesHint")}>
@@ -768,6 +674,14 @@ export default function Upload({ health }: { health: Health | null }) {
             </button>
           </div>
         </div>
+      </div>
+      </section>
+
+      <section className="card">
+        <div className="card-head">
+          <h3><span className="card-step">03</span>{t("up.secCaptions")}</h3>
+        </div>
+      <div className="settings-grid">
         <div className="field">
           <label>{t("up.captions")}</label>
           <button
@@ -916,9 +830,7 @@ export default function Upload({ health }: { health: Health | null }) {
         </div>
         <div className="field wide caption-showcase-wrap">
           <div className="row" style={{ justifyContent: "space-between", alignItems: "baseline" }}>
-            <label style={{ fontSize: 13, fontWeight: 700, color: "var(--text)" }}>
-              ✨ {t("up.captionStyle")}
-            </label>
+            <label>{t("up.captionStyle")}</label>
             {styles.length > 0 && (
               <select
                 className="input"
@@ -967,11 +879,16 @@ export default function Upload({ health }: { health: Health | null }) {
         {/* AI Boost — the viral-effect toggles, grouped so the user sees the
             whole "make it look pro" surface in one place instead of hunting
             across panels. Maps to the backend caption_fx / zoom / broll passes. */}
+      </div>
+      </section>
+
+      <section className="card">
+        <div className="card-head">
+          <h3><span className="card-step">04</span>{t("ai.title")}</h3>
+          <span className="muted tiny">{t("ai.subtitle")}</span>
+        </div>
+      <div>
         <div className="field ai-boost">
-          <label>{t("ai.title")}</label>
-          <p className="muted tiny" style={{ marginTop: -4, marginBottom: 8 }}>
-            {t("ai.subtitle")}
-          </p>
           <div className="ai-boost-grid">
             <Toggle
               checked={aiBoost.emphasis}
@@ -1012,6 +929,7 @@ export default function Upload({ health }: { health: Health | null }) {
           </div>
         </div>
       </div>
+      </section>
 
       {contentType !== "talking" && (
         <>
@@ -1036,8 +954,12 @@ export default function Upload({ health }: { health: Health | null }) {
         </>
       )}
 
-      <div style={{ marginTop: 22, display: "flex", justifyContent: "center" }}>
-        <button className="btn primary" onClick={submit} disabled={busy} style={{ minWidth: 240, justifyContent: "center" }}>
+      <div className="submit-bar">
+        <span className="submit-summary">
+          {file ? <b>{files.length > 1 ? t("up.batchVideoLabel", { count: files.length }) : file.name}</b> : url.trim() ? <b>{url.trim()}</b> : t("up.errNoSource")}
+          {" · "}{aspect}{" · "}{autoLength ? t("up.autoLength") : LENGTHS[lenIdx].label}{" · "}{t("up.sumClips", { target })}
+        </span>
+        <button className="btn primary lg" onClick={submit} disabled={busy}>
           {busy ? (
             pct < 100 && files.length ? (
               <>
@@ -1064,51 +986,64 @@ export default function Upload({ health }: { health: Health | null }) {
         </button>
       </div>
       {err && <Toast msg={{ text: err, type: "error", duration: 5000 }} onDone={() => setErr(null)} />}
+      </div>
 
-      {projects.length > 0 && (
-        <div style={{ marginTop: 44 }}>
-          <h3 style={{ marginBottom: 14 }}>{t("up.recentProjects")}</h3>
-          <div className="proj-list">
-            {projects.map((p) => (
-              <div
-                key={p.id}
-                className="proj-row"
-                onClick={() => nav(`/p/${p.id}`)}
-                role="button"
-                tabIndex={0}
-                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); nav(`/p/${p.id}`); } }}
-              >
-                <div className="col" style={{ flex: 1 }}>
-                  <span className="name">{p.name}</span>
-                  <span className="muted tiny">
-                    {t("up.projectMeta", {
-                      duration: fmtDuration(p.duration),
-                      ready: p.ready_clips,
-                      total: p.clip_count,
-                      ago: timeAgo(p.created_at, t),
-                    })}
-                  </span>
-                </div>
-                <StatusPill status={p.status} pct={p.progress?.pct ?? 0} />
-                <button className="btn sm danger" onClick={(e) => del(p.id, e)}>
-                  {t("up.delete")}
-                </button>
-              </div>
-            ))}
+      <aside className="import-aside">
+        <section className="card">
+          <div className="card-head">
+            <h3>{t("up.recentProjects")}</h3>
+            {projects.length > 0 && <span className="muted tiny">{projects.length}</span>}
           </div>
+          {projects.length === 0 ? (
+            <p className="muted tiny" style={{ margin: 0 }}>{t("up.noProjects")}</p>
+          ) : (
+            <div className="proj-list">
+              {projects.map((p) => (
+                <div
+                  key={p.id}
+                  className="proj-row"
+                  onClick={() => nav(`/p/${p.id}`)}
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); nav(`/p/${p.id}`); } }}
+                >
+                  <div className="col" style={{ flex: 1 }}>
+                    <span className="name" title={p.name}>{p.name}</span>
+                    <span className="muted tiny">
+                      {t("up.projectMeta", {
+                        duration: fmtDuration(p.duration),
+                        ready: p.ready_clips,
+                        total: p.clip_count,
+                        ago: timeAgo(p.created_at, t),
+                      })}
+                    </span>
+                  </div>
+                  <StatusPill status={p.status} pct={p.progress?.pct ?? 0} />
+                  <button className="btn sm danger" onClick={(e) => del(p.id, e)}>
+                    {t("up.delete")}
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+        <div className="aside-links">
+          <button className="btn ghost sm block" onClick={() => nav("/p/proj_demo/clip/c_demo_ace")}>
+            {t("up.demoEditor")}
+          </button>
         </div>
-      )}
+      </aside>
+      </div>
     </div>
   );
 }
-
 function StatusPill({ status, pct }: { status: string; pct: number }) {
   const { t } = useT();
-  if (status === "ready") return <span className="pill" style={{ color: "var(--good)" }}>{t("up.pillReady")}</span>;
-  if (status === "failed") return <span className="pill" style={{ color: "var(--bad)" }}>{t("up.pillFailed")}</span>;
-  if (status === "paused") return <span className="pill" style={{ color: "var(--warn)" }}>{t("up.pillPaused")}</span>;
+  if (status === "ready") return <span className="pill ok">{t("up.pillReady")}</span>;
+  if (status === "failed") return <span className="pill bad">{t("up.pillFailed")}</span>;
+  if (status === "paused") return <span className="pill warn">{t("up.pillPaused")}</span>;
   if (status === "processing")
-    return <span className="pill" style={{ color: "var(--warn)" }}>{Math.round(pct)}%</span>;
+    return <span className="pill warn">{Math.round(pct)}%</span>;
   return <span className="pill">{t("up.pillQueued")}</span>;
 }
 

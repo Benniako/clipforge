@@ -66,7 +66,7 @@ export default function Waveform({ src, start, end, onSeek }: WaveformProps) {
         height: HEIGHT,
         overflow: "hidden",
         borderRadius: 6,
-        background: "var(--bg-secondary, #1a1a2e)",
+        background: "var(--bg-secondary, #16181b)",
         cursor: onSeek ? "pointer" : "default",
         userSelect: "none",
       }}
@@ -94,7 +94,7 @@ export default function Waveform({ src, start, end, onSeek }: WaveformProps) {
               height={barH}
               rx={1}
               ry={1}
-              fill={isActive ? "var(--accent, #6c63ff)" : "var(--muted, #555)"}
+              fill={isActive ? "var(--accent, #ff6a2b)" : "var(--muted, #555)"}
               opacity={0.7 + 0.3 * peak}
             >
               <title>{`${(start + (i / BAR_COUNT) * span).toFixed(1)}s`}</title>

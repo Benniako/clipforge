@@ -54,7 +54,7 @@ export interface AudioWaveformHeatmapProps {
 export const COLOR_SCREAM = "#FF4500";
 export const COLOR_CROWD_ROAR = "#9D00FF";
 export const COLOR_KILL_STREAK = "#00F0FF";
-export const COLOR_CLIMAX = "#EC4899";
+export const COLOR_CLIMAX = "#f2b53a";
 
 /**
  * Waveform Decibel Band Color Generator:
@@ -380,7 +380,7 @@ export default function AudioWaveformHeatmap({
               height: 79,
               backgroundColor: "#000",
               borderRadius: 6,
-              border: "2px solid var(--accent, #8b5cf6)",
+              border: "2px solid var(--accent, #ff6a2b)",
               boxShadow: "0 6px 16px rgba(0,0,0,0.6)",
               overflow: "hidden",
               display: "flex",
@@ -391,7 +391,7 @@ export default function AudioWaveformHeatmap({
             }}
           >
             {!storyboardSpriteStyle && (
-              <span style={{ fontSize: 11, color: "var(--muted, #94a3b8)" }}>
+              <span style={{ fontSize: 11, color: "var(--muted, #979ea8)" }}>
                 ▶ Frame {hoverRelTime.toFixed(1)}s
               </span>
             )}
@@ -400,7 +400,7 @@ export default function AudioWaveformHeatmap({
           <div
             data-testid="scrub-timestamp"
             style={{
-              backgroundColor: "rgba(17, 22, 36, 0.95)",
+              backgroundColor: "rgba(22, 24, 27, 0.95)",
               color: "#fff",
               padding: "2px 8px",
               borderRadius: 4,
@@ -432,9 +432,9 @@ export default function AudioWaveformHeatmap({
           position: "relative",
           width: "100%",
           height: height,
-          backgroundColor: "var(--panel, #111624)",
+          backgroundColor: "var(--panel, #16181b)",
           borderRadius: 8,
-          border: "1px solid var(--border, #1d2538)",
+          border: "1px solid var(--border, #25282d)",
           overflow: "hidden",
           cursor: "crosshair",
         }}
@@ -567,7 +567,7 @@ export default function AudioWaveformHeatmap({
             bottom: 0,
             width: 2,
             backgroundColor: "#fff",
-            boxShadow: "0 0 8px #fff, 0 0 14px var(--accent, #8b5cf6)",
+            boxShadow: "0 0 8px #fff, 0 0 14px var(--accent, #ff6a2b)",
             pointerEvents: "none",
             zIndex: 20,
             transform: "translateX(-50%)",
@@ -617,7 +617,7 @@ export default function AudioWaveformHeatmap({
             bottom: 0,
             height: 18,
             backgroundColor: "rgba(14, 18, 29, 0.75)",
-            borderTop: "1px solid var(--border, #1d2538)",
+            borderTop: "1px solid var(--border, #25282d)",
             display: "flex",
             alignItems: "center",
             pointerEvents: "none",
@@ -640,14 +640,14 @@ export default function AudioWaveformHeatmap({
                 style={{
                   width: 1,
                   height: 4,
-                  backgroundColor: "var(--muted-2, #64748b)",
+                  backgroundColor: "var(--muted-2, #6a717b)",
                 }}
               />
               <span
                 style={{
                   fontSize: 9,
                   fontFamily: "monospace",
-                  color: "var(--muted, #94a3b8)",
+                  color: "var(--muted, #979ea8)",
                 }}
               >
                 {tick.label}
@@ -665,7 +665,7 @@ export default function AudioWaveformHeatmap({
           alignItems: "center",
           marginTop: 6,
           fontSize: 11,
-          color: "var(--muted, #94a3b8)",
+          color: "var(--muted, #979ea8)",
         }}
       >
         <div className="row" style={{ gap: 12, flexWrap: "wrap" }}>

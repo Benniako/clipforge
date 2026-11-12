@@ -1,4 +1,4 @@
-﻿import { useState } from "react";
+import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../lib/api";
 import type { Clip } from "../lib/types";
@@ -22,7 +22,6 @@ function RankRibbon({ rank }: { rank?: number }) {
   const label = rank === 1 ? t("cc.topPick") : t("cc.rank", { rank });
   return (
     <span className={"rank-ribbon r" + rank} title={t("cc.rankTitle")}>
-      {rank === 1 ? "★ " : ""}
       {label}
     </span>
   );
@@ -73,7 +72,7 @@ export default function ClipCard({ clip, projectId, rank, selected, onToggleSele
   };
 
   return (
-    <div className="clip-card" style={selected ? { outline: "2px solid var(--accent)", boxShadow: "0 0 20px rgba(139, 92, 246, 0.35)" } : undefined}>
+    <div className={"clip-card" + (selected ? " selected" : "")}>
       <div
         className="thumb"
         style={clip.thumb_url ? { backgroundImage: `url(${clip.thumb_url})` } : undefined}
@@ -92,13 +91,7 @@ export default function ClipCard({ clip, projectId, rank, selected, onToggleSele
               onToggleSelect(clip.id);
             }}
             title={t("cc.selectTitle")}
-            style={{
-              position: "absolute", top: 8, right: 8, width: 26, height: 26,
-              borderRadius: 6, display: "grid", placeItems: "center", fontSize: 15,
-              background: selected ? "var(--accent)" : "rgba(0,0,0,0.55)",
-              border: "1px solid rgba(255,255,255,0.3)", color: "#fff", cursor: "pointer",
-              zIndex: 6,
-            }}
+className={"thumb-select" + (selected ? " on" : "")}
           >
             {selected ? "✓" : ""}
           </span>
@@ -124,7 +117,7 @@ export default function ClipCard({ clip, projectId, rank, selected, onToggleSele
               onClick={copyCaption}
               title="Copy formatted viral caption and tags for TikTok, Reels & Shorts"
             >
-              <span>{copied ? "✓ Copied!" : "📋 Copy"}</span>
+              <span>{copied ? "Copied" : "Copy caption"}</span>
             </button>
           )}
         </div>
@@ -133,9 +126,10 @@ export default function ClipCard({ clip, projectId, rank, selected, onToggleSele
           {clip.title || t("cc.untitled")}
         </div>
         <div className="factors">
-          {clip.factors.slice(0, 2).map((f, i) => (
+          {clip.factors.slice(0, 3).map((f, i) => (
             <span className="factor" key={i} title={f.detail}>
               {f.label}
+              <span className="w">+{Math.round(f.weight)}</span>
             </span>
           ))}
         </div>

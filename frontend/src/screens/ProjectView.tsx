@@ -147,20 +147,20 @@ export default function ProjectView() {
     }
     return (
       <>
-        <div className="container view-switch" style={{ alignItems: "center", gap: 10, marginBottom: 8 }}>
-          <div className="seg" style={{ width: "auto" }}>
+        <div className="container view-switch">
+          <div className="seg">
             <button className={viewMode === "grid" ? "on" : ""} onClick={() => setViewMode("grid")}>
-              ⊞ Studio Grid
+              {t("pv.viewGrid")}
             </button>
             <button className={(viewMode as string) === "swipe" ? "on" : ""} onClick={() => setViewMode("swipe")}>
-              📱 Phone Simulator
+              {t("pv.viewPhone")}
             </button>
           </div>
           {/* Streamer.bot webhook: show the mark-highlight URL so users
               can copy it into Streamer.bot's HTTP request action. */}
-          <span className="muted tiny" style={{ marginLeft: "auto", fontSize: 11 }}>
-            🎯 Streamer.bot Webhook:
-            <code style={{ marginLeft: 6, fontSize: 10, background: "var(--bg)", padding: "3px 7px", borderRadius: 4, border: "1px solid var(--border)" }}>
+          <span className="muted tiny">
+            Streamer.bot Webhook
+            <code>
               POST /api/projects/{projectId}/mark-highlight?timestamp=SEC&amp;duration=30
             </code>
           </span>

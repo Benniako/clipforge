@@ -89,14 +89,14 @@ export default function SwipeReviewScreen({
           onClick={() => setShowTikTokUI(!showTikTokUI)}
           title="Toggle TikTok UI elements to verify layout"
         >
-          📱 TikTok UI: {showTikTokUI ? "ON" : "OFF"}
+          TikTok UI: {showTikTokUI ? "ON" : "OFF"}
         </button>
         <button
           className={"btn ghost sm" + (showSafeGuides ? " on" : "")}
           onClick={() => setShowSafeGuides(!showSafeGuides)}
           title="Toggle safe margin guide overlay"
         >
-          🎯 Safe Zone: {showSafeGuides ? "ON" : "OFF"}
+          Safe Zone: {showSafeGuides ? "ON" : "OFF"}
         </button>
         <a className="btn ghost sm" href={api.exportPremiereUrl(project.id)}>{t("swipe.premiereEdl")}</a>
       </div>
@@ -193,7 +193,7 @@ export default function SwipeReviewScreen({
           onClick={copyCaption}
           style={{ width: "100%", justifyContent: "center" }}
         >
-          {copied ? "✓ Copied!" : "📋 Copy Caption"}
+          {copied ? "Copied" : "Copy Caption"}
         </button>
         <Link className="btn ghost" to={`/p/${project.id}/clip/${active.id}`}>{t("swipe.edit")}</Link>
         <a className="btn ghost" href={api.downloadClipUrl(project.id, active.id)} download>{t("swipe.download")}</a>
