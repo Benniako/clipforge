@@ -325,8 +325,8 @@ export default function MontageTimeline({
       style={{
         display: "flex",
         flexDirection: "column",
-        background: "rgba(17, 22, 36, 0.95)",
-        border: "1px solid rgba(139, 92, 246, 0.3)",
+        background: "rgba(22, 24, 27, 0.95)",
+        border: "1px solid rgba(255, 106, 43, 0.3)",
         borderRadius: 12,
         padding: 16,
         gap: 14,
@@ -353,8 +353,8 @@ export default function MontageTimeline({
           <span
             className="pill"
             style={{
-              background: "rgba(139, 92, 246, 0.2)",
-              color: "var(--accent, #8b5cf6)",
+              background: "rgba(255, 106, 43, 0.2)",
+              color: "var(--accent, #ff6a2b)",
               fontSize: 11,
               fontWeight: 700,
             }}
@@ -415,7 +415,7 @@ export default function MontageTimeline({
               fontFamily: "monospace",
               fontSize: 12,
               fontWeight: 700,
-              color: "#38bdf8",
+              color: "#7fb7dc",
               marginLeft: 6,
             }}
           >
@@ -480,7 +480,7 @@ export default function MontageTimeline({
                 flexDirection: "column",
                 alignItems: "center",
                 gap: 6,
-                color: "#94a3b8",
+                color: "#979ea8",
               }}
             >
               <span style={{ fontSize: 32 }}>🎬</span>
@@ -502,7 +502,7 @@ export default function MontageTimeline({
               position: "absolute",
               top: 8,
               right: 8,
-              background: "rgba(236, 72, 153, 0.85)",
+              background: "rgba(242, 181, 58, 0.85)",
               color: "#fff",
               fontSize: 10,
               fontWeight: 800,
@@ -524,7 +524,7 @@ export default function MontageTimeline({
               position: "absolute",
               top: 8,
               left: 8,
-              background: "rgba(6, 182, 212, 0.9)",
+              background: "rgba(127, 183, 220, 0.9)",
               color: "#000",
               fontSize: 10,
               fontWeight: 800,
@@ -542,7 +542,7 @@ export default function MontageTimeline({
       {/* Global Timeline Scrubber Track                                     */}
       {/* ------------------------------------------------------------------ */}
       <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "#94a3b8" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "#979ea8" }}>
           <span>0.0s</span>
           <span>{magneticSnapResult?.snapped ? `Snapped to ${magneticSnapResult.time.toFixed(2)}s` : "Scrub timeline"}</span>
           <span>{totalDuration.toFixed(1)}s</span>
@@ -557,7 +557,7 @@ export default function MontageTimeline({
           onChange={(e) => handleScrub(Number(e.target.value))}
           style={{
             width: "100%",
-            accentColor: "var(--accent-cyan, #06b6d4)",
+            accentColor: "var(--accent-cyan, #7fb7dc)",
             cursor: "pointer",
           }}
         />
@@ -595,8 +595,8 @@ export default function MontageTimeline({
                   style={{
                     width: 4,
                     height: 72,
-                    background: "var(--accent-cyan, #06b6d4)",
-                    boxShadow: "0 0 10px #06b6d4",
+                    background: "var(--accent-cyan, #7fb7dc)",
+                    boxShadow: "0 0 10px #7fb7dc",
                     borderRadius: 2,
                     margin: "0 4px",
                     animation: "pulse 0.8s infinite",
@@ -622,10 +622,10 @@ export default function MontageTimeline({
                   flex: "1 0 auto",
                   height: 76,
                   background: isActive
-                    ? "linear-gradient(135deg, rgba(139, 92, 246, 0.35), rgba(6, 182, 212, 0.25))"
+                    ? "linear-gradient(135deg, rgba(255, 106, 43, 0.35), rgba(127, 183, 220, 0.25))"
                     : "rgba(255, 255, 255, 0.05)",
                   border: isActive
-                    ? "2px solid var(--accent, #8b5cf6)"
+                    ? "2px solid var(--accent, #ff6a2b)"
                     : "1px solid rgba(255, 255, 255, 0.12)",
                   borderRadius: 8,
                   padding: "8px 10px",
@@ -670,7 +670,7 @@ export default function MontageTimeline({
 
                 {/* Duration & Accessible Reorder Controls */}
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <span style={{ fontSize: 10, color: "#94a3b8", fontFamily: "monospace" }}>
+                  <span style={{ fontSize: 10, color: "#979ea8", fontFamily: "monospace" }}>
                     ⏱ {item.duration.toFixed(1)}s
                   </span>
                   <div style={{ display: "flex", gap: 3 }}>
@@ -684,7 +684,7 @@ export default function MontageTimeline({
                       }}
                       style={{
                         background: "rgba(0,0,0,0.4)",
-                        color: index === 0 ? "#475569" : "#ffffff",
+                        color: index === 0 ? "#4b525b" : "#ffffff",
                         border: "none",
                         borderRadius: 3,
                         padding: "1px 5px",
@@ -705,7 +705,7 @@ export default function MontageTimeline({
                       }}
                       style={{
                         background: "rgba(0,0,0,0.4)",
-                        color: index === items.length - 1 ? "#475569" : "#ffffff",
+                        color: index === items.length - 1 ? "#4b525b" : "#ffffff",
                         border: "none",
                         borderRadius: 3,
                         padding: "1px 5px",
@@ -740,7 +740,7 @@ export default function MontageTimeline({
                     style={{
                       background:
                         transitionAfter.type !== "cut"
-                          ? "linear-gradient(135deg, #ec4899, #8b5cf6)"
+                          ? "linear-gradient(135deg, #f2b53a, #ff6a2b)"
                           : "rgba(255, 255, 255, 0.1)",
                       color: "#ffffff",
                       border: "1px solid rgba(255, 255, 255, 0.2)",
@@ -772,8 +772,8 @@ export default function MontageTimeline({
                         top: "105%",
                         left: "50%",
                         transform: "translateX(-50%)",
-                        background: "#111624",
-                        border: "1px solid var(--accent, #8b5cf6)",
+                        background: "#16181b",
+                        border: "1px solid var(--accent, #ff6a2b)",
                         borderRadius: 8,
                         padding: 10,
                         zIndex: 50,
@@ -798,7 +798,7 @@ export default function MontageTimeline({
                               style={{
                                 background:
                                   transitionAfter.type === tType
-                                    ? "var(--accent, #8b5cf6)"
+                                    ? "var(--accent, #ff6a2b)"
                                     : "rgba(255, 255, 255, 0.05)",
                                 color: "#ffffff",
                                 border: "none",
@@ -819,7 +819,7 @@ export default function MontageTimeline({
                       {/* Transition Duration Selector */}
                       {transitionAfter.type !== "cut" && (
                         <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 4 }}>
-                          <span style={{ fontSize: 10, color: "#94a3b8" }}>
+                          <span style={{ fontSize: 10, color: "#979ea8" }}>
                             Duration: {transitionAfter.duration}s
                           </span>
                           <div style={{ display: "flex", gap: 4 }}>
@@ -833,7 +833,7 @@ export default function MontageTimeline({
                                   flex: 1,
                                   background:
                                     transitionAfter.duration === dur
-                                      ? "var(--accent-cyan, #06b6d4)"
+                                      ? "var(--accent-cyan, #7fb7dc)"
                                       : "rgba(255, 255, 255, 0.08)",
                                   color: transitionAfter.duration === dur ? "#000" : "#fff",
                                   border: "none",

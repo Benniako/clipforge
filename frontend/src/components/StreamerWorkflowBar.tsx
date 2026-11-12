@@ -515,8 +515,8 @@ export default function StreamerWorkflowBar({
       className={`streamer-workflow-bar panel ${className}`}
       style={{
         position: "relative",
-        background: "rgba(11, 15, 25, 0.85)",
-        border: "1px solid rgba(139, 92, 246, 0.35)",
+        background: "rgba(18, 19, 22, 0.85)",
+        border: "1px solid rgba(255, 106, 43, 0.35)",
         borderRadius: 8,
         padding: "10px 14px",
         boxShadow: "0 4px 18px rgba(0, 0, 0, 0.4)",
@@ -540,7 +540,7 @@ export default function StreamerWorkflowBar({
         <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
           <span
             className="muted tiny"
-            style={{ fontWeight: 800, color: "var(--accent, #8b5cf6)", marginRight: 2 }}
+            style={{ fontWeight: 800, color: "var(--accent, #ff6a2b)", marginRight: 2 }}
           >
             ⚡ HOTKEYS:
           </span>
@@ -740,7 +740,7 @@ export default function StreamerWorkflowBar({
           <span
             data-testid="selected-count-badge"
             className="pill"
-            style={{ fontSize: 11, background: "rgba(139, 92, 246, 0.2)" }}
+            style={{ fontSize: 11, background: "rgba(255, 106, 43, 0.2)" }}
           >
             Selected: <span data-testid="selected-count">{selectedClips.length}</span> /{" "}
             {allClipIds.length}
@@ -864,7 +864,7 @@ export default function StreamerWorkflowBar({
             left: "50%",
             transform: "translateX(-50%)",
             zIndex: 1000,
-            background: "rgba(11, 15, 25, 0.95)",
+            background: "rgba(18, 19, 22, 0.95)",
             color: "#00f0ff",
             border: "1px solid rgba(0, 240, 255, 0.8)",
             borderRadius: 6,

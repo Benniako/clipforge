@@ -389,7 +389,7 @@ export default function InteractiveCanvas({
               top: 0,
               bottom: 0,
               width: `${Math.max(0, cropLeftPct)}%`,
-              background: "rgba(7, 9, 14, 0.65)",
+              background: "rgba(12, 13, 15, 0.65)",
               backdropFilter: "blur(2px)",
             }}
           />
@@ -402,7 +402,7 @@ export default function InteractiveCanvas({
               top: 0,
               bottom: 0,
               right: 0,
-              background: "rgba(7, 9, 14, 0.65)",
+              background: "rgba(12, 13, 15, 0.65)",
               backdropFilter: "blur(2px)",
             }}
           />
@@ -417,8 +417,8 @@ export default function InteractiveCanvas({
               width: `${cropWidthPct}%`,
               top: 0,
               bottom: 0,
-              border: "2px solid var(--accent-cyan, #06b6d4)",
-              boxShadow: "0 0 15px rgba(6, 182, 212, 0.35)",
+              border: "2px solid var(--accent-cyan, #7fb7dc)",
+              boxShadow: "0 0 15px rgba(127, 183, 220, 0.35)",
               pointerEvents: "auto",
             }}
           >
@@ -428,7 +428,7 @@ export default function InteractiveCanvas({
                 position: "absolute",
                 inset: 0,
                 backgroundImage:
-                  "linear-gradient(to right, rgba(6, 182, 212, 0.15) 1px, transparent 1px), linear-gradient(to bottom, rgba(6, 182, 212, 0.15) 1px, transparent 1px)",
+                  "linear-gradient(to right, rgba(127, 183, 220, 0.15) 1px, transparent 1px), linear-gradient(to bottom, rgba(127, 183, 220, 0.15) 1px, transparent 1px)",
                 backgroundSize: "33.333% 33.333%",
                 pointerEvents: "none",
               }}
@@ -443,8 +443,8 @@ export default function InteractiveCanvas({
                 top: 8,
                 left: "50%",
                 transform: "translateX(-50%)",
-                background: "rgba(6, 182, 212, 0.9)",
-                color: "#07090e",
+                background: "rgba(127, 183, 220, 0.9)",
+                color: "#0c0d0f",
                 padding: "3px 10px",
                 borderRadius: 4,
                 fontSize: 11,
@@ -473,8 +473,8 @@ export default function InteractiveCanvas({
                   top: 0,
                   bottom: 0,
                   width: 2,
-                  background: "#06b6d4",
-                  boxShadow: "0 0 10px #06b6d4",
+                  background: "#7fb7dc",
+                  boxShadow: "0 0 10px #7fb7dc",
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "center",
@@ -482,8 +482,8 @@ export default function InteractiveCanvas({
               >
                 <span
                   style={{
-                    background: "#06b6d4",
-                    color: "#07090e",
+                    background: "#7fb7dc",
+                    color: "#0c0d0f",
                     fontSize: 9,
                     fontWeight: 900,
                     padding: "2px 6px",
@@ -511,9 +511,9 @@ export default function InteractiveCanvas({
             top: `${facecam.y * 100}%`,
             width: `${facecam.w * 100}%`,
             height: `${facecam.h * 100}%`,
-            border: "2px solid var(--accent, #8b5cf6)",
-            background: "rgba(139, 92, 246, 0.15)",
-            boxShadow: "0 0 12px rgba(139, 92, 246, 0.4)",
+            border: "2px solid var(--accent, #ff6a2b)",
+            background: "rgba(255, 106, 43, 0.15)",
+            boxShadow: "0 0 12px rgba(255, 106, 43, 0.4)",
             zIndex: 15,
             boxSizing: "border-box",
           }}
@@ -535,7 +535,7 @@ export default function InteractiveCanvas({
           >
             <span
               style={{
-                background: "rgba(139, 92, 246, 0.9)",
+                background: "rgba(255, 106, 43, 0.9)",
                 color: "#fff",
                 fontSize: 10,
                 fontWeight: 800,
@@ -591,7 +591,7 @@ export default function InteractiveCanvas({
                   width: 10,
                   height: 10,
                   background: "#ffffff",
-                  border: "2px solid var(--accent, #8b5cf6)",
+                  border: "2px solid var(--accent, #ff6a2b)",
                   borderRadius: 2,
                   boxShadow: "0 0 6px rgba(0, 0, 0, 0.8)",
                   cursor: getCursor(),
@@ -631,8 +631,8 @@ export default function InteractiveCanvas({
             style={{
               cursor: "ns-resize",
               pointerEvents: "auto",
-              background: "rgba(17, 22, 36, 0.85)",
-              border: "1px solid rgba(236, 72, 153, 0.6)",
+              background: "rgba(22, 24, 27, 0.85)",
+              border: "1px solid rgba(242, 181, 58, 0.6)",
               borderRadius: 4,
               padding: "2px 10px",
               marginBottom: 6,
@@ -641,7 +641,7 @@ export default function InteractiveCanvas({
               gap: 6,
               fontSize: 10,
               fontWeight: 700,
-              color: "var(--accent-2, #ec4899)",
+              color: "var(--accent-2, #f2b53a)",
               boxShadow: "0 2px 8px rgba(0,0,0,0.4)",
             }}
             title="Drag vertically to reposition captions"
@@ -656,13 +656,13 @@ export default function InteractiveCanvas({
               style={{
                 position: "absolute",
                 top: -24,
-                background: "var(--accent-2, #ec4899)",
+                background: "var(--accent-2, #f2b53a)",
                 color: "#ffffff",
                 fontSize: 9,
                 fontWeight: 900,
                 padding: "2px 8px",
                 borderRadius: 4,
-                boxShadow: "0 0 8px rgba(236, 72, 153, 0.6)",
+                boxShadow: "0 0 8px rgba(242, 181, 58, 0.6)",
                 whiteSpace: "nowrap",
               }}
             >
@@ -680,7 +680,7 @@ export default function InteractiveCanvas({
               gap: 6,
               padding: "6px 12px",
               borderRadius: 6,
-              background: "rgba(7, 9, 14, 0.4)",
+              background: "rgba(12, 13, 15, 0.4)",
               backdropFilter: "blur(4px)",
               pointerEvents: "auto",
               fontFamily: activeStyle?.font || "sans-serif",
@@ -736,14 +736,14 @@ export default function InteractiveCanvas({
                         style={{
                           background: "rgba(0, 0, 0, 0.8)",
                           color: activeStyle ? `#${activeStyle.highlight || activeStyle.primary}` : "#FFCC00",
-                          border: "1px solid var(--accent, #8b5cf6)",
+                          border: "1px solid var(--accent, #ff6a2b)",
                           borderRadius: 4,
                           padding: "2px 6px",
                           font: "inherit",
                           fontWeight: "inherit",
                           textTransform: "inherit",
                           outline: "none",
-                          boxShadow: "0 0 8px rgba(139, 92, 246, 0.7)",
+                          boxShadow: "0 0 8px rgba(255, 106, 43, 0.7)",
                         }}
                       />
                     ) : (
@@ -791,7 +791,7 @@ export default function InteractiveCanvas({
           style={{
             position: "absolute",
             inset: "5%",
-            border: "2px dashed rgba(236, 72, 153, 0.6)",
+            border: "2px dashed rgba(242, 181, 58, 0.6)",
             pointerEvents: "none",
             zIndex: 25,
             borderRadius: 8,
@@ -802,7 +802,7 @@ export default function InteractiveCanvas({
               position: "absolute",
               top: 8,
               right: 8,
-              background: "rgba(236, 72, 153, 0.85)",
+              background: "rgba(242, 181, 58, 0.85)",
               color: "#fff",
               fontSize: 9,
               fontWeight: 800,

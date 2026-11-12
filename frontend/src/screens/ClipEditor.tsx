@@ -391,10 +391,11 @@ export default function ClipEditor() {
 
   return (
     <div className="container">
-      <div className="row" style={{ justifyContent: "space-between", marginBottom: 18 }}>
+      <div className="editor-bar">
         <Link className="btn ghost sm" to={`/p/${projectId}`}>
           {t("ce.allClips")}
         </Link>
+        <h2 title={title}>{title || clip.title}</h2>
         <div className="row">
           <button className="btn sm ghost" title={t("ce.likeTitle")}
             onClick={() => rate("up")}
@@ -524,7 +525,7 @@ export default function ClipEditor() {
 
       <div className="editor">
         <div className="preview-pane">
-          <div className="row" style={{ justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+          <div className="preview-tools">
             <div className="seg preview-tabs">
               <button
                 className={previewMode === "rendered" ? "on" : ""}
@@ -546,14 +547,14 @@ export default function ClipEditor() {
                 data-testid="toggle-phone-simulator"
                 title="Toggle Phone Platform Simulator overlay"
               >
-                📱 Simulator: {showPhoneSimulator ? "ON" : "OFF"}
+                Simulator: {showPhoneSimulator ? "ON" : "OFF"}
               </button>
               <button
                 className={"btn ghost sm" + (showSafeGuides ? " on" : "")}
                 onClick={() => setShowSafeGuides(!showSafeGuides)}
                 title="Toggle safe zone guide overlay for TikTok and YouTube Shorts"
               >
-                🎯 Safe Zone: {showSafeGuides ? "ON" : "OFF"}
+                Safe Zone: {showSafeGuides ? "ON" : "OFF"}
               </button>
               <button
                 className={"btn ghost sm" + (showMontageTimeline ? " on" : "")}
@@ -561,7 +562,7 @@ export default function ClipEditor() {
                 data-testid="toggle-montage-timeline-btn"
                 title="Toggle Smart Montage Timeline sequencer"
               >
-                🎞️ Montage {showMontageTimeline ? "▲" : "▼"}
+                Montage {showMontageTimeline ? "▲" : "▼"}
               </button>
             </div>
           </div>
@@ -763,7 +764,7 @@ export default function ClipEditor() {
             )}
             <div className="shortcuts-hint muted tiny" style={{ marginTop: 10, cursor: "pointer" }}
                  onClick={() => setShowShortcuts(true)}>
-              ⌨️ <span className="muted">{t("ce.shortcuts")}</span>
+              <span className="muted">{t("ce.shortcuts")}</span>
             </div>
           </div>
         </div>
@@ -772,10 +773,6 @@ export default function ClipEditor() {
           {/* AI Suggestions Co-Pilot Panel */}
           <div
             className="panel section"
-            style={{
-              border: "1px solid rgba(139, 92, 246, 0.4)",
-              background: "rgba(17, 22, 36, 0.75)",
-            }}
           >
             <AiSuggestionsCoPilot
               projectId={projectId}
@@ -893,7 +890,7 @@ export default function ClipEditor() {
                     setMsg({ text: (e as Error).message ?? "Failed to save template", type: "error" });
                   }
                 }}>
-                💾 {t("ce.saveAsTemplate")}
+                {t("ce.saveAsTemplate")}
               </button>
             </div>
             <div className="style-picker">
@@ -918,7 +915,7 @@ export default function ClipEditor() {
               {cx === null
                 ? t("ce.cropAuto")
                 : t("ce.cropManual", { pct: Math.round(cx * 100) })}
-              {cx !== null && Math.abs(cx - 0.5) < 0.005 && " 🎯 (Center Snapped)"}
+              {cx !== null && Math.abs(cx - 0.5) < 0.005 && " (Center Snapped)"}
             </div>
             {/* Visual On-Canvas Crop Presets & Indicator (Replaces raw range slider) */}
             <div className="row" style={{ gap: 6, marginBottom: 8 }}>
@@ -942,7 +939,7 @@ export default function ClipEditor() {
                 }}
                 title="Snap 9:16 crop window to center (50%)"
               >
-                🎯 Center (50%)
+                Center (50%)
               </button>
               <button
                 className={"btn sm ghost" + (cx !== null && Math.abs(cx - 0.75) < 0.03 ? " on" : "")}
@@ -957,7 +954,7 @@ export default function ClipEditor() {
               </button>
             </div>
             <div className="tiny muted" style={{ marginBottom: 10 }}>
-              💡 Drag the 9:16 crop window directly on the video canvas (under Original preview) with magnetic center snapping.
+              Drag the 9:16 crop window directly on the video canvas (under Original preview) with magnetic center snapping.
             </div>
             {cx !== null && (
               <button className="btn ghost sm" style={{ marginTop: 10 }} onClick={() => setCx(null)}>
@@ -1249,7 +1246,7 @@ export default function ClipEditor() {
         <div className="modal-overlay" onClick={() => setShowShortcuts(false)}>
           <div className="modal" onClick={(e) => e.stopPropagation()}
                style={{ maxWidth: 420, padding: 24 }}>
-            <h3 style={{ marginBottom: 16 }}>⌨️ {t("ce.shortcuts")}</h3>
+            <h3 style={{ marginBottom: 16 }}>{t("ce.shortcuts")}</h3>
             <div className="shortcuts-grid" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px 24px" }}>
               {[
                 ["Space", "ce.shortcutPlay"],

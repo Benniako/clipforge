@@ -22,10 +22,10 @@ function Caps({ health }: { health: Health | null }) {
   });
   const isGpu = Boolean(c.gpu);
   return (
-    <div className="caps" title="ClipForge Hardware & Engine Status — Click for Diagnostics">
+    <div className="caps" title={t("diag.title")}>
       <span className="caps-engine-tag">
-        <span className="engine-dot" />
-        {isGpu ? "RTX 5060 Ti • NVDEC 650 FPS" : "CPU Engine"}
+        <span className={"engine-dot" + (isGpu ? "" : " off")} />
+        {isGpu ? `GPU${c.vram_gb ? ` ${Math.round(c.vram_gb)} GB` : ""}` : "CPU"}
       </span>
       <span className="caps-summary">{summary}</span>
       <span className={"caps-badge " + (pct >= 80 ? "ok" : pct >= 50 ? "warn" : "bad")}>
@@ -49,41 +49,22 @@ export default function App() {
     <div className="app">
       <nav className="nav">
         <Link to="/" className="brand">
-          <span className="mark">⚡</span>
+          <span className="mark" aria-hidden="true" />
           <span>ClipForge</span>
-          <span className="version-tag">Studio</span>
         </Link>
+        <Link to="/p/proj_demo" className="nav-link studio-nav-demo-btn" title={t("nav.demoTitle")}>
+          {t("nav.demo")}
+        </Link>
+        <button className="nav-link cues-btn" onClick={() => setShowCues(true)} title={t("nav.cuesTitle")}>
+          {t("nav.cues")}
+        </button>
         <div className="spacer" />
-        <button
-          className="caps-btn"
-          onClick={() => setShowDiag(true)}
-          title={t("diag.title")}
-        >
+        <button className="caps-btn" onClick={() => setShowDiag(true)} title={t("diag.title")}>
           <Caps health={health} />
         </button>
-        <button
-          className="btn ghost sm cues-btn"
-          onClick={() => setShowCues(true)}
-          title={t("nav.cuesTitle")}
-        >
-          <span className="btn-icon">🎮</span> {t("nav.cues")}
-        </button>
-        <LanguageToggle />
-        <Link
-          to="/p/proj_demo/clip/c_demo_ace"
-          className="btn ghost sm studio-nav-demo-btn"
-          title="Open Interactive Streamer Studio Demo"
-          style={{
-            borderColor: "rgba(6, 182, 212, 0.45)",
-            background: "rgba(6, 182, 212, 0.1)",
-            color: "var(--accent-cyan, #06b6d4)",
-            fontWeight: 700,
-          }}
-        >
-          <span className="btn-icon">🎮</span> Studio Demo
-        </Link>
+        <LanguageToggle className="nav-link" />
         <Link to="/" className="btn primary sm">
-          <span className="btn-icon">✨</span> {t("nav.newProject")}
+          {t("nav.newProject")}
         </Link>
       </nav>
       {showCues && <CueModal onClose={() => setShowCues(false)} />}
