@@ -11,6 +11,10 @@ Usage:
     python -m backend.cli batch --input video.mp4 --output ./clips --json  # report as JSON
     python -m backend.cli batch --help
 
+Measuring detection (no web server, no database):
+    python cli.py hud --input video.mp4 --labels-out video.labels.json   # goals read off the scoreboard
+    python cli.py eval --labels video.labels.json --min-recall 0.9       # detector vs hand-checked labels
+
 Environment variables (same as the web app):
     CLIPFORGE_WHISPER_MODEL, CLIPFORGE_DEVICE, CLIPFORGE_RENDER_WORKERS, etc.
     See backend/app/config.py for the full list.
@@ -279,6 +283,255 @@ def cmd_info(args: argparse.Namespace) -> int:
     return 0
 
 
+# The label both evaluation detectors are compared on.
+EVAL_LABEL = "goal"
+
+
+def _refine_arg(value: str) -> int | None:
+    """``--refine``: ``all`` (no cap) or how many goals get the 5 fps timing pass."""
+    if value.strip().lower() == "all":
+        return None
+    try:
+        n = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"expected 'all' or a whole number, got {value!r}")
+    if n < 0:
+        raise argparse.ArgumentTypeError(f"expected 'all' or a whole number >= 0, got {value!r}")
+    return n
+
+
+def _score_text(score) -> str:
+    return f"{score[0]}-{score[1]}"
+
+
+def _print_text(text: str) -> None:
+    """``print``, except that a character the console cannot show is replaced.
+
+    A label note or a file name outside the console's code page (cp1252 when
+    PowerShell redirects to a file) would otherwise end the command with a
+    traceback and exit code 1 - the code that means "gate not met".
+    """
+    try:
+        print(text)
+    except UnicodeEncodeError:
+        encoding = getattr(sys.stdout, "encoding", None) or "ascii"
+        print(text.encode(encoding, "replace").decode(encoding))
+
+
+def _labels_guard(path: Path) -> str | None:
+    """Why the label file at ``path`` must not be overwritten (``None``: it may be).
+
+    Verified labels are hours of somebody's checking. A file that cannot be
+    parsed is protected as well: it may be a verified one with a typo in it.
+    """
+    from app import evaluation
+
+    try:
+        existing = evaluation.load_labels(path)
+    except (OSError, ValueError) as e:
+        return f"it exists but cannot be read as a label file ({e})"
+    if existing.verified:
+        return "it holds verified labels"
+    return None
+
+
+def _hud_table(result, video: Path, duration: float) -> list[str]:
+    """The scoreboard tracker's result as text: summary, matches, goals."""
+    from app.evaluation import format_hms
+
+    lines = [f"video:     {video}"]
+    if result is None:
+        lines.append("result:    none (no scoreboard layout for this profile, or the video could not be read)")
+        return lines
+    side = {"a": "a (first team on the scoreboard)", "b": "b (second team on the scoreboard)"}
+    lines += [
+        f"layout:    {result.layout}",
+        f"healthy:   {'yes' if result.healthy else 'NO - the scoreboard was not found or not read reliably'}",
+        f"coverage:  {result.coverage * 100:.1f}% of {format_hms(duration)} with the scoreboard on screen",
+        f"streamer:  {side.get(result.streamer_side, 'unknown')}",
+        f"samples:   {result.samples} (one every {result.sample_interval:.1f} s)",
+        "",
+        f"matches ({len(result.matches)}):",
+    ]
+    if result.matches:
+        lines.append(f"  {'#':>3}  {'start':>8}  {'end':>8}  {'final':>5}  {'goals':>5}")
+    for k, m in enumerate(result.matches, 1):
+        lines.append(f"  {k:>3}  {format_hms(m.t_start):>8}  {format_hms(m.t_end):>8}"
+                     f"  {_score_text(m.final_score):>5}  {m.goals:>5}")
+    lines += ["", f"goals ({len(result.events)}):"]
+    if result.events:
+        lines.append(f"  {'time':>8}  {'score':<12}  {'min':>4}  {'team':<4}  {'streamer':<8}"
+                     f"  {'importance':>10}  {'confidence':>10}  notes")
+    for ev in result.events:
+        change = f"{_score_text(ev.score_before)} -> {_score_text(ev.score_after)}"
+        minute = f"{ev.minute}'" if ev.minute is not None else "-"
+        streamer = {True: "yes", False: "no"}.get(ev.streamer, "unknown")
+        notes = ", ".join(n for n, on in (("inferred", ev.inferred), ("scoreboard hidden", ev.hidden),
+                                          ("coarse timing", not ev.refined)) if on)
+        lines.append(f"  {format_hms(ev.t):>8}  {change:<12}  {minute:>4}  {ev.team:<4}  {streamer:<8}"
+                     f"  {ev.importance:>+10.1f}  {ev.confidence:>10.2f}  {notes}".rstrip())
+    return lines
+
+
+def cmd_hud(args: argparse.Namespace) -> int:
+    """Track a video's scoreboard and print its matches and goals.
+
+    Exit code 0 for a healthy read, 1 when there is no result or the
+    scoreboard was not read reliably, 2 when the input cannot be used or a
+    label file would be overwritten that must not be.
+    """
+    import dataclasses
+
+    from app import evaluation
+    from app.media.ffmpeg import probe
+    from app.providers.hud import track_scoreboard
+
+    src = Path(args.input)
+    if not src.is_file():
+        log.error("Input not found: %s", args.input)
+        return 2
+    src = src.resolve()
+    labels_out = Path(args.labels_out) if args.labels_out else None
+    # Checked before the scan, which can take a while on a long recording.
+    if labels_out is not None and labels_out.exists() and not args.force:
+        reason = _labels_guard(labels_out)
+        if reason:
+            log.error("Not overwriting %s: %s. Pass --force to replace it.", labels_out, reason)
+            return 2
+    try:
+        info = probe(str(src))
+    except Exception as e:
+        log.error("Could not read %s: %s", src, e)
+        return 2
+
+    result = track_scoreboard(str(src), info, ImportSettings(game_profile=args.profile),
+                              refine_limit=args.refine)
+    healthy = result is not None and bool(result.healthy)
+
+    written: Path | None = None
+    if labels_out is not None and result is not None:
+        if not healthy:
+            log.warning("The scoreboard was not read reliably; the draft labels will need extra care.")
+        draft = evaluation.draft_from_hud(
+            result, video=evaluation.video_reference(src, labels_out),
+            game_profile=args.profile, duration=float(info.duration))
+        try:
+            written = evaluation.save_labels(draft, labels_out)
+        except (OSError, ValueError) as e:
+            log.error("Could not write %s: %s", labels_out, e)
+            return 2
+
+    if args.json:
+        print(json.dumps({
+            "video": str(src),
+            "game_profile": args.profile,
+            "duration": float(info.duration),
+            "healthy": healthy,
+            "labels_out": str(written) if written else None,
+            "result": dataclasses.asdict(result) if result is not None else None,
+        }, indent=2, default=str))
+    else:
+        _print_text("\n".join(_hud_table(result, src, float(info.duration))))
+        if written is not None:
+            _print_text(f"\ndraft labels: {written} ({len(draft.events)} events) - check them by eye, "
+                        f"then set \"status\" to \"verified\"")
+    return 0 if healthy else 1
+
+
+def cmd_eval(args: argparse.Namespace) -> int:
+    """Run a detector on a labelled video and report how it did.
+
+    Exit code 0, 1 when ``--min-precision`` / ``--min-recall`` is given and
+    not met, 2 when the label file or its video cannot be used (or the
+    detector itself fails, so no numbers exist).
+    """
+    from app import evaluation
+    from app.media.ffmpeg import probe
+
+    if not args.tolerance >= 0:
+        log.error("--tolerance must be >= 0, got %s", args.tolerance)
+        return 2
+    try:
+        labels = evaluation.load_labels(args.labels)
+    except (OSError, ValueError) as e:
+        log.error("Cannot use label file %s: %s", args.labels, e)
+        return 2
+    video = evaluation.resolve_video(labels, args.labels)
+    if not video.is_file():
+        log.error("Video not found: %s (named in %s)", video, args.labels)
+        return 2
+    try:
+        info = probe(str(video))
+    except Exception as e:
+        log.error("Could not read %s: %s", video, e)
+        return 2
+
+    warnings: list[str] = []
+    if not labels.verified:
+        warnings.append("these labels are a DRAFT - the numbers are not trustworthy until a human "
+                        "has checked the labels and set \"status\" to \"verified\"")
+    clip_metrics = None
+    try:
+        if args.detector == "hud":
+            from app.providers.hud import track_scoreboard
+
+            result = track_scoreboard(str(video), info,
+                                      ImportSettings(game_profile=labels.game_profile),
+                                      refine_limit=args.refine)
+            if result is None:
+                warnings.append("the scoreboard tracker returned no result for this video")
+            elif not result.healthy:
+                warnings.append("the scoreboard was not read reliably (tracker result not healthy)")
+            found = result.events if result is not None else []
+            predicted = [(float(ev.t), ev.label) for ev in found if ev.label == EVAL_LABEL]
+        else:
+            from app.providers.detect_gameplay import detect_gameplay
+
+            recorded: list = []
+            settings = ImportSettings(game_profile=labels.game_profile,
+                                      content_type=ContentType.gameplay)
+            clips = detect_gameplay(str(video), info, settings, events_out=recorded)
+            predicted = [(float(e.t), e.label) for e in recorded if e.label == EVAL_LABEL]
+            clip_metrics = evaluation.score_clips(
+                labels.events, [(float(c.start), float(c.end)) for c in clips],
+                labelled_ranges=labels.labelled_ranges)
+    except Exception:
+        log.exception("The %s detector failed on %s", args.detector, video)
+        return 2
+
+    metrics = evaluation.score_events(labels.events, predicted, tolerance=args.tolerance,
+                                      labelled_ranges=labels.labelled_ranges, labels=(EVAL_LABEL,))
+    overall = metrics.overall
+    failed: list[str] = []
+    if args.min_precision is not None and overall.precision < args.min_precision:
+        failed.append(f"precision {overall.precision:.3f} is below the required {args.min_precision:g}")
+    if args.min_recall is not None and overall.recall < args.min_recall:
+        failed.append(f"recall {overall.recall:.3f} is below the required {args.min_recall:g}")
+
+    title = f"{args.detector} detector vs {labels.status} labels: {video.name}"
+    if args.json:
+        payload = evaluation.to_json(metrics, clip_metrics, title=title, warnings=warnings)
+        payload.update({
+            "labels_file": str(Path(args.labels).resolve()),
+            "labels_status": labels.status,
+            "video": str(video),
+            "game_profile": labels.game_profile,
+            "detector": args.detector,
+            "min_precision": args.min_precision,
+            "min_recall": args.min_recall,
+            "failed": failed,
+            "passed": not failed,
+        })
+        print(json.dumps(payload, indent=2))
+        for w in warnings:
+            log.warning("%s", w)
+    else:
+        _print_text(evaluation.format_report(metrics, clip_metrics, title=title, warnings=warnings))
+        for f in failed:
+            print(f"FAILED: {f}")
+    return 1 if failed else 0
+
+
 # --------------------------------------------------------------------------- #
 # CLI entry point
 # --------------------------------------------------------------------------- #
@@ -337,6 +590,38 @@ def build_parser() -> argparse.ArgumentParser:
     bp.add_argument("--json", action="store_true",
                     help="Output clip metadata as JSON at the end")
 
+    # hud
+    hp = sub.add_parser("hud", help="Read the on-screen scoreboard and list every match and goal")
+    hp.add_argument("--input", "-i", required=True, help="Video file path")
+    hp.add_argument("--profile", default="eafc",
+                    help="Game profile that selects the scoreboard layout (default: eafc)")
+    hp.add_argument("--refine", type=_refine_arg, default="all", metavar="all|N",
+                    help="How many goals get the 5 fps timing pass (default: all)")
+    hp.add_argument("--labels-out", default=None, metavar="FILE",
+                    help="Write the goals as draft labels for 'eval' (to be checked by a human)")
+    hp.add_argument("--force", action="store_true",
+                    help="Let --labels-out replace a verified or unreadable label file")
+    hp.add_argument("--json", action="store_true",
+                    help="Print the result as JSON instead of the table")
+
+    # eval
+    ep = sub.add_parser("eval", help="Score a detector against a hand-checked label file")
+    ep.add_argument("--labels", required=True, metavar="FILE",
+                    help="Label file (JSON); it names the video to run on")
+    ep.add_argument("--tolerance", type=float, default=6.0,
+                    help="Seconds a detection may be off and still count (default: 6)")
+    ep.add_argument("--detector", default="hud", choices=["hud", "gameplay"],
+                    help="hud: the scoreboard tracker alone; gameplay: the full gameplay "
+                         "detector, which also scores its clips (default: hud)")
+    ep.add_argument("--refine", type=_refine_arg, default="all", metavar="all|N",
+                    help="hud detector only: how many goals get the 5 fps timing pass (default: all)")
+    ep.add_argument("--min-precision", type=float, default=None, metavar="X",
+                    help="Exit with code 1 when goal precision is below X (0..1)")
+    ep.add_argument("--min-recall", type=float, default=None, metavar="Y",
+                    help="Exit with code 1 when goal recall is below Y (0..1)")
+    ep.add_argument("--json", action="store_true",
+                    help="Print the report as JSON instead of text")
+
     return parser
 
 
@@ -353,6 +638,10 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_info(args)
     elif args.command == "batch":
         return cmd_batch(args)
+    elif args.command == "hud":
+        return cmd_hud(args)
+    elif args.command == "eval":
+        return cmd_eval(args)
     return 1
 
 

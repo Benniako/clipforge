@@ -8,10 +8,20 @@ transient moments and build clips around them, ranked by intensity.
 This is game-agnostic and needs no extra models (just ffmpeg + numpy). It's the
 foundation; per-game vision detectors (kill-feed / scoreboard OCR) can layer on
 top behind this same interface.
+
+Where a game's scoreboard can be tracked (``providers.hud``) its goals are the
+primary highlights: a digit that went up by one is proof, a loud moment or the
+word "GOAL" somewhere on screen is not. Stadium LED boards literally read GOAL
+and CHAMPIONS, which the keyword OCR took for a goal and for a menu screen. So
+with a healthy scoreboard result the keyword sweep is skipped, the remaining
+detectors are held to the time the scoreboard was on screen, and nothing they
+find may outrank a goal read off the scoreboard. Without one, detection works
+exactly as it did before the tracker existed.
 """
 from __future__ import annotations
 
 import logging
+import os
 import wave
 from dataclasses import dataclass, field
 
@@ -21,8 +31,26 @@ from ..media.ffmpeg import MediaInfo
 from ..models import DetectedEvent, ImportSettings, ScoreFactor
 from . import audio_events as audio_events_mod
 from . import detect_cues, detect_ocr
+from . import hud as hud_mod
 
 log = logging.getLogger("clipforge.gameplay")
+
+# Share of the video the scoreboard must cover before "the scoreboard is not on
+# screen" is trusted as "this is not match time" and other detectors are gated
+# by it. Below this the tracker still supplies its goals, but a scoreboard seen
+# for a fraction of the footage says little about the rest of it.
+HUD_GATE_MIN_COVERAGE = 0.30
+# Ceiling for cue / keyword-OCR / audio-event clips while a scoreboard is
+# tracked, so unverified moments rank below goals read off the scoreboard.
+HUD_UNVERIFIED_CAP = 79
+# ... and the floor for those goals, however little one mattered to its match.
+HUD_GOAL_FLOOR = 80
+# Most a goal can gain from how loud its moment was (a tie-breaker, not proof).
+HUD_LOUDNESS_BONUS = 4
+# CLIPFORGE_HUD values that switch scoreboard tracking off.
+_HUD_OFF_VALUES = {"0", "false", "off", "no"}
+# Keyword-OCR labels the scoreboard tracker supersedes.
+_HUD_SUPERSEDED_LABELS = {"goal", "scoreboard"}
 
 # Map a game profile to its cue-template folder (aliases included).
 _CUE_DIR = {"auto": "generic", "cs": "cs2", "fifa": "eafc", "valorant": "valorant"}
@@ -354,6 +382,192 @@ def _add_warning(warnings_out: list | None, msg: str) -> None:
         warnings_out.append(msg)
 
 
+def _track_hud(src_path: str, info: MediaInfo, settings: ImportSettings,
+               warnings_out: list | None = None):
+    """Track the scoreboard; the ``HudResult`` when it was read reliably, else None.
+
+    ``None`` means "no scoreboard evidence": the caller then detects exactly as
+    it would without the tracker. An unhealthy result is treated the same way,
+    because goals from a scoreboard that was barely seen are not proof.
+    """
+    if not settings.use_ocr or not getattr(info, "has_video", False):
+        return None
+    if os.environ.get("CLIPFORGE_HUD", "").strip().lower() in _HUD_OFF_VALUES:
+        return None
+    if not hud_mod.layouts_for(settings.game_profile):
+        return None
+    try:
+        # The timing pass is the expensive part; three candidates per wanted
+        # clip is plenty to choose from once overlaps are dropped.
+        result = hud_mod.track_scoreboard(
+            src_path, info, settings,
+            refine_limit=max(3 * settings.target_clips, 30))
+    except Exception as e:
+        log.warning("scoreboard tracking failed: %s", e)
+        _add_warning(warnings_out,
+                     "Scoreboard tracking crashed, so goals fall back to audio "
+                     "and on-screen keywords.")
+        return None
+    from .hud.layouts import normalize_profile
+
+    # Only worth telling the user when they said which game this is; with
+    # "auto" a missing scoreboard just means it is some other game.
+    named_game = normalize_profile(settings.game_profile) in hud_mod.LAYOUTS
+    if result is None:
+        if named_game:
+            _add_warning(warnings_out,
+                         "Scoreboard tracking could not read this video, so goals "
+                         "fall back to audio and on-screen keywords.")
+        return None
+    if not result.healthy:
+        if named_game:
+            _add_warning(warnings_out,
+                         "No scoreboard was found in this footage, so goals fall "
+                         "back to audio and on-screen keywords. Scoreboard "
+                         "tracking cannot read a scaled or moved game HUD yet.")
+        return None
+    if not named_game and (not result.events or result.diagnostics.get("violations", 0)):
+        # Guessing the game: only trust a layout that produced clean goals.
+        return None
+    log.info("scoreboard tracked (%s): %d match(es), %d goal(s), coverage %.0f%%",
+             result.layout, len(result.matches), len(result.events),
+             result.coverage * 100.0)
+    return result
+
+
+def _legacy_ocr_with_hud(settings: ImportSettings) -> bool:
+    cfg = getattr(settings, "game_config", None)
+    return bool(getattr(cfg, "legacy_ocr_with_hud", False))
+
+
+def _ocr_events_beside_hud(events: list, hud, gate: bool) -> list:
+    """Keyword-OCR events that may stand next to a tracked scoreboard.
+
+    Goal and scoreline hits are dropped (the tracker reads those properly), and
+    with the gate on so is anything read while no scoreboard was on screen.
+    """
+    if hud is None:
+        return events
+    out = [e for e in events
+           if str(getattr(e, "label", "") or "").lower() not in _HUD_SUPERSEDED_LABELS]
+    if gate:
+        out = [e for e in out if hud.is_in_play(float(e.t))]
+    return out
+
+
+def _menu_events(ocr_events: list, hud) -> list:
+    """OCR events that say the player is in a menu.
+
+    Text read while the scoreboard is on screen is never menu evidence: a
+    stadium board reading CHAMPIONS is not the Champions menu.
+    """
+    out = [e for e in ocr_events if _is_menu_ocr_event(e)]
+    if hud is not None:
+        out = [e for e in out if not hud.is_in_play(float(e.t))]
+    return out
+
+
+def _hud_ocr_events(hud) -> list:
+    """Scoreboard goals as on-screen evidence for :func:`apply_corroboration`."""
+    if hud is None:
+        return []
+    return [detect_ocr.OcrEvent(t=float(ev.t), label="goal", text=ev.detail,
+                                confidence=float(ev.confidence))
+            for ev in hud.events]
+
+
+def _cap_unverified(clips: list["GameplayClip"]) -> None:
+    for c in clips:
+        c.score = min(int(c.score), HUD_UNVERIFIED_CAP)
+
+
+def _hud_goal_clips(hud, info: MediaInfo, settings: ImportSettings, *,
+                    lead: float, tail: float) -> list["GameplayClip"]:
+    """One clip per goal read off the scoreboard.
+
+    ``ev.t`` already is the goal moment (the tracker took the scoreboard's
+    delay out), so unlike :func:`_ocr_clips` no time offset is applied.
+    """
+    out: list[GameplayClip] = []
+    for ev in hud.events:
+        t = float(ev.t)
+        start = max(0.0, t - lead)
+        end = min(info.duration, t + tail)
+        if end - start < settings.min_len:
+            start = max(0.0, end - settings.min_len)
+        if end - start > settings.max_len:
+            start = max(0.0, end - settings.max_len)
+        confidence = float(ev.confidence)
+        raw = 84.0 + float(ev.importance) - (8.0 if confidence < 0.7 else 0.0)
+        score = int(round(max(float(HUD_GOAL_FLOOR), min(99.0, raw))))
+        before = f"{ev.score_before[0]}-{ev.score_before[1]}"
+        after = f"{ev.score_after[0]}-{ev.score_after[1]}"
+        minute = f" ({ev.minute}')" if ev.minute is not None else ""
+        detail = "Read off the on-screen scoreboard"
+        if ev.clock:
+            detail += f" at clock {ev.clock}"
+        factors = [ScoreFactor(label=f"Scoreboard {before} → {after}{minute}",
+                               weight=round(confidence * 20, 1), detail=detail)]
+        if ev.reasons:
+            factors.append(ScoreFactor(label="; ".join(ev.reasons[:3]),
+                                       weight=float(ev.importance),
+                                       detail="What this goal did to the match"))
+        m, s = divmod(int(t), 60)
+        out.append(GameplayClip(
+            start=round(start, 3), end=round(end, 3), score=score, peak_t=t,
+            title=f"Goal {after} — {m}:{s:02d}", cue_ts=[],
+            features={"ocr": round(confidence, 4), "hud": 1.0,
+                      "hud_importance": float(ev.importance), "intensity": 0.0,
+                      "sustain": 0.0, "transient": 0.0, "spikes": 0.0, "cue": 0.0,
+                      "climax_t": round(t, 3)},
+            factors=factors))
+    return out
+
+
+def _add_goal_loudness(clips: list["GameplayClip"], times, rms, *,
+                       before: float = 1.0, after: float = 6.0) -> None:
+    """Break ties between goals by how loud the moment was.
+
+    With a hundred goals in a session many share a score. The crowd, the
+    commentary and above all the streamer are louder for the ones that
+    mattered to them, so a goal whose seconds are clearly above the
+    footage's typical level gains up to ``HUD_LOUDNESS_BONUS`` points: nothing
+    below +1 dB, the full bonus from +8 dB. Loudness only orders goals here;
+    it never creates one.
+
+    The level is the mean over the window from ``before`` seconds ahead of the
+    goal to ``after`` seconds past it, compared with the median of that same
+    mean over the whole footage. (The window's *peak* would not do: some
+    sample in any seven seconds is loud, so nearly every goal would qualify.)
+    """
+    import math
+
+    import numpy as np
+
+    if not clips or times is None or rms is None or len(rms) < 2:
+        return
+    hop = float(times[1] - times[0]) or 0.1
+    n_win = max(int(round((before + after) / hop)), 1)
+    csum = np.concatenate(([0.0], np.cumsum(rms, dtype=np.float64)))
+    if len(csum) <= n_win:
+        return
+    roll = (csum[n_win:] - csum[:-n_win]) / float(n_win)   # mean of the window starting at i
+    typical = max(float(np.median(roll)), 1e-9)
+    ranked = np.sort(roll)
+    for c in clips:
+        i0 = min(max(int((c.peak_t - before) / hop), 0), len(roll) - 1)
+        level = max(float(roll[i0]), 1e-9)
+        gain_db = 20.0 * math.log10(level / typical)
+        pct = float(np.searchsorted(ranked, level, side="right")) / float(len(ranked))
+        c.features["intensity"] = round(pct, 4)
+        bonus = int(round(HUD_LOUDNESS_BONUS * min(max((gain_db - 1.0) / 7.0, 0.0), 1.0)))
+        if bonus > 0:
+            c.score = int(min(99, c.score + bonus))
+            c.factors.append(ScoreFactor(
+                label="Loud moment", weight=float(bonus),
+                detail=f"{gain_db:+.0f} dB against the footage's typical level"))
+
+
 def detect_gameplay(src_path: str, info: MediaInfo, settings: ImportSettings,
                     *, weights: dict[str, float] | None = None,
                     wav_path: str | None = None,
@@ -367,26 +581,48 @@ def detect_gameplay(src_path: str, info: MediaInfo, settings: ImportSettings,
     transcription extract); when absent the audio is extracted here. ``events_out``
     (when given) is extended with the :class:`DetectedEvent`s that were matched
     (audio cues + OCR) so the caller can persist them on the project.
+
+    The scoreboard is tracked first (:func:`_track_hud`). With a result, its
+    goals lead the returned clips on every path through this function, and
+    with enough coverage the other detectors only count during match time.
     """
     import tempfile
     from pathlib import Path
 
     aw = weights or audio_weights(settings.game_profile)
+    profile = get_profile(settings.game_profile)
+
+    hud = _track_hud(src_path, info, settings, warnings_out)
+    # gate: the scoreboard covers enough of the footage that its absence means
+    # "not in a match" — menus, lobbies, replays between games.
+    gate = hud is not None and hud.coverage >= HUD_GATE_MIN_COVERAGE
+    goal_clips: list[GameplayClip] = []
+    if hud is not None:
+        goal_lead, goal_tail = _timing_window(settings, profile)
+        goal_clips = _hud_goal_clips(hud, info, settings,
+                                     lead=goal_lead, tail=goal_tail)
 
     # On-screen text markers (VICTORY / ELIMINATED / GOAL / kill-feed).
     # For footage with audio we run OCR after finding likely moments, so it reads
     # the frames that matter instead of doing a slow blind sweep over the VOD.
+    # With a tracked scoreboard the keyword sweep is off unless asked for.
+    use_ocr = bool(settings.use_ocr
+                   and (hud is None or _legacy_ocr_with_hud(settings)))
     ocr_events: list = []
-    defer_ocr = bool(settings.use_ocr and info.has_audio)
-    if settings.use_ocr and not defer_ocr:
-        ocr_events = _find_ocr_events(src_path, info, settings,
-                                      warnings_out=warnings_out)
+    defer_ocr = bool(use_ocr and info.has_audio)
+    if use_ocr and not defer_ocr:
+        ocr_events = _ocr_events_beside_hud(
+            _find_ocr_events(src_path, info, settings, warnings_out=warnings_out),
+            hud, gate)
 
     if not info.has_audio:
         clips = _uniform_fallback(info, settings)
         ocr_clips = _ocr_clips(ocr_events, info, settings)
-        _record_events(events_out, [], ocr_events, [])
-        return _merge(ocr_clips, clips, settings.target_clips) if ocr_clips else clips
+        _record_events(events_out, [], ocr_events, [], hud=hud)
+        if hud is not None:
+            _cap_unverified(ocr_clips)
+        priority = goal_clips + ocr_clips
+        return _merge(priority, clips, settings.target_clips) if priority else clips
 
     cue_events: list = []
     audio_window_events: list = []
@@ -402,13 +638,23 @@ def detect_gameplay(src_path: str, info: MediaInfo, settings: ImportSettings,
                 ffmpeg.extract_audio_wav(src_path, wav)
             except Exception as e:
                 log.warning("gameplay audio extract failed: %s", e)
-                return _uniform_fallback(info, settings)
+                fallback = _uniform_fallback(info, settings)
+                if hud is None:
+                    return fallback
+                # The scoreboard needs no audio: its goals survive this.
+                _record_events(events_out, [], [], [], hud=hud)
+                return (_merge(goal_clips, fallback, settings.target_clips)
+                        if goal_clips else fallback)
             times, rms = _load_rms(str(wav))
             cue_events = _cue_events(str(wav), settings)
             audio_window_events = _audio_events(str(wav), info.duration, settings,
                                                 warnings_out=warnings_out)
 
-    profile = get_profile(settings.game_profile)
+    if gate:
+        cue_events = [e for e in cue_events if hud.is_in_play(float(e.t))]
+        audio_window_events = [e for e in audio_window_events
+                               if hud.is_in_play(float(e.t))]
+
     if defer_ocr:
         focus_times = [float(e.t) for e in cue_events]
         focus_times += [float(e.t) for e in audio_window_events]
@@ -416,32 +662,40 @@ def detect_gameplay(src_path: str, info: MediaInfo, settings: ImportSettings,
             try:
                 peak_idxs, _thr, _floor = _pick_peaks(
                     times, rms, settings=settings, profile=profile)
-                focus_times += [float(times[i]) for i in peak_idxs]
+                focus_times += [float(times[i]) for i in peak_idxs
+                                if not gate or hud.is_in_play(float(times[i]))]
             except Exception as e:
                 log.warning("ocr focus peaks failed: %s", e)
-        ocr_events = _find_ocr_events(src_path, info, settings,
-                                      focus_times=focus_times,
-                                      warnings_out=warnings_out)
+        ocr_events = _ocr_events_beside_hud(
+            _find_ocr_events(src_path, info, settings, focus_times=focus_times,
+                             warnings_out=warnings_out),
+            hud, gate)
 
+    menu_events = _menu_events(ocr_events, hud)
     audio_window_events = _suppress_audio_events_near_menu(
-        audio_window_events, ocr_events)
-    _record_events(events_out, cue_events, ocr_events, audio_window_events)
+        audio_window_events, menu_events)
+    _record_events(events_out, cue_events, ocr_events, audio_window_events, hud=hud)
 
     if times is None:
         clips = _uniform_fallback(info, settings)
         ocr_clips = _ocr_clips(ocr_events, info, settings)
         audio_clips = _audio_event_clips(audio_window_events, info, settings)
-        priority = ocr_clips + audio_clips
+        if hud is not None:
+            _cap_unverified(ocr_clips + audio_clips)
+        priority = goal_clips + ocr_clips + audio_clips
         return _merge(priority, clips, settings.target_clips) if priority else clips
 
 
     peaks, thr, floor = _pick_peaks(times, rms, settings=settings, profile=profile)
     if not peaks:
         lead, tail = _timing_window(settings, profile)
-        priority = (_cue_clips(cue_events, info, lead, tail, settings)
-                    + _ocr_clips(ocr_events, info, settings, lead=lead, tail=tail)
-                    + _audio_event_clips(audio_window_events, info, settings,
-                                         lead=lead, tail=tail))
+        unverified = (_cue_clips(cue_events, info, lead, tail, settings)
+                      + _ocr_clips(ocr_events, info, settings, lead=lead, tail=tail)
+                      + _audio_event_clips(audio_window_events, info, settings,
+                                           lead=lead, tail=tail))
+        if hud is not None:
+            _cap_unverified(unverified)
+        priority = goal_clips + unverified
         fallback = _uniform_fallback(info, settings)
         return _merge(priority, fallback, settings.target_clips) if priority else fallback
 
@@ -449,10 +703,18 @@ def detect_gameplay(src_path: str, info: MediaInfo, settings: ImportSettings,
     hop = float(times[1] - times[0]) if len(times) > 1 else 0.1
     pre_n = max(int(2.0 / hop), 1)         # ~2s window before the peak
 
-    menu_times = [float(e.t) for e in ocr_events if _is_menu_ocr_event(e)]
+    menu_times = [float(e.t) for e in menu_events]
+    _add_goal_loudness(goal_clips, times, rms)
+    # Hold loud moments to match time — unless that would leave nothing at
+    # all (no goals, and every loud moment outside a match): an empty result
+    # fails the whole project, so then the gate stays open.
+    gate_peaks = gate and (bool(goal_clips)
+                           or any(hud.is_in_play(float(times[i])) for i in peaks))
     clips: list[GameplayClip] = []
     for idx in peaks:
         pt = float(times[idx])
+        if gate_peaks and not hud.is_in_play(pt):
+            continue
         if menu_times and any(abs(pt - mt) <= MENU_CONTEXT_WINDOW * 2.0 for mt in menu_times):
             continue
         start = max(0.0, pt - lead)
@@ -498,9 +760,15 @@ def detect_gameplay(src_path: str, info: MediaInfo, settings: ImportSettings,
     ocr_clips = _ocr_clips(ocr_events, info, settings, lead=lead, tail=tail)
     audio_clips = _audio_event_clips(audio_window_events, info, settings,
                                      lead=lead, tail=tail)
-    priority = cue_clips + ocr_clips + audio_clips
-    # Multimodal corroboration: reward corroborated events BEFORE selection
-    apply_corroboration(priority + clips, cue_events, ocr_events, audio_window_events)
+    unverified = cue_clips + ocr_clips + audio_clips
+    priority = goal_clips + unverified
+    # Multimodal corroboration: reward corroborated events BEFORE selection.
+    # A goal read off the scoreboard is on-screen evidence like any OCR hit.
+    apply_corroboration(priority + clips, cue_events,
+                        ocr_events + _hud_ocr_events(hud), audio_window_events)
+    if hud is not None:
+        # After corroboration, so a bonus cannot lift them past the goals.
+        _cap_unverified(unverified)
     merged = _merge(priority, clips, settings.target_clips)
     merged.sort(key=lambda c: c.start)
     return merged
@@ -607,10 +875,28 @@ def accepted_events_for_clips(events: list[DetectedEvent],
 
 
 def _record_events(events_out: list | None, cue_events: list,
-                   ocr_events: list, audio_events: list | None = None) -> None:
-    """Append matched cues + OCR hits to ``events_out`` as DetectedEvents."""
+                   ocr_events: list, audio_events: list | None = None,
+                   *, hud=None) -> None:
+    """Append matched cues + OCR hits to ``events_out`` as DetectedEvents.
+
+    ``hud`` is the scoreboard result, if any: each of its goals is recorded
+    too. Their source stays "ocr" (they were read off the screen, and the
+    front-end only knows cue / ocr / audio); ``data["detector"] == "hud"`` is
+    what tells them apart from keyword hits.
+    """
     if events_out is None:
         return
+    for ev in (hud.events if hud is not None else []):
+        events_out.append(DetectedEvent(
+            t=round(float(ev.t), 3), source="ocr", label="goal",
+            detail=ev.detail, confidence=round(float(ev.confidence), 3),
+            data={"detector": "hud", "team": ev.team,
+                  "score_before": f"{ev.score_before[0]}-{ev.score_before[1]}",
+                  "score_after": f"{ev.score_after[0]}-{ev.score_after[1]}",
+                  "minute": ev.minute, "clock": ev.clock,
+                  "t_change": round(float(ev.t_change), 3),
+                  "streamer": ev.streamer,
+                  "importance": float(ev.importance)}))
     for e in cue_events:
         events_out.append(DetectedEvent(
             t=round(float(e.t), 3), source="cue", label=e.label,
@@ -952,8 +1238,11 @@ def apply_evidence_caps(clips: list["GameplayClip"] | list) -> None:
         reaction = float(feats.get("reaction", 0.0))
         excitement = float(feats.get("excitement", 0.0))
         corroborated = float(feats.get("corroborated", 0.0)) > 0.0
+        # A goal read off the scoreboard is proof on its own.
+        scoreboard = float(feats.get("hud", 0.0)) > 0.0
         exceptional = (
             corroborated
+            or scoreboard
             or (cue >= 0.88 and ocr >= 0.82)
             or (reaction >= 0.55 and (ocr >= 0.82 or excitement >= 0.72 or cue >= 0.88))
         )

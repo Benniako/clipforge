@@ -36,6 +36,9 @@ jobs:
       - name: Integration tests (API + models + CLI)
         working-directory: backend
         run: python -m pytest tests/test_integration.py -v --tb=short
+      - name: Scoreboard tracker and evaluation tests
+        working-directory: backend
+        run: python -m pytest tests/test_hud.py tests/test_evaluation.py tests/test_hud_integration.py -q
 
   docker-check:
     runs-on: ubuntu-latest

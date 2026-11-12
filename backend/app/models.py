@@ -165,6 +165,10 @@ class DetectedEvent(BaseModel):
     label: str                  # canonical event name, e.g. "kill", "victory"
     detail: str = ""            # raw text / cue file matched
     confidence: float = 0.0     # 0..1
+    # Structured extras for the event. A goal read off the scoreboard carries
+    # detector="hud" plus team, score before/after, match minute and clock here,
+    # so nothing has to be parsed back out of ``detail``.
+    data: dict[str, float | int | str | bool | None] = Field(default_factory=dict)
 
 
 # --------------------------------------------------------------------------- #
@@ -209,6 +213,10 @@ class GameProfileConfig(BaseModel):
         "quiet lobby music",
         "loading screen ambience",
     ])
+    # When the game's scoreboard is tracked, its goals replace the keyword OCR
+    # sweep (which mistakes stadium boards for goals and menus). Set this to
+    # run that sweep as well, e.g. for custom visual_text_cues.
+    legacy_ocr_with_hud: bool = False
 
 
 class ReframeKeyframe(BaseModel):

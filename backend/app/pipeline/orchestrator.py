@@ -153,6 +153,19 @@ def _preserve_user_clip_edits(clips: list[Clip], previous: list[Clip]) -> None:
             clip.reframe = prev_c.reframe
 
 
+def _cue_learning_events(detected: list) -> list:
+    """On-screen events an audio cue may be learned from.
+
+    Goals read off the scoreboard are left out. Their time already is the goal
+    moment, while cue learning shifts sports goals back by the keyword
+    banner's delay and would snip the wrong audio; and the stretch around a
+    goal (commentary, crowd) is not a sound that reliably marks one.
+    """
+    return [e for e in detected
+            if getattr(e, "source", "") == "ocr"
+            and (getattr(e, "data", None) or {}).get("detector") != "hud"]
+
+
 def _speech_intervals(transcript, start: float, end: float
                       ) -> list[tuple[float, float]] | None:
     """Clip-relative speech spans for speech-aware reframing.
@@ -752,11 +765,13 @@ class Engine:
 
             ocr_labels = [e.label for e in detected
                           if getattr(e, "source", "") == "ocr" and e.label]
-            ocr_texts = [e.detail for e in detected
-                         if getattr(e, "source", "") == "ocr" and e.detail]
+            # Hashtags are built from these. A scoreboard goal contributes its
+            # label ("goal") above, but not its detail text ("Scoreboard 0-0 ->
+            # 1-0"), which would turn into a nonsense tag.
+            ocr_texts = [e.detail for e in _cue_learning_events(detected) if e.detail]
 
             if info.has_audio and project.settings.cue_learning:
-                ocr_evs = [e for e in detected if getattr(e, "source", "") == "ocr"]
+                ocr_evs = _cue_learning_events(detected)
                 if ocr_evs:
                     try:
                         from .. import cue_learning
