@@ -89,6 +89,8 @@ class MultiKill:
     """The streamer's kills of one round."""
     index: int
     kills: list[KillEvent]
+    won: bool | None = None       # round result off the top bar; None = not read
+    after_plant: bool = False     # a kill fell while the spike was planted
 
     @property
     def count(self) -> int:

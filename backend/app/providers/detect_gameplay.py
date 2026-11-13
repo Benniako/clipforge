@@ -561,6 +561,11 @@ def _track_killfeed(src_path: str, info: MediaInfo, settings: ImportSettings,
                          "The kill feed could not be read in this footage, so kills fall "
                          "back to game sounds and on-screen keywords.")
         return None
+    if result.rounds:
+        # Round results and spike plants off the top bar (never raises).
+        from .hud import valorant_rounds
+
+        valorant_rounds.enrich(src_path, info, result, spans or None)
     return result
 
 
@@ -588,6 +593,14 @@ def _killfeed_clips(kills, info: MediaInfo, settings: ImportSettings, *,
         if quick:
             factors.append(ScoreFactor(label=f"{rnd.count} kills in {rnd.span:.0f} s",
                                        weight=2.0, detail="Kills in quick succession"))
+        if getattr(rnd, "won", None):
+            score = min(99, score + 2)
+            factors.append(ScoreFactor(label="Round won", weight=2.0,
+                                       detail="The team score rose after these kills"))
+        if getattr(rnd, "after_plant", False):
+            score = min(99, score + 1)
+            factors.append(ScoreFactor(label="Kill with the spike planted", weight=1.0,
+                                       detail="The spike icon was on screen"))
         m, s = divmod(int(rnd.t_first), 60)
         out.append(GameplayClip(
             start=round(start, 3), end=round(end, 3), score=score, peak_t=t_last,
@@ -692,6 +705,20 @@ def detect_gameplay(src_path: str, info: MediaInfo, settings: ImportSettings,
                     detail=ev.detail, confidence=round(float(ev.confidence), 3),
                     data={"detector": "killfeed", "round": ev.round_index,
                           "streak": ev.streak, "sources": list(ev.sources)}))
+            for r in kills.diagnostics.get("round_results", []):
+                won = r["winner"] == "ally"
+                events_out.append(DetectedEvent(
+                    t=round(float(r["t"]), 3), source="ocr",
+                    label="round_win" if won else "round_loss",
+                    detail=f"Top bar: round {'won' if won else 'lost'}, "
+                           f"score {r['score'][0]}-{r['score'][1]}",
+                    confidence=0.8 if r.get("exact", True) else 0.6,
+                    data={"detector": "valorant_rounds", "score": r["score"]}))
+            for a, b in kills.diagnostics.get("spike_plants", []):
+                events_out.append(DetectedEvent(
+                    t=round(float(a), 3), source="ocr", label="spike_plant",
+                    detail="Top bar: spike planted", confidence=0.8,
+                    data={"detector": "valorant_rounds", "until": b}))
 
     # On-screen text markers (VICTORY / ELIMINATED / GOAL / kill-feed).
     # For footage with audio we run OCR after finding likely moments, so it reads

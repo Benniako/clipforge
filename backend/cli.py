@@ -381,15 +381,27 @@ def _cmd_killfeed(args: argparse.Namespace, src: Path, info) -> int:
 
     if args.labels_out:
         log.warning("--labels-out is only available for scoreboard games; ignored.")
-    result = killfeed.track_killfeed(str(src), info)
+    from app.providers.hud import segments, valorant_rounds
+
+    # Read only the stretches that show Valorant (a recording can hold several
+    # games); without a top bar anywhere, read the whole file.
+    spans = segments.valorant_spans(str(src), info)
+    if spans:
+        result = segments.track_killfeed_spans(str(src), info, spans)
+    else:
+        result = killfeed.track_killfeed(str(src), info)
     healthy = result is not None and bool(result.healthy)
+    rounds, plants = [], []
+    if result is not None:
+        rounds, plants = valorant_rounds.enrich(str(src), info, result, spans or None)
     if args.json:
         payload = None
         if result is not None:
             payload = {
                 "events": [dataclasses.asdict(e) for e in result.events],
                 "rounds": [{"index": r.index, "label": r.label, "kills": r.count,
-                            "t_first": r.t_first, "t_last": r.t_last} for r in result.rounds],
+                            "t_first": r.t_first, "t_last": r.t_last, "won": r.won,
+                            "after_plant": r.after_plant} for r in result.rounds],
                 "samples": result.samples, "active_s": result.active_s,
                 "diagnostics": result.diagnostics,
             }
@@ -410,9 +422,19 @@ def _cmd_killfeed(args: argparse.Namespace, src: Path, info) -> int:
                      + ("" if healthy else "  [NOT read reliably]"))
         for r in result.rounds:
             times = ", ".join(clock(k.t) for k in r.kills)
-            lines.append(f"  round {r.index:2d}  {r.label:<12s} {r.count} kill(s) at {times}")
+            outcome = {True: "round won", False: "round lost", None: ""}[r.won]
+            notes = ", ".join(n for n in (outcome, "spike planted" if r.after_plant else "") if n)
+            lines.append(f"  round {r.index:2d}  {r.label:<12s} {r.count} kill(s) at {times}"
+                         + (f"  ({notes})" if notes else ""))
         if result.deaths:
             lines.append("  deaths: " + ", ".join(clock(d.t) for d in result.deaths))
+        if spans:
+            lines.append("  Valorant on screen: " + ", ".join(f"{clock(a)}-{clock(b)}" for a, b in spans))
+        if rounds:
+            lines.append(f"  round results ({len(rounds)}), own team first: " + " ".join(
+                f"{clock(r.t)}={r.score[0]}-{r.score[1]}" for r in rounds))
+        if plants:
+            lines.append(f"  spike planted ({len(plants)}): " + ", ".join(clock(a) for a, _b in plants))
     _print_text("\n".join(lines))
     return 0 if healthy else 1
 
