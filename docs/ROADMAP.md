@@ -1,0 +1,93 @@
+# ClipForge: where it stands and what comes next
+
+Status as of 2026-11-13. Measured on an RTX 5060 Ti 16 GB / Ryzen 5 7600 / 31 GB
+RAM with real 1440p60 OBS recordings (EA FC 27 and Valorant, German game client).
+This file replaces the older roadmap notes in this folder as the current plan.
+
+## 1. What ClipForge can do today
+
+Everything runs on the local machine. No cloud API is called.
+
+| Area | Capability | Engine |
+|---|---|---|
+| Import | Local files, URLs (yt-dlp), batch CLI, resumable projects | ffmpeg 8, yt-dlp |
+| Speech | Transcription with word timing and speakers, German and English | whisperX, faster-whisper, pyannote |
+| EA FC goals | Reads the scoreboard: matches, every goal, the minute, who scored | `providers/hud` scoreboard tracker |
+| Valorant kills | Reads the kill banner and kill feed: own kills, deaths, double / triple / quadra kills and aces per round | `providers/hud/killfeed.py` |
+| Other game events | On-screen keywords (German and English), learned audio cues per game | EasyOCR, Tesseract, cue matcher |
+| Audio | Crowd, cheering, laughter, explosions; free-text audio prompts | PANNs, LAION-CLAP |
+| Ranking | Explainable score per clip with its factors; local LLM re-rank and titles; vision second opinion on keyframes | Ollama (`qwen2.5vl:7b`) |
+| Framing | 9:16 / 1:1 / 16:9, face and object tracking, facecam layouts, scene-cut snapping | YOLO, SCRFD, YuNet, PySceneDetect |
+| Captions | Word-level animated captions, game-announcer lines filtered out | ASS via ffmpeg |
+| Render | GPU decode and encode, loudness normalisation, platform presets | `h264_cuvid`, `h264_nvenc` |
+| Editor | Timeline trim, caption edit, re-render, feedback that re-weights scoring | React + FastAPI |
+| Evaluation | Hand-checked label files and `cli.py eval` to score a detector | `app/evaluation.py` |
+
+### Measured results
+
+| Test | Result |
+|---|---|
+| EA FC 27, 16.6 min | 1 match, 9 of 9 goals, scoreboard coverage 83 %, tracker 13 s, whole pipeline 3 min 58 s for 6 clips |
+| Valorant, 40.7 min | 8 of 8 own kills found, 0 false kills, 1 double kill, 20 deaths; checked frame by frame |
+| Mixed session, 96.6 min (Valorant, EA FC, Fortnite in one file) | EA FC part read correctly (1 match, 6 goals), but the run is flagged unhealthy because only 30 % of the file is EA FC |
+| Tests | 247 unit tests, 179 pytest tests, 274 frontend tests, lint clean |
+
+### How the Valorant tracker decides
+
+1. **Kill banner** (white skull in a ring, bottom centre, about 2 s per kill) is the proof of a kill. It has no text, so the game language does not matter.
+2. **Kill feed** (top right) confirms it: the streamer's own row carries a yellow tab left of the killer name; their death carries a yellow outline at the victim end.
+3. **Buy-phase plate** ("KAUFPHASE" in the German client; read by shape, not by text) marks round starts, which groups kills into rounds and labels multi-kills.
+4. The banner also shows while spectating a teammate after dying. A banner after the streamer's death in the same round is dropped unless the feed confirms it.
+
+Run it alone with `python cli.py hud --profile valorant --input <video>`.
+
+## 2. Is the current build at its limit?
+
+No. The measurements point to these gaps, largest first:
+
+| Gap | Evidence | Fix |
+|---|---|---|
+| Each detector decodes the video again | Scoreboard, kill feed, OCR, scene detection and the facecam search each start their own ffmpeg; the Valorant scan alone takes ~170 s for 40 min because 1440p60 decoding is the limit (about 22x realtime) | One shared decode pass that hands cropped regions to every detector (R1) |
+| Recordings with several games | 96.6-min session holds three games; one profile is applied to the whole file | Detect the game per segment (R2) |
+| GPU is mostly idle | Average GPU load 20 % over a full run | Follows from R1; batch OCR and VLM frames |
+| Source is copied into the data folder | 3.9 GB copy, 28 s, doubles disk use | Reference or hard-link local sources (R5) |
+| Football framing | Fixed centre crop; the ball is often outside the 9:16 window | Ball-follow crop (R4) |
+| Two engines do not load | PaddleOCR needs `opencv-contrib-python`, which conflicts with OpenCV 5; emotion2vec fetches from modelscope.cn, which answers 403 | RapidOCR on ONNX (R6); load emotion2vec from the local cache (R7) |
+| LLM cold start | First Ollama call can hit the 30 s timeout while the model loads | Warm the model during transcription (R7) |
+
+## 3. Roadmap
+
+### Next (highest value, each about a day or less)
+
+- **R1 Shared decode pass.** One ffmpeg process per recording that emits all HUD regions stacked (`hud/scan.py` already supports `stack`). Target: Valorant scan under 60 s for 40 min, total pipeline time down by a third.
+- **R2 Game segmentation.** Sample one frame per 20 s, test each game's HUD anchor (EA FC scoreboard, Valorant top bar, ...), split the file into game segments and run the matching tracker on each. Fixes the mixed-session case and removes the need to rename files.
+- **R3 More Valorant events.** Spike plant and defuse (HUD icon and timer), round win or loss from the top-bar score, clutch (last one alive and round won), headshot icon in the feed row. Scores to feed: ace > clutch > quadra > triple.
+- **R4 Ball-follow framing for EA FC.** YOLO ball and player detection at 5 fps, smoothed crop path; fall back to a blurred-background 16:9 layout for wide plays. Building blocks exist ([Football-PitchVision](https://github.com/DesusLove/Football-PitchVision), [MatchVision](https://github.com/BlazeWild/MatchVision-AI-Sports-Video-Analytics-Tracking-Pipeline)), none of them does the vertical crop.
+
+### Soon
+
+- **R5 No-copy import** for local files, with a setting to keep the old behaviour.
+- **R6 RapidOCR** (PP-OCRv5 models on `onnxruntime-gpu`) as the default text reader: faster than EasyOCR and no OpenCV conflict.
+- **R7 Engine reliability:** emotion2vec from the local cache, Ollama warm-up, a health line per engine in the UI that says why something is off.
+- **R8 Kill-feed names by OCR.** Read killer and victim names once per row; needed for "who killed whom" titles and as a second check on own kills ([montage_maker](https://github.com/rlmsinclair/montage_maker) works this way).
+- **R9 More games on the same framework:** CS2 (feed and round timer), Fortnite (elimination banner, placement), Rocket League (goal banner and scoreboard), Apex (kill banner, squad wipe).
+- **R10 OBS integration.** Read chapter markers from Hybrid MP4 recordings and use them as high-priority moments; optional obs-websocket listener that writes a marker on a hotkey. Note: OBS replay-buffer files do not carry chapters yet (OBS issue 13567).
+
+### Later
+
+- **R11 One model for titles and vision** (`qwen3.5:9b`, 6.6 GB) instead of two, and Parakeet TDT v3 for speech (German accuracy on par with Whisper large-v3, several times faster).
+- **R12 Chat as a signal** for stream VODs: message rate and emote bursts from the Twitch chat replay ([stream-clipper](https://github.com/nirvagold/stream-clipper) uses this).
+- **R13 Learned ranking.** The app already stores feedback on clips; train a small model on it once there are a few hundred rated clips.
+- **R14 Montage export:** one video from the best kills or goals of a session, cut to the beat of a chosen track.
+- **R15 Direct upload** to TikTok, YouTube Shorts and Instagram with per-platform titles (needs the user's own accounts; stays optional).
+
+## 4. What others do, and what that means here
+
+| Tool | Approach | Takeaway |
+|---|---|---|
+| Eklipse, Insights Capture, Powder, Medal | Per-game event models or game APIs, mostly cloud or closed | Per-game HUD readers are the right direction; ClipForge does it locally |
+| [montage_maker](https://github.com/rlmsinclair/montage_maker) | OCR of the kill feed, keeps rows with the player's name | Name OCR as a second check (R8) |
+| [EZClips](https://github.com/corp14x3/EZClips) | Template matching on the CS2 kill feed | Same idea as the banner test; confirms CS2 is feasible (R9) |
+| [stream-clipper](https://github.com/nirvagold/stream-clipper) | Audio peaks plus chat activity | Chat signal (R12) |
+| openshorts, supoclip, FunClip | Transcript first, for talking-head video | Not suited to gameplay without speech; nothing to adopt for detection |
+| Roboflow Valorant kill-feed dataset | Labelled kill-feed images (CC BY 4.0) | Training data if the colour tests ever stop being enough |

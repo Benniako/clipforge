@@ -27,7 +27,6 @@ import socket
 import sys
 import tempfile
 import time
-from pathlib import Path
 
 from starlette.testclient import TestClient
 
@@ -48,15 +47,13 @@ def _guarded_connect(self, address):
 socket.socket.connect = _guarded_connect
 
 from app import feedback, store
-from app.config import get_settings
 from app.main import app
 
 store.init_db()
 feedback.init_db()
 
 from app.models import (
-    CaptionSet, CaptionWord, Clip, ClipStatus, ImportSettings, LayoutType,
-    Platform, Project, Reframe
+    Clip, ClipStatus, ImportSettings, Platform, Project
 )
 
 client = TestClient(app)
@@ -69,7 +66,7 @@ def _create_project_with_clips(project_id: str, clip_specs: list[dict]) -> Proje
         cid = spec["id"]
         start = float(spec.get("start", 0.0))
         end = float(spec.get("end", 10.0))
-        duration = max(0.0, end - start)
+        max(0.0, end - start)
         clip = Clip(
             id=cid,
             start=start,
@@ -368,7 +365,7 @@ def test_storyboard_tile_coordinate_oracle():
     tile_h = sb["tile_h"]      # 90
     total_frames = sb["total_frames"]  # 10
     interval_s = sb["interval_s"]      # 2.0
-    dur = sb["duration_s"]             # 20.0
+    sb["duration_s"]             # 20.0
     
     # Sheet total dimensions
     sheet_w = cols * tile_w    # 800

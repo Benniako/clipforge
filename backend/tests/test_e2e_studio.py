@@ -498,9 +498,9 @@ if __name__ == "__main__":
     passed = 0
     failed = 0
 
-    print(f"\n=======================================================")
-    print(f" ClipForge E2E Studio Automated Backend Test Suite")
-    print(f"=======================================================\n")
+    print("\n=======================================================")
+    print(" ClipForge E2E Studio Automated Backend Test Suite")
+    print("=======================================================\n")
 
     for fn in test_fns:
         try:
@@ -511,9 +511,9 @@ if __name__ == "__main__":
             print(f"  ✗ {fn.__name__}: {type(e).__name__}: {e}", flush=True)
             failed += 1
 
-    print(f"\n-------------------------------------------------------")
+    print("\n-------------------------------------------------------")
     print(f"Results: {passed}/{len(test_fns)} tests passed"
           + (f", {failed} failed" if failed else " (100% SUCCESS)"), flush=True)
-    print(f"-------------------------------------------------------\n")
+    print("-------------------------------------------------------\n")
 
     sys.exit(1 if failed else 0)

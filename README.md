@@ -6,9 +6,14 @@
 
 **One long video in. A batch of ranked, vertical, captioned short clips out.**
 
-Drop in a podcast, interview, webinar, or talk → ClipForge finds the best moments,
-reframes them to 9:16 with the speaker in frame, burns in animated captions, and
-ranks every clip by a transparent virality score.
+Drop in a gaming stream, podcast, interview or talk → ClipForge finds the best moments,
+reframes them to 9:16, burns in animated captions, and ranks every clip by a
+transparent score. It runs entirely on your own PC: no cloud, no API keys.
+
+For gameplay it reads the game's HUD instead of guessing from loudness: every
+**EA FC goal** off the scoreboard, every **Valorant kill, multi-kill and ace** off
+the kill banner and kill feed (works with any game language).
+See [docs/ROADMAP.md](docs/ROADMAP.md) for current capabilities, measured results and the plan.
 
 <img src="assets/sample_frame.png" width="240" alt="English clip with karaoke captions"/> &nbsp; <img src="assets/sample_frame_de.png" width="240" alt="German clip with karaoke captions"/>
 
@@ -234,10 +239,10 @@ multiple `opencv-*` packages, uninstall the duplicate GUI/contrib wheels so
 
 The nav bar shows which are live in your environment.
 
-LAION-CLAP zero-shot audio prompts are still supported when `laion_clap` is
-installed manually, but it is not part of the default extras bundle right now:
-current `laion-clap` releases pin old NumPy and conflict with the modern
-PaddleOCR / WhisperX / SCRFD stack.
+LAION-CLAP zero-shot audio prompts ("cheering", "explosion") are installed by
+setup with `pip install --no-deps laion-clap==1.1.7`. The `--no-deps` matters:
+the package's metadata pins old NumPy, but the code runs on NumPy 2 and its real
+dependencies are already part of the extras bundle.
 
 ## Language support
 

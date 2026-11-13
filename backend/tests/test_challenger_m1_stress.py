@@ -35,7 +35,6 @@ Tests:
 """
 from __future__ import annotations
 
-import math
 import os
 import socket
 import struct
@@ -70,8 +69,7 @@ store.init_db()
 feedback.init_db()
 
 from app.models import (
-    CaptionSet, CaptionWord, Clip, ClipStatus, DetectedEvent,
-    ImportSettings, LayoutType, Platform, Project, Rect, Reframe,
+    Clip, LayoutType, Project, Rect, Reframe,
     Transcript, Word
 )
 from app.services import audio_waveform, suggestions_copilot
@@ -555,7 +553,6 @@ if __name__ == "__main__":
         try:
             fn()
         except Exception as e:
-            import traceback
             print(f"  ✗ {fn.__name__}: {type(e).__name__}: {e}", flush=True)
             failures.append((fn.__name__, type(e).__name__, str(e)))
             failed += 1
@@ -563,9 +560,9 @@ if __name__ == "__main__":
         print(f"  ✓ {fn.__name__}", flush=True)
         passed += 1
 
-    print(f"\n=======================================================")
+    print("\n=======================================================")
     print(f"STRESS RESULTS: {passed}/{len(fns)} passed, {failed} failed")
-    print(f"=======================================================")
+    print("=======================================================")
     if failures:
         print("\nFailures Detail:")
         for name, err_type, err_msg in failures:

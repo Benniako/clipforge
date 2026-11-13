@@ -1027,11 +1027,6 @@ export default function Upload({ health }: { health: Health | null }) {
             </div>
           )}
         </section>
-        <div className="aside-links">
-          <button className="btn ghost sm block" onClick={() => nav("/p/proj_demo/clip/c_demo_ace")}>
-            {t("up.demoEditor")}
-          </button>
-        </div>
       </aside>
       </div>
     </div>

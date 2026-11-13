@@ -373,6 +373,50 @@ def _hud_table(result, video: Path, duration: float) -> list[str]:
     return lines
 
 
+def _cmd_killfeed(args: argparse.Namespace, src: Path, info) -> int:
+    """`hud` for games with a kill feed (Valorant): list kills, deaths and multi-kills."""
+    import dataclasses
+
+    from app.providers.hud import killfeed
+
+    if args.labels_out:
+        log.warning("--labels-out is only available for scoreboard games; ignored.")
+    result = killfeed.track_killfeed(str(src), info)
+    healthy = result is not None and bool(result.healthy)
+    if args.json:
+        payload = None
+        if result is not None:
+            payload = {
+                "events": [dataclasses.asdict(e) for e in result.events],
+                "rounds": [{"index": r.index, "label": r.label, "kills": r.count,
+                            "t_first": r.t_first, "t_last": r.t_last} for r in result.rounds],
+                "samples": result.samples, "active_s": result.active_s,
+                "diagnostics": result.diagnostics,
+            }
+        print(json.dumps({"video": str(src), "game_profile": args.profile,
+                          "duration": float(info.duration), "healthy": healthy,
+                          "result": payload}, indent=2, default=str))
+        return 0 if healthy else 1
+
+    def clock(t: float) -> str:
+        return f"{int(t // 60)}:{int(t % 60):02d}"
+
+    lines = [f"{src.name} - {clock(float(info.duration))} - profile {args.profile}"]
+    if result is None:
+        lines.append("no result: the video could not be scanned")
+    else:
+        lines.append(f"{len(result.kills)} kill(s), {len(result.deaths)} death(s), "
+                     f"kill feed on screen for {result.active_s:.0f} s"
+                     + ("" if healthy else "  [NOT read reliably]"))
+        for r in result.rounds:
+            times = ", ".join(clock(k.t) for k in r.kills)
+            lines.append(f"  round {r.index:2d}  {r.label:<12s} {r.count} kill(s) at {times}")
+        if result.deaths:
+            lines.append("  deaths: " + ", ".join(clock(d.t) for d in result.deaths))
+    _print_text("\n".join(lines))
+    return 0 if healthy else 1
+
+
 def cmd_hud(args: argparse.Namespace) -> int:
     """Track a video's scoreboard and print its matches and goals.
 
@@ -403,6 +447,11 @@ def cmd_hud(args: argparse.Namespace) -> int:
     except Exception as e:
         log.error("Could not read %s: %s", src, e)
         return 2
+
+    from app.providers.hud import killfeed
+
+    if killfeed.supports(args.profile):
+        return _cmd_killfeed(args, src, info)
 
     result = track_scoreboard(str(src), info, ImportSettings(game_profile=args.profile),
                               refine_limit=args.refine)

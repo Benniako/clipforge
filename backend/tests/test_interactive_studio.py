@@ -208,7 +208,7 @@ def test_waveform_service_and_endpoint():
 
 def test_waveform_fallback_without_audio_file():
     """Verify clean deterministic fallback synthesis when audio16k.wav is missing."""
-    settings = get_settings()
+    get_settings()
     p_id = "proj_wf_fallback"
     project = Project(
         id=p_id,

@@ -7,7 +7,9 @@
 See :mod:`.detect` for how it works.
 """
 from .detect import HudEvent, HudResult, MatchInfo, goal_importance, track_scoreboard
+from .killfeed import KillEvent, KillfeedResult, MultiKill, track_killfeed
 from .layouts import LAYOUTS, Cell, HudLayout, layouts_for
 
 __all__ = ["HudEvent", "HudResult", "MatchInfo", "goal_importance", "track_scoreboard",
+           "KillEvent", "KillfeedResult", "MultiKill", "track_killfeed",
            "LAYOUTS", "Cell", "HudLayout", "layouts_for"]

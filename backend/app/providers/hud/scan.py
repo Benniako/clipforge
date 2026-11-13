@@ -48,7 +48,9 @@ def _ffmpeg_bin() -> str:
 
 def build_command(exe: str, src: str, region: tuple[int, int, int, int], *,
                   keyframes: bool, fps: float | None, start: float | None,
-                  duration: float | None, hwaccel: bool, passthrough: tuple[str, str]) -> list[str]:
+                  duration: float | None, hwaccel: bool, passthrough: tuple[str, str],
+                  pix_fmt: str = "gray",
+                  stack: tuple[int, int, int, int] | None = None) -> list[str]:
     x, y, w, h = region
     cmd = [exe, "-hide_banner", "-nostdin", "-nostats", "-loglevel", "info"]
     if keyframes:
@@ -56,28 +58,61 @@ def build_command(exe: str, src: str, region: tuple[int, int, int, int], *,
         # them on MP4/MKV); -skip_frame covers containers that ignore it.
         cmd += ["-discard:v", "nokey", "-skip_frame", "nokey"]
     elif hwaccel:
-        cmd += ["-hwaccel", "cuda"]
+        cmd += _hw_args(src)
     if start is not None:
         cmd += ["-ss", f"{max(float(start), 0.0):.3f}"]
     cmd += ["-i", str(src)]
     if duration is not None:
         cmd += ["-t", f"{max(float(duration), 0.05):.3f}"]
-    vf = [f"crop={w}:{h}:{x}:{y}:exact=1"]
+    vf = []
     if fps and not keyframes:
         vf.append(f"fps={float(fps):g}")
+    if stack is None:
+        vf.insert(0, f"crop={w}:{h}:{x}:{y}:exact=1")
+    else:
+        # A second region from the same decode, padded to the first one's
+        # width and stacked under it: one pass over the video reads both.
+        extra = _stack_list(stack)
+        n = len(extra) + 1
+        taps = "".join(f"[s{i}]" for i in range(n))
+        parts = [f"split={n}{taps}", f"[s0]crop={w}:{h}:{x}:{y}:exact=1[c0]"]
+        for i, (sx, sy, sw, sh) in enumerate(extra, 1):
+            parts.append(f"[s{i}]crop={sw}:{sh}:{sx}:{sy}:exact=1,pad={w}:{sh}:0:0[c{i}]")
+        vf.append(";".join(parts) + ";" + "".join(f"[c{i}]" for i in range(n))
+                  + f"vstack=inputs={n}")
     vf.append("showinfo")
     cmd += ["-an", "-sn", "-dn", "-vf", ",".join(vf), *passthrough,
-            "-f", "rawvideo", "-pix_fmt", "gray", "pipe:1"]
+            "-f", "rawvideo", "-pix_fmt", pix_fmt, "pipe:1"]
     return cmd
+
+
+def _stack_list(stack) -> list[tuple[int, int, int, int]]:
+    """``stack`` as a list of regions (it may be one region or several)."""
+    if not stack:
+        return []
+    return [tuple(stack)] if isinstance(stack[0], int) else [tuple(s) for s in stack]
+
+
+def _hw_args(src: str) -> list[str]:
+    """GPU decode flags; names the NVDEC decoder when the codec is known."""
+    try:
+        from ...media import ffmpeg as _ff
+
+        return _ff.hw_decode_args(src) or ["-hwaccel", "cuda"]
+    except Exception:
+        return ["-hwaccel", "cuda"]
 
 
 def iter_frames(src, region: tuple[int, int, int, int], *, keyframes: bool = True,
                 fps: float | None = None, start: float | None = None,
                 duration: float | None = None, hwaccel: bool = False,
-                idle_timeout: float = 120.0, ffmpeg_bin: str | None = None
+                idle_timeout: float = 120.0, ffmpeg_bin: str | None = None,
+                pix_fmt: str = "gray",
+                stack: tuple[int, int, int, int] | None = None
                 ) -> Iterator[tuple[float, object]]:
     """Yield ``(t, gray)`` for the ``(x, y, w, h)`` pixel region of ``src``.
 
+    ``pix_fmt="bgr24"`` yields colour frames of shape ``(h, w, 3)`` instead.
     ``t`` is on the source timeline (seconds from the start of the file).
     Raises :class:`HudScanError` when ffmpeg fails before producing a frame.
     """
@@ -87,10 +122,13 @@ def iter_frames(src, region: tuple[int, int, int, int], *, keyframes: bool = Tru
     # frame rate and would duplicate every keyframe a few hundred times.
     for attempt, passthrough in enumerate((("-fps_mode", "passthrough"), ("-vsync", "0"))):
         cmd = build_command(exe, str(src), region, keyframes=keyframes, fps=fps, start=start,
-                            duration=duration, hwaccel=hwaccel, passthrough=passthrough)
+                            duration=duration, hwaccel=hwaccel, passthrough=passthrough,
+                            pix_fmt=pix_fmt, stack=stack)
         produced = 0
+        out_region = (0, 0, region[2], region[3] + sum(s[3] for s in _stack_list(stack)))
         try:
-            for item in _run(cmd, region, float(start or 0.0), idle_timeout):
+            for item in _run(cmd, out_region, float(start or 0.0), idle_timeout,
+                             channels=3 if pix_fmt == "bgr24" else 1):
                 produced += 1
                 yield item
             return
@@ -102,11 +140,12 @@ def iter_frames(src, region: tuple[int, int, int, int], *, keyframes: bool = Tru
 
 
 def _run(cmd: list[str], region: tuple[int, int, int, int], base_t: float,
-         idle_timeout: float) -> Iterator[tuple[float, object]]:
+         idle_timeout: float, channels: int = 1) -> Iterator[tuple[float, object]]:
     import numpy as np
 
     _x, _y, w, h = region
-    frame_bytes = w * h
+    frame_bytes = w * h * channels
+    shape = (h, w) if channels == 1 else (h, w, channels)
     try:
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                 creationflags=_NO_WINDOW)
@@ -157,7 +196,7 @@ def _run(cmd: list[str], region: tuple[int, int, int, int], base_t: float,
                 raise HudScanError("ffmpeg produced a frame without a timestamp")
             t = base_t + pts.popleft()
             produced += 1
-            yield t, np.frombuffer(buf, np.uint8).reshape(h, w)
+            yield t, np.frombuffer(buf, np.uint8).reshape(shape)
     finally:
         state["done"] = True
         if proc.poll() is None:

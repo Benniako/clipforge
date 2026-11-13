@@ -49,6 +49,11 @@ while IFS= read -r pkg; do
   "$VPY" -m pip install "$pkg" || echo "  [..] skipped $pkg (install failed/conflict)"
 done < backend/requirements-extras.txt
 
+# LAION-CLAP: metadata pins NumPy <2, the code runs on NumPy 2 and its real
+# dependencies are installed above, so it goes in alone without dependencies.
+"$VPY" -m pip install --no-deps 'laion-clap==1.1.7' \
+  || echo "  [..] CLAP skipped - PANNs still detects audio events."
+
 # Optional packages such as ultralytics may install opencv-python. OpenCV's
 # Python wheels all share the cv2 namespace, so normalize back to the single
 # headless OpenCV 5 wheel that ClipForge expects.

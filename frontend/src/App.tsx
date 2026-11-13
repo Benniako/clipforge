@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link, Navigate, Route, Routes } from "react-router-dom";
+import { Link, Route, Routes } from "react-router-dom";
 import { api } from "./lib/api";
 import type { Health } from "./lib/types";
 import { capabilityReadiness, capabilitySummary } from "./lib/capabilities";
@@ -52,9 +52,6 @@ export default function App() {
           <span className="mark" aria-hidden="true" />
           <span>ClipForge</span>
         </Link>
-        <Link to="/p/proj_demo" className="nav-link studio-nav-demo-btn" title={t("nav.demoTitle")}>
-          {t("nav.demo")}
-        </Link>
         <button className="nav-link cues-btn" onClick={() => setShowCues(true)} title={t("nav.cuesTitle")}>
           {t("nav.cues")}
         </button>
@@ -71,7 +68,6 @@ export default function App() {
       {showDiag && <DiagnosticsPanel onClose={() => setShowDiag(false)} />}
       <Routes>
         <Route path="/" element={<Upload health={health} />} />
-        <Route path="/demo" element={<Navigate to="/p/proj_demo/clip/c_demo_ace" replace />} />
         <Route path="/p/:projectId" element={<ProjectView />} />
         <Route path="/p/:projectId/clip/:clipId" element={<ClipEditor />} />
       </Routes>

@@ -95,6 +95,11 @@ REM panns-inference assumes wget exists; on Windows we download its checkpoint
 REM with PowerShell so audio-event detection is actually usable.
 powershell -ExecutionPolicy Bypass -NoProfile -File "%~dp0scripts\setup_panns.ps1" -PythonExe "%VPY%" || echo [..] PANNs checkpoint skipped - CLAP/other detectors still run.
 
+REM --- 4e3. LAION-CLAP zero-shot audio prompts ---------------------------
+REM laion-clap's metadata still pins NumPy <2, but the code runs on NumPy 2 and
+REM every real dependency is already installed above, so install it alone.
+"%VPY%" -m pip install --no-deps "laion-clap==1.1.7" || echo [..] CLAP skipped - PANNs still detects audio events.
+
 REM --- 4f. LR-ASD active-speaker checkout -------------------------------
 REM Optional: clones the local active-speaker model adapter and records its path.
 powershell -ExecutionPolicy Bypass -NoProfile -File "%~dp0scripts\setup_active_speaker.ps1" -PythonExe "%VPY%"

@@ -524,6 +524,69 @@ def _hud_goal_clips(hud, info: MediaInfo, settings: ImportSettings, *,
     return out
 
 
+_KILL_TITLES = {1: "Kill", 2: "Double kill", 3: "Triple kill", 4: "Quadra kill", 5: "Ace"}
+_KILL_SCORES = {1: 76, 2: 86, 3: 91, 4: 95, 5: 98}
+
+
+def _track_killfeed(src_path: str, info: MediaInfo, settings: ImportSettings,
+                    warnings_out: list | None = None):
+    """Kill-banner / kill-feed result for games that have one (Valorant), else None."""
+    from .hud import killfeed
+
+    if not settings.use_ocr or not getattr(info, "has_video", False):
+        return None
+    if os.environ.get("CLIPFORGE_HUD", "").strip().lower() in _HUD_OFF_VALUES:
+        return None
+    if not killfeed.supports(settings.game_profile):
+        return None
+    try:
+        result = killfeed.track_killfeed(src_path, info)
+    except Exception as e:
+        log.warning("kill-feed tracking failed: %s", e)
+        result = None
+    if result is None or not result.healthy:
+        _add_warning(warnings_out,
+                     "The kill feed could not be read in this footage, so kills fall "
+                     "back to game sounds and on-screen keywords.")
+        return None
+    return result
+
+
+def _killfeed_clips(kills, info: MediaInfo, settings: ImportSettings, *,
+                    lead: float, tail: float) -> list["GameplayClip"]:
+    """One clip per round in which the streamer got kills, multi-kills first."""
+    out: list[GameplayClip] = []
+    for rnd in kills.rounds:
+        n = min(rnd.count, 5)
+        t_last = float(rnd.t_last)
+        end = min(info.duration, t_last + tail)
+        # Start before the first kill when the whole streak fits in one clip.
+        start = max(0.0, min(float(rnd.t_first) - 3.0, t_last - lead))
+        if end - start > settings.max_len:
+            start = max(0.0, end - settings.max_len)
+        if end - start < settings.min_len:
+            start = max(0.0, end - settings.min_len)
+        confidence = min(float(k.confidence) for k in rnd.kills)
+        quick = rnd.count >= 2 and rnd.span <= 6.0
+        score = min(99, _KILL_SCORES[n] + (2 if quick else 0))
+        factors = [ScoreFactor(
+            label=f"Kill banner: {rnd.count} kill{'s' if rnd.count != 1 else ''} in one round",
+            weight=round(confidence * 20, 1),
+            detail="Read off the on-screen kill banner and kill feed")]
+        if quick:
+            factors.append(ScoreFactor(label=f"{rnd.count} kills in {rnd.span:.0f} s",
+                                       weight=2.0, detail="Kills in quick succession"))
+        m, s = divmod(int(rnd.t_first), 60)
+        out.append(GameplayClip(
+            start=round(start, 3), end=round(end, 3), score=score, peak_t=t_last,
+            title=f"{_KILL_TITLES[n]} — {m}:{s:02d}", cue_ts=[],
+            features={"ocr": round(confidence, 4), "hud": 1.0, "kills": float(rnd.count),
+                      "intensity": 0.0, "sustain": 0.0, "transient": 0.0, "spikes": 0.0,
+                      "cue": 0.0, "climax_t": round(t_last, 3)},
+            factors=factors))
+    return out
+
+
 def _add_goal_loudness(clips: list["GameplayClip"], times, rms, *,
                        before: float = 1.0, after: float = 6.0) -> None:
     """Break ties between goals by how loud the moment was.
@@ -601,6 +664,20 @@ def detect_gameplay(src_path: str, info: MediaInfo, settings: ImportSettings,
         goal_lead, goal_tail = _timing_window(settings, profile)
         goal_clips = _hud_goal_clips(hud, info, settings,
                                      lead=goal_lead, tail=goal_tail)
+    # Kills read off the kill banner are on-screen proof just like scoreboard
+    # goals: they lead the result the same way.
+    kills = _track_killfeed(src_path, info, settings, warnings_out)
+    if kills is not None:
+        kill_lead, kill_tail = _timing_window(settings, profile)
+        goal_clips = goal_clips + _killfeed_clips(kills, info, settings,
+                                                  lead=kill_lead, tail=kill_tail)
+        if events_out is not None:
+            for ev in kills.events:
+                events_out.append(DetectedEvent(
+                    t=round(float(ev.t), 3), source="ocr", label=ev.kind,
+                    detail=ev.detail, confidence=round(float(ev.confidence), 3),
+                    data={"detector": "killfeed", "round": ev.round_index,
+                          "streak": ev.streak, "sources": list(ev.sources)}))
 
     # On-screen text markers (VICTORY / ELIMINATED / GOAL / kill-feed).
     # For footage with audio we run OCR after finding likely moments, so it reads

@@ -74,7 +74,6 @@ def _synthesize_waveform(clip: Clip, project: Project, num_bins: int) -> tuple[l
     duration = max(0.1, clip.duration)
     climax_rel = float(clip.features.get("climax_t", duration * 0.65))
     climax_rel = max(0.0, min(duration, climax_rel))
-    climax_ratio = climax_rel / duration
 
     samples: list[float] = []
     dbfs_list: list[float] = []
