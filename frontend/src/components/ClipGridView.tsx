@@ -7,6 +7,7 @@ import { mediaTimeUrl } from "../lib/media";
 import { useT } from "../lib/i18n";
 import ClipCard from "./ClipCard";
 import CueModal from "./CueModal";
+import GoalsByMatch from "./GoalsByMatch";
 import VisualCueCalibration from "./VisualCueCalibration";
 
 interface Learning {
@@ -402,6 +403,8 @@ export default function ClipGridView({
           )}
         </div>
       </div>
+
+      <GoalsByMatch project={project} onChange={onChange} />
 
       {clips.length === 0 ? (
         <div className="empty">Keine Clips passen zu diesem Filter. Senke den Mindest-Score.</div>

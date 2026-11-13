@@ -30,6 +30,30 @@ export interface DetectedEvent {
   confidence: number;
 }
 
+/** A goal read off the scoreboard (see GET /api/projects/{id}/goals). */
+export interface Goal {
+  t: number;
+  team: "a" | "b" | null;
+  score_before: string;
+  score_after: string;
+  minute: number | null;
+  clock: string;
+  streamer: boolean | null;
+  importance: number;
+  confidence: number;
+  clip_id: string | null;
+  clip_status: string | null;
+}
+
+/** One match of a session with its goals in order. */
+export interface GoalMatch {
+  index: number;
+  start: number;
+  end: number;
+  final_score: string;
+  goals: Goal[];
+}
+
 export interface Notice {
   message: string;
   severity: "info" | "warn" | "error" | string;

@@ -751,9 +751,24 @@ class Settings:
             # p4: measured 74% faster than p5 on an RTX 5060 Ti at the same
             # output size for -cq 21 (1440p60 source -> 1080x1920).
             return ["-c:v", "h264_nvenc", "-preset", "p4", "-rc", "vbr",
-                    "-cq", "21", "-b:v", "0", "-pix_fmt", "yuv420p", "-profile:v", "high"]
+                    "-cq", "21", "-b:v", "0", "-pix_fmt", "yuv420p", "-profile:v", "high",
+                    # NVENC only makes forced keyframes seekable (IDR) when asked.
+                    *self._playback_args(), "-forced-idr", "1"]
         return ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
-                "-pix_fmt", "yuv420p", "-profile:v", "high"]
+                "-pix_fmt", "yuv420p", "-profile:v", "high", *self._playback_args()]
+
+    @staticmethod
+    def _playback_args() -> list[str]:
+        """Keep H.264 clips light enough to play and scrub smoothly.
+
+        Quality-targeted encoding of 1080x1920 at 60 fps gameplay came out at
+        20 Mbit/s with a keyframe only every 4 seconds: 95 MB for a 37-second
+        clip, slow to start and to seek in the browser. A 12 Mbit/s ceiling
+        (above what TikTok, Reels and Shorts keep after their own re-encode)
+        and a keyframe every 2 seconds fix both.
+        """
+        return ["-maxrate", "12M", "-bufsize", "24M",
+                "-force_key_frames", "expr:gte(t,n_forced*2)"]
 
     def render_workers_for(self, power_mode: str | None) -> int:
         """Per-project render fan-out."""

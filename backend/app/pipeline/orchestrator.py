@@ -166,6 +166,21 @@ def _cue_learning_events(detected: list) -> list:
             and (getattr(e, "data", None) or {}).get("detector") != "hud"]
 
 
+def _events_to_keep(detected: list, accepted: list) -> list:
+    """Events stored on the project: those behind a final clip, plus every
+    goal read off the scoreboard.
+
+    Only a handful of goals become clips, but the user picks from all of them
+    (listed per match), so none may be dropped here. Other detectors' raw
+    candidates stay internal, as before.
+    """
+    seen = {(e.source, e.label, round(float(e.t), 3)) for e in accepted}
+    extra = [e for e in detected
+             if (getattr(e, "data", None) or {}).get("detector") == "hud"
+             and (e.source, e.label, round(float(e.t), 3)) not in seen]
+    return sorted([*accepted, *extra], key=lambda e: e.t)
+
+
 def _speech_intervals(transcript, start: float, end: float
                       ) -> list[tuple[float, float]] | None:
     """Clip-relative speech spans for speech-aware reframing.
@@ -1032,7 +1047,8 @@ class Engine:
         with store.mutate(project_id) as p:
             p.clips = clips
             if kind == "gameplay":
-                p.events = gameplay_mod.accepted_events_for_clips(detected, clips)
+                p.events = _events_to_keep(
+                    detected, gameplay_mod.accepted_events_for_clips(detected, clips))
 
         return clips, ocr_labels, ocr_texts, bscope
 

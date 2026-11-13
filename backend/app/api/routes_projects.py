@@ -1079,6 +1079,49 @@ def mark_highlight(project_id: str, timestamp: float, duration: float = 30.0):
             "end": clip.end, "duration": round(clip.end - clip.start, 1)}
 
 
+@router.get("/{project_id}/goals")
+def list_goals(project_id: str) -> dict:
+    """Every goal read off the scoreboard, grouped by match, first to last."""
+    from .. import goals as goals_mod
+
+    project = store.get(project_id)
+    if not project:
+        raise HTTPException(404, "project not found")
+    matches = goals_mod.goals_by_match(project)
+    return {"matches": matches, "goals": sum(len(m["goals"]) for m in matches)}
+
+
+@router.post("/{project_id}/goals/clip")
+def clip_goal(project_id: str, t: float) -> dict:
+    """Make (and render) a clip for the goal at source time ``t``.
+
+    A goal that already has a clip returns that clip instead of a duplicate.
+    """
+    from .. import goals as goals_mod
+    from ..providers import detect_gameplay as gameplay_mod
+
+    project = store.get(project_id)
+    if not project:
+        raise HTTPException(404, "project not found")
+    if not project.source:
+        raise HTTPException(409, "project has no source video")
+    goal = goals_mod.find_goal(project, t) if t == t else None
+    if goal is None:
+        raise HTTPException(404, "no scoreboard goal at that time")
+    existing = goals_mod._clip_for(project, float(goal.t))
+    if existing is not None:
+        return {"ok": True, "clip_id": existing.id, "created": False}
+    lead, tail = gameplay_mod._timing_window(
+        project.settings, gameplay_mod.get_profile(project.settings.game_profile))
+    clip = goals_mod.clip_for_goal(project, goal, lead=lead, tail=tail)
+    with store.mutate(project_id) as p:
+        p.clips.append(clip)
+    threading.Thread(target=engine.rerender_clip, args=(project_id, clip.id),
+                     daemon=True).start()
+    return {"ok": True, "clip_id": clip.id, "created": True,
+            "start": clip.start, "end": clip.end}
+
+
 @router.patch("/{project_id}/clips/{clip_id}")
 def update_clip_bounds(project_id: str, clip_id: str,
                        start: float | None = None,

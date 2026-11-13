@@ -46,6 +46,37 @@ export default function ClipEditor() {
   const [styles, setStyles] = useState<StyleTemplate[]>([]);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<ToastMsg | null>(null);
+  // Montage: the order arranged in the sequencer (null = the project's order).
+  const [montageOrder, setMontageOrder] = useState<string[] | null>(null);
+  const [montageBusy, setMontageBusy] = useState(false);
+  const rendered = (project?.clips ?? []).filter((c) => c.status === "ready" && c.export_url);
+  const montageClipIds = (montageOrder ?? rendered.map((c) => c.id)).filter((id) =>
+    rendered.some((c) => c.id === id));
+  const latestMontage = project?.montages?.[0] ?? null;
+  const buildMontage = async () => {
+    if (!projectId || montageClipIds.length < 2 || montageBusy) return;
+    setMontageBusy(true);
+    try {
+      await api.createMontage(projectId, montageClipIds);
+      // The montage renders in the background: poll until it is done.
+      for (let i = 0; i < 400; i++) {
+        const p = await api.getProject(projectId);
+        setProject(p);
+        const m = p.montages?.[0];
+        if (!m || m.status !== "rendering") {
+          setMsg(m?.status === "ready"
+            ? { text: "Montage fertig", type: "info" }
+            : { text: `Montage fehlgeschlagen: ${m?.error ?? "unbekannter Fehler"}`, type: "error" });
+          break;
+        }
+        await new Promise((r) => setTimeout(r, 1500));
+      }
+    } catch (e: any) {
+      setMsg({ text: e?.message ?? "Montage konnte nicht erstellt werden.", type: "error" });
+    } finally {
+      setMontageBusy(false);
+    }
+  };
   const [loadErr, setLoadErr] = useState<string | null>(null);
   const [ver, setVer] = useState(0); // cache-buster for the rendered <video>
   const [previewMode, setPreviewMode] = useState<"rendered" | "original">("rendered");
@@ -727,6 +758,7 @@ export default function ClipEditor() {
                 projectId={projectId}
                 clips={project?.clips && project.clips.length > 0 ? project.clips : [clip]}
                 onSequenceChange={(reordered) => {
+                  setMontageOrder(reordered.map((r) => r.clipId));
                   setMsg({
                     text: `Montage sequence updated (${reordered.length} clips)`,
                     type: "info",
@@ -739,6 +771,28 @@ export default function ClipEditor() {
                   });
                 }}
               />
+              <div className="row" style={{ gap: 12, marginTop: 10, alignItems: "center", flexWrap: "wrap" }}>
+                <button
+                  className="btn"
+                  data-testid="montage-build-btn"
+                  disabled={montageBusy || montageClipIds.length < 2}
+                  onClick={buildMontage}
+                  title="Rendert die Clips in dieser Reihenfolge zu einem Video (harte Schnitte)"
+                >
+                  {montageBusy ? "Montage wird gebaut…" : `Montage erstellen (${montageClipIds.length} Clips)`}
+                </button>
+                {montageClipIds.length < 2 && (
+                  <span className="muted">Mindestens zwei fertig gerenderte Clips nötig.</span>
+                )}
+                {latestMontage?.status === "ready" && latestMontage.export_url && (
+                  <a className="btn ghost" href={api.downloadMontageUrl(projectId ?? "", latestMontage.id)} data-testid="montage-download">
+                    Montage herunterladen
+                  </a>
+                )}
+                {latestMontage?.status === "failed" && (
+                  <span className="notice error">Montage fehlgeschlagen: {latestMontage.error ?? "unbekannter Fehler"}</span>
+                )}
+              </div>
             </div>
           )}
           <div className="panel section" style={{ marginTop: 14 }}>

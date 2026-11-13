@@ -439,6 +439,15 @@ export const api = {
       body: JSON.stringify({ clip_ids: clipIds, title }),
     }).then((r) => json<import("./types").Montage>(r)),
 
+  listGoals: (projectId: string) =>
+    fetchWithTimeout(`/api/projects/${projectId}/goals`).then((r) =>
+      json<{ matches: import("./types").GoalMatch[]; goals: number }>(r)),
+
+  clipGoal: (projectId: string, t: number) =>
+    fetchWithTimeout(`/api/projects/${projectId}/goals/clip?t=${encodeURIComponent(t)}`, {
+      method: "POST",
+    }).then((r) => json<{ ok: boolean; clip_id: string; created: boolean }>(r)),
+
   downloadMontageUrl: (projectId: string, montageId: string) =>
     `/api/projects/${projectId}/montages/${montageId}/download`,
 

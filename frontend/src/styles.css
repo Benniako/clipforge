@@ -1042,3 +1042,14 @@ kbd { background: var(--bg-2); border: 1px solid var(--border-2); border-bottom-
     transition-duration: 0.001ms !important;
   }
 }
+
+/* Goals by match: every scoreboard goal of a session, to pick clips from. */
+.goals-by-match { padding: 16px; margin-bottom: 16px; }
+.goal-match { border-top: 1px solid var(--border); padding: 8px 0; }
+.goal-match-head { flex-wrap: wrap; }
+.goal-list { list-style: none; margin: 6px 0 0; padding: 0; }
+.goal-row { display: flex; align-items: center; gap: 12px; padding: 6px 8px; border-radius: var(--radius-sm); }
+.goal-row:hover { background: rgba(255, 255, 255, 0.04); }
+.goal-row.mine .goal-who { font-weight: 600; }
+.goal-score { font-variant-numeric: tabular-nums; font-weight: 700; min-width: 3.2em; }
+.goal-who { min-width: 5.5em; }
