@@ -36,6 +36,9 @@ jobs:
       - name: Integration tests (API + models + CLI)
         working-directory: backend
         run: python -m pytest tests/test_integration.py -v --tb=short
+      - name: Reframe tests (ball-following crop)
+        working-directory: backend
+        run: python -m pytest tests/test_ballcam.py -q
       - name: Scoreboard tracker and evaluation tests
         working-directory: backend
         run: python -m pytest tests/test_hud.py tests/test_evaluation.py tests/test_hud_integration.py tests/test_hud_killfeed.py tests/test_hud_segments.py tests/test_goals.py tests/test_hud_rounds.py -q

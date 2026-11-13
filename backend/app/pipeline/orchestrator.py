@@ -39,6 +39,7 @@ from ..providers import memory_supervisor
 from ..providers import transcribe as transcribe_mod
 from ..providers.torch_guard import TORCH_LOAD_LOCK
 from ..styles import get_style
+from . import ballcam as ballcam_mod
 from . import captionize, classify, ingest
 from . import facecam as facecam_mod
 from . import montage as montage_mod
@@ -1065,7 +1066,7 @@ class Engine:
                               i / max(len(clips), 1))
                 clip.reframe = self._gameplay_reframe(
                     src_path, clip, cam_rect, project.settings,
-                    vertical=out_h > out_w)
+                    vertical=out_h > out_w, info=info)
             else:
                 self._advance(project_id, 3, f"Tracking speaker {i+1}/{len(clips)}…",
                               i / max(len(clips), 1))
@@ -1213,15 +1214,31 @@ class Engine:
     _CENTERED_PROFILES = {"valorant", "cs2", "cs", "horror"}
 
     def _gameplay_reframe(self, src_path: str, clip: Clip, cam_rect,
-                          settings, *, vertical: bool) -> Reframe:
+                          settings, *, vertical: bool, info=None) -> Reframe:
         """Layout + crop for one gameplay clip.
 
-        With a facecam: stacked split (or PiP if forced). The gameplay pane is
-        biased toward where the motion actually is — except in first-person
-        games, where the crosshair (center) is the action.
+        With a facecam: stacked split (or PiP if forced). In football games a
+        full-bleed vertical crop follows the ball (see :mod:`.ballcam`).
+        Otherwise the gameplay pane is biased toward where the motion actually
+        is — except in first-person games, where the crosshair (center) is the
+        action.
         """
         cx = 0.5
         prof = (settings.game_profile or "generic").lower()
+        has_valid_cam = (cam_rect is not None and getattr(cam_rect, "w", 0) >= 0.08 and getattr(cam_rect, "h", 0) >= 0.09)
+        layout = LayoutType.center
+        if vertical and has_valid_cam and settings.facecam_layout != "off":
+            layout = (LayoutType.framed if settings.facecam_layout == "framed"
+                      else LayoutType.split)
+        if (vertical and layout == LayoutType.center and info is not None
+                and ballcam_mod.follows(prof)):
+            try:
+                kfs = ballcam_mod.ball_keyframes(src_path, clip.start, clip.end, info)
+            except Exception as e:
+                log.warning("ball cam failed for %s: %s", clip.id, e)
+                kfs = None
+            if kfs:
+                return Reframe(layout=LayoutType.fill, tracked=True, keyframes=kfs)
         if prof not in self._CENTERED_PROFILES:
             try:
                 c = facecam_mod.action_center(src_path, clip.start, clip.end,
@@ -1230,11 +1247,6 @@ class Engine:
                     cx = round(c, 4)
             except Exception as e:
                 log.warning("action centroid failed for %s: %s", clip.id, e)
-        has_valid_cam = (cam_rect is not None and getattr(cam_rect, "w", 0) >= 0.08 and getattr(cam_rect, "h", 0) >= 0.09)
-        layout = LayoutType.center
-        if vertical and has_valid_cam and settings.facecam_layout != "off":
-            layout = (LayoutType.framed if settings.facecam_layout == "framed"
-                      else LayoutType.split)
         return Reframe(layout=layout, tracked=False, facecam=cam_rect if has_valid_cam else None,
                        keyframes=[ReframeKeyframe(t=0.0, cx=cx)])
 
