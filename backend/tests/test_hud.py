@@ -426,7 +426,7 @@ def test_layouts_for_profiles():
     assert layouts_for("FIFA") == [EAFC_STACKED]
     assert layouts_for("EA FC") == [EAFC_STACKED]
     assert layouts_for("auto") == list(LAYOUTS.values()) == layouts_for(None)
-    assert layouts_for("valorant") == []
+    assert layouts_for("valorant") == list(LAYOUTS.values())
     assert hud.layouts_for("generic") == list(LAYOUTS.values())
 
 
@@ -853,8 +853,10 @@ def test_footage_without_a_scoreboard_is_unhealthy_not_wrong():
 
 def test_inapplicable_inputs_return_none():
     src = FakeSource(_session())
+    # Another game's profile still tries the scoreboard: one recording can
+    # hold several games.
     settings = types.SimpleNamespace(game_profile="valorant")
-    assert D.track_scoreboard("x.mp4", src.info, settings, frame_source=src, readers=(None, None)) is None
+    assert D.track_scoreboard("x.mp4", src.info, settings, frame_source=src, readers=(None, None)) is not None
     empty = types.SimpleNamespace(width=0, height=0, duration=0.0)
     assert D.track_scoreboard("x.mp4", empty, None, layout=LAY, frame_source=src) is None
     eafc = types.SimpleNamespace(game_profile="fifa")

@@ -31,6 +31,7 @@ from . import glyphs as G
 from .labeling import label_clusters
 from .layouts import HudLayout, layouts_for
 from .readers import CLOCK_CHARS, match_minute, parse_clock, pick_readers
+from .segments import cluster_spans
 from .tracker import Goal, Sample, Segment, covered, in_play_intervals, step_team, track
 
 log = logging.getLogger("clipforge.hud")
@@ -93,9 +94,30 @@ class HudResult:
     sample_interval: float
     streamer_side: str | None = None
     diagnostics: dict = field(default_factory=dict)
+    # Stretches of the recording that show this game at all (matches plus the
+    # menus between them). Empty means "the whole recording".
+    game_spans: list[tuple[float, float]] = field(default_factory=list)
 
     def is_in_play(self, t: float, *, pad: float = 2.0) -> bool:
         return covered(self.in_play, t, pad=pad)
+
+    def allows(self, t: float, *, pad: float = 2.0) -> bool:
+        """False only for moments of this game with no scoreboard on screen.
+
+        A moment outside ``game_spans`` belongs to another game in the same
+        recording; this tracker has no say about it.
+        """
+        if self.game_spans and not covered(self.game_spans, t):
+            return True
+        return self.is_in_play(t, pad=pad)
+
+    @property
+    def game_coverage(self) -> float:
+        """Share of this game's own stretches with the scoreboard on screen."""
+        total = sum(b - a for a, b in self.game_spans)
+        if total <= 0:
+            return self.coverage
+        return min(sum(b - a for a, b in self.in_play) / total, 1.0)
 
 
 @dataclass
@@ -250,6 +272,20 @@ def _track_layout(lay: HudLayout, source: FrameSource, width: int, height: int, 
 
     samples = [Sample(t=coarse.times[i], present=coarse.present[i], a=value("a", i), b=value("b", i))
                for i in range(n)]
+
+    # Another game in the same recording can pass the structure test without
+    # ever showing a readable score (Valorant's corner HUD did so for 13 of 16
+    # minutes). A span like that is not this game: its samples are taken out
+    # before anything is tracked or judged.
+    foreign = 0
+    for a, b in in_play_intervals(samples, bridge_s=BRIDGE_S):
+        idx = [i for i, s in enumerate(samples) if s.present and a <= s.t <= b]
+        if sum(1 for i in idx if samples[i].score is not None) < 0.5 * len(idx):
+            foreign += len(idx)
+            for i in idx:
+                samples[i].present = False
+                coarse.present[i] = False
+    n_present = sum(coarse.present)
     segments = track(samples, max_goal_gap_s=max_goal_gap_s)
 
     in_play = in_play_intervals(samples, bridge_s=BRIDGE_S, pad_s=interval)
@@ -409,6 +445,7 @@ def _track_layout(lay: HudLayout, source: FrameSource, width: int, height: int, 
         "mode": mode,
         "region": list(region),
         "present_samples": int(n_present),
+        "foreign_samples": int(foreign),
         "decoded_samples": int(decoded),
         "clusters": len(clusters.clusters),
         "digit_reader": getattr(digit_reader, "name", None),
@@ -421,7 +458,8 @@ def _track_layout(lay: HudLayout, source: FrameSource, width: int, height: int, 
     return HudResult(layout=lay.name, events=final, matches=matches, in_play=in_play,
                      coverage=min(in_play_s / duration, 1.0) if duration > 0 else 0.0,
                      healthy=bool(healthy), samples=n, sample_interval=float(interval),
-                     streamer_side=streamer_side, diagnostics=diagnostics)
+                     streamer_side=streamer_side, diagnostics=diagnostics,
+                     game_spans=cluster_spans(in_play, duration))
 
 
 def _coarse_time(goal: Goal, interval: float, lay: HudLayout) -> float:

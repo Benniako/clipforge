@@ -29,7 +29,7 @@ Everything runs on the local machine. No cloud API is called.
 |---|---|
 | EA FC 27, 16.6 min | 1 match, 9 of 9 goals, scoreboard coverage 83 %, tracker 13 s, whole pipeline 3 min 58 s for 6 clips |
 | Valorant, 40.7 min | 8 of 8 own kills found, 0 false kills, 1 double kill, 20 deaths; checked frame by frame |
-| Mixed session, 96.6 min (Valorant, EA FC, Fortnite in one file) | EA FC part read correctly (1 match, 6 goals), but the run is flagged unhealthy because only 30 % of the file is EA FC |
+| Mixed session, 96.6 min (Valorant, EA FC, Fortnite in one file) | Split into Valorant 2:15-17:45 and EA FC 17:29-38:08; EA FC read healthy (1 match, 6 goals); Valorant part: 0 kills, 8 deaths (no kill banner appeared; the team score stayed at 0) |
 | Tests | 247 unit tests, 179 pytest tests, 274 frontend tests, lint clean |
 
 ### How the Valorant tracker decides
@@ -48,7 +48,7 @@ No. The measurements point to these gaps, largest first:
 | Gap | Evidence | Fix |
 |---|---|---|
 | Each detector decodes the video again | Scoreboard, kill feed, OCR, scene detection and the facecam search each start their own ffmpeg. The kill-feed scan itself is now parallel (48 s for 40 min, was 182 s) | Put the remaining detectors on the same pass (rest of R1) |
-| Recordings with several games | 96.6-min session holds three games; one profile is applied to the whole file | Detect the game per segment (R2) |
+| Recordings with several games | HUD trackers now run per game stretch (R2 done); audio cues and keyword OCR still use one profile per file | Per-stretch profiles for the remaining detectors |
 | GPU is mostly idle | Average GPU load 20 % over a full run | Follows from R1; batch OCR and VLM frames |
 | Source is copied into the data folder | 3.9 GB copy, 28 s, doubles disk use | Reference or hard-link local sources (R5) |
 | Football framing | Fixed centre crop; the ball is often outside the 9:16 window | Ball-follow crop (R4) |
@@ -60,7 +60,7 @@ No. The measurements point to these gaps, largest first:
 ### Next (highest value, each about a day or less)
 
 - **R1 Fast dense scan: done (2026-11-13).** The Valorant scan of the 40.7-min recording went from 182 s to 48 s with identical kills. `hud/scan.map_frames` cuts the video into chunks read by one GPU decoder plus CPU decoders at once (the GPU alone tops out at 26x realtime; with two CPU workers it is 43x), frames stay on the GPU until after frame dropping, and CPU decoders skip non-reference frames. Still open under R1: OCR, scene detection and the facecam search each decode on their own; moving them onto the same pass is the remaining part.
-- **R2 Game segmentation.** Sample one frame per 20 s, test each game's HUD anchor (EA FC scoreboard, Valorant top bar, ...), split the file into game segments and run the matching tracker on each. Fixes the mixed-session case and removes the need to rename files.
+- **R2 Game segmentation: done (2026-11-13).** `hud/segments.py` finds the Valorant stretches of a recording by the top bar (green team band left, red right; a 5 s keyframe pass for 96 min), and the scoreboard tracker drops stretches whose score never reads. Both trackers now run on every gameplay recording whatever the profile, each only on its own stretches, and the EA FC "only during a match" gate no longer mutes other games. On the 96.6-min session: Valorant 2:15-17:45, EA FC 17:29-38:08, scoreboard healthy with 6 of 6 goals (was flagged unhealthy). Still open: audio cues, keyword OCR and scoring weights use one profile for the whole file, and Fortnite has no tracker of its own.
 - **R3 More Valorant events.** Spike plant and defuse (HUD icon and timer), round win or loss from the top-bar score, clutch (last one alive and round won), headshot icon in the feed row. Scores to feed: ace > clutch > quadra > triple.
 - **R4 Ball-follow framing for EA FC.** YOLO ball and player detection at 5 fps, smoothed crop path; fall back to a blurred-background 16:9 layout for wide plays. Building blocks exist ([Football-PitchVision](https://github.com/DesusLove/Football-PitchVision), [MatchVision](https://github.com/BlazeWild/MatchVision-AI-Sports-Video-Analytics-Tracking-Pipeline)), none of them does the vertical crop.
 

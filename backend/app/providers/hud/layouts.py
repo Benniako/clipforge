@@ -131,13 +131,11 @@ def normalize_profile(profile: str | None) -> str:
 def layouts_for(profile: str | None) -> list[HudLayout]:
     """Layouts worth trying for a game profile.
 
-    A named profile maps to its own layout. ``auto`` / ``generic`` try every
-    known layout: scanning is cheap, and a layout that does not match the
-    footage simply never passes the structure test.
+    A named profile with a layout maps to that layout. Every other profile
+    tries all known layouts: one recording can hold several games, scanning is
+    cheap, and a layout that does not match the footage never reads a score.
     """
     name = normalize_profile(profile)
     if name in LAYOUTS:
         return [LAYOUTS[name]]
-    if name in {"auto", "generic"}:
-        return list(LAYOUTS.values())
-    return []
+    return list(LAYOUTS.values())

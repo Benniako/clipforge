@@ -565,13 +565,15 @@ def test_track_hud_skips_the_scan_when_it_cannot_apply(monkeypatch):
     warnings: list = []
     assert DG._track_hud("m.mp4", _info(), _settings(use_ocr=False), warnings) is None
     assert DG._track_hud("m.mp4", _info(has_video=False), _settings(), warnings) is None
-    # A game without a scoreboard layout.
-    assert DG._track_hud("m.mp4", _info(), _settings(game_profile="valorant"), warnings) is None
-    assert DG._track_hud("m.mp4", _info(), _settings(game_profile="horror"), warnings) is None
+    assert calls == []
+    # Another game's profile still looks for a scoreboard (a recording can hold
+    # several games), and a clean read with goals is used.
+    assert DG._track_hud("m.mp4", _info(), _settings(game_profile="valorant"), warnings) is not None
+    assert len(calls) == 1
     for value in ("0", "false", "OFF", "No", " off "):
         monkeypatch.setenv("CLIPFORGE_HUD", value)
         assert DG._track_hud("m.mp4", _info(), _settings(), warnings) is None, value
-    assert calls == []
+    assert len(calls) == 1
     assert warnings == []
 
     # Anything else leaves it on; "auto" tries every known layout.
@@ -579,7 +581,7 @@ def test_track_hud_skips_the_scan_when_it_cannot_apply(monkeypatch):
     assert DG._track_hud("m.mp4", _info(), _settings(), warnings) is not None
     monkeypatch.delenv("CLIPFORGE_HUD")
     assert DG._track_hud("m.mp4", _info(), _settings(game_profile="auto"), warnings) is not None
-    assert len(calls) == 2
+    assert len(calls) == 3
 
 
 def test_track_hud_unhealthy_result_warns_only_for_a_named_scoreboard_game(monkeypatch):

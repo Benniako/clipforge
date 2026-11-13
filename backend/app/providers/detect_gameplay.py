@@ -451,7 +451,7 @@ def _ocr_events_beside_hud(events: list, hud, gate: bool) -> list:
     out = [e for e in events
            if str(getattr(e, "label", "") or "").lower() not in _HUD_SUPERSEDED_LABELS]
     if gate:
-        out = [e for e in out if hud.is_in_play(float(e.t))]
+        out = [e for e in out if hud.allows(float(e.t))]
     return out
 
 
@@ -537,17 +537,29 @@ def _track_killfeed(src_path: str, info: MediaInfo, settings: ImportSettings,
         return None
     if os.environ.get("CLIPFORGE_HUD", "").strip().lower() in _HUD_OFF_VALUES:
         return None
-    if not killfeed.supports(settings.game_profile):
+    from .hud import segments
+
+    # A recording can hold several games: look for Valorant whatever the
+    # profile says, and read the kill feed only where it is on screen.
+    named_game = killfeed.supports(settings.game_profile)
+    spans = segments.valorant_spans(src_path, info)
+    if not spans and not named_game:
         return None
     try:
-        result = killfeed.track_killfeed(src_path, info)
+        if spans:
+            result = segments.track_killfeed_spans(src_path, info, spans)
+        else:
+            # The user said it is Valorant but the top bar was not found
+            # (a changed HUD, a cropped capture): read the whole file.
+            result = killfeed.track_killfeed(src_path, info)
     except Exception as e:
         log.warning("kill-feed tracking failed: %s", e)
         result = None
     if result is None or not result.healthy:
-        _add_warning(warnings_out,
-                     "The kill feed could not be read in this footage, so kills fall "
-                     "back to game sounds and on-screen keywords.")
+        if named_game:
+            _add_warning(warnings_out,
+                         "The kill feed could not be read in this footage, so kills fall "
+                         "back to game sounds and on-screen keywords.")
         return None
     return result
 
@@ -658,7 +670,9 @@ def detect_gameplay(src_path: str, info: MediaInfo, settings: ImportSettings,
     hud = _track_hud(src_path, info, settings, warnings_out)
     # gate: the scoreboard covers enough of the footage that its absence means
     # "not in a match" — menus, lobbies, replays between games.
-    gate = hud is not None and hud.coverage >= HUD_GATE_MIN_COVERAGE
+    # In a recording with several games both are judged on this game's own
+    # stretches; moments of the other games pass the gate untouched.
+    gate = hud is not None and hud.game_coverage >= HUD_GATE_MIN_COVERAGE
     goal_clips: list[GameplayClip] = []
     if hud is not None:
         goal_lead, goal_tail = _timing_window(settings, profile)
@@ -728,9 +742,9 @@ def detect_gameplay(src_path: str, info: MediaInfo, settings: ImportSettings,
                                                 warnings_out=warnings_out)
 
     if gate:
-        cue_events = [e for e in cue_events if hud.is_in_play(float(e.t))]
+        cue_events = [e for e in cue_events if hud.allows(float(e.t))]
         audio_window_events = [e for e in audio_window_events
-                               if hud.is_in_play(float(e.t))]
+                               if hud.allows(float(e.t))]
 
     if defer_ocr:
         focus_times = [float(e.t) for e in cue_events]
@@ -740,7 +754,7 @@ def detect_gameplay(src_path: str, info: MediaInfo, settings: ImportSettings,
                 peak_idxs, _thr, _floor = _pick_peaks(
                     times, rms, settings=settings, profile=profile)
                 focus_times += [float(times[i]) for i in peak_idxs
-                                if not gate or hud.is_in_play(float(times[i]))]
+                                if not gate or hud.allows(float(times[i]))]
             except Exception as e:
                 log.warning("ocr focus peaks failed: %s", e)
         ocr_events = _ocr_events_beside_hud(
@@ -786,11 +800,11 @@ def detect_gameplay(src_path: str, info: MediaInfo, settings: ImportSettings,
     # all (no goals, and every loud moment outside a match): an empty result
     # fails the whole project, so then the gate stays open.
     gate_peaks = gate and (bool(goal_clips)
-                           or any(hud.is_in_play(float(times[i])) for i in peaks))
+                           or any(hud.allows(float(times[i])) for i in peaks))
     clips: list[GameplayClip] = []
     for idx in peaks:
         pt = float(times[idx])
-        if gate_peaks and not hud.is_in_play(pt):
+        if gate_peaks and not hud.allows(pt):
             continue
         if menu_times and any(abs(pt - mt) <= MENU_CONTEXT_WINDOW * 2.0 for mt in menu_times):
             continue
