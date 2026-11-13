@@ -242,3 +242,60 @@ def test_killfeed_clips_score_multi_kills_higher():
     for c in clips:
         assert settings.min_len <= c.end - c.start <= settings.max_len
     assert clips[0].start <= 100.0 and clips[0].end >= 104.0
+
+
+# --- parallel scan ----------------------------------------------------------
+
+def test_plan_workers_mixes_gpu_and_cpu_decoders():
+    from app.providers.hud import scan
+    assert scan.plan_workers(True, cpus=12) == ["gpu", "cpu", "cpu"]
+    assert scan.plan_workers(True, cpus=4) == ["gpu"]
+    assert scan.plan_workers(False, cpus=12) == ["cpu", "cpu", "cpu"]
+    assert scan.plan_workers(False, cpus=2) == ["cpu"]
+
+
+def test_map_frames_returns_every_sample_once_in_order(monkeypatch):
+    from app.providers.hud import scan
+    calls = []
+
+    def fake_iter(src, region, *, start, duration, fps, hwaccel, skip_noref, **kw):
+        calls.append((start, duration, hwaccel, skip_noref))
+        if hwaccel and start == 20.0:
+            raise scan.HudScanError("gpu said no")
+        n = int(round(duration * fps))
+        for i in range(n + 1):                     # one frame too many at the chunk end
+            yield start + i / fps, start + i / fps
+
+    monkeypatch.setattr(scan, "iter_frames", fake_iter)
+    out = scan.map_frames("x.mp4", (0, 0, 2, 2), lambda f: f * 10, fps=2.0, start=0.0,
+                          duration=45.0, chunk_s=10.0, workers=["gpu", "cpu"])
+    assert [t for t, _ in out] == [i / 2 for i in range(90)]
+    assert all(v == t * 10 for t, v in out)
+    assert sorted({c[0] for c in calls}) == [0.0, 10.0, 20.0, 30.0, 40.0]
+    assert (20.0, 10.0, False, True) in calls       # the failed GPU chunk was re-read in software
+
+
+def test_map_frames_raises_when_nothing_can_be_read(monkeypatch):
+    import pytest
+    from app.providers.hud import scan
+
+    def broken(*a, **kw):
+        raise scan.HudScanError("no video")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(scan, "iter_frames", broken)
+    with pytest.raises(scan.HudScanError):
+        scan.map_frames("x.mp4", (0, 0, 2, 2), lambda f: f, fps=2.0, duration=30.0, workers=["cpu"])
+
+
+def test_gpu_scan_keeps_frames_on_the_gpu_until_after_fps(monkeypatch):
+    from app.providers.hud import scan
+    monkeypatch.setattr(scan, "_hw_args", lambda src: ["-hwaccel", "cuda", "-c:v", "h264_cuvid"])
+    cmd = scan.build_command("ffmpeg", "x.mp4", (0, 0, 4, 4), keyframes=False, fps=2.0, start=None,
+                             duration=None, hwaccel=True, passthrough=("-fps_mode", "passthrough"))
+    assert "-hwaccel_output_format" in cmd
+    assert cmd[cmd.index("-vf") + 1].startswith("fps=2,hwdownload,format=nv12,crop=")
+    soft = scan.build_command("ffmpeg", "x.mp4", (0, 0, 4, 4), keyframes=False, fps=2.0, start=None,
+                              duration=None, hwaccel=False, passthrough=("-fps_mode", "passthrough"),
+                              skip_noref=True)
+    assert soft[soft.index("-skip_frame") + 1] == "noref" and "hwdownload" not in " ".join(soft)

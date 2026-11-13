@@ -530,15 +530,6 @@ def group_rounds(events: list[KillEvent], *, gap_s: float = ROUND_GAP_S,
     return rounds
 
 
-def _default_source(src_path: str) -> FrameSource:
-    from . import scan
-
-    def source(region, **kw):
-        return scan.iter_frames(src_path, region, **kw)
-
-    return source
-
-
 def _has_nvidia() -> bool:
     try:
         from ...config import get_settings
@@ -570,41 +561,61 @@ def track_killfeed(src_path: str, info, *, frame_source: FrameSource | None = No
     region = feed_region(width, height)
     row_h = ROW_H * height
     edge_x = region[2] - int(round(EDGE_MARGIN * height))
-    source = frame_source or _default_source(str(src_path))
     tracker = FeedTracker(interval=1.0 / fps)
     samples = with_rows = own_rows = 0
     banner = banner_region(width, height)
     banner_runs: list[list[float]] = []      # [first_t, last_t, best confidence]
     plate = plate_region(width, height)
     plate_times: list[float] = []
+
+    def analyse(stacked):
+        """What one sample shows: (feed rows, banner confidence, plate on)."""
+        frame = stacked[:region[3]]
+        y_b = region[3]
+        y_p = y_b + banner[3]
+        conf = banner_present(stacked[y_b:y_p, :banner[2]], height)
+        plate_on = plate_present(stacked[y_p:y_p + plate[3], :plate[2]])
+        # Most samples show no feed at all: a quarter-size colour test
+        # skips them before the full-resolution read.
+        small = _masks(frame[::4, ::4])
+        busy = int((small[0] | small[1]).sum()) >= 0.35 * row_h * row_h / 16.0
+        return (read_rows(frame, row_h, edge_x) if busy else []), conf, plate_on
+
+    # Reading a sample needs no history, so the video is decoded in parallel
+    # chunks; only the tracking below has to see the samples in order.
+    readings: list[tuple[float, tuple]] = []
     try:
-        for t, stacked in source(region, keyframes=False, fps=fps, start=start, duration=duration,
-                                 hwaccel=_has_nvidia(), pix_fmt="bgr24", stack=[banner, plate]):
-            frame = stacked[:region[3]]
-            y_b = region[3]
-            y_p = y_b + banner[3]
-            conf = banner_present(stacked[y_b:y_p, :banner[2]], height)
-            if plate_present(stacked[y_p:y_p + plate[3], :plate[2]]):
-                plate_times.append(float(t))
-            if conf > 0.0:
-                if banner_runs and float(t) - banner_runs[-1][1] <= 1.5 / fps + 0.05:
-                    banner_runs[-1][1] = float(t)
-                    banner_runs[-1][2] = max(banner_runs[-1][2], conf)
-                else:
-                    banner_runs.append([float(t), float(t), conf])
-            # Most samples show no feed at all: a quarter-size colour test
-            # skips them before the full-resolution read.
-            small = _masks(frame[::4, ::4])
-            busy = int((small[0] | small[1]).sum()) >= 0.35 * row_h * row_h / 16.0
-            rows = read_rows(frame, row_h, edge_x) if busy else []
-            samples += 1
-            with_rows += bool(rows)
-            own_rows += sum(1 for r in rows if r.own)
-            tracker.push(float(t), rows)
+        if frame_source is not None:
+            for t, stacked in frame_source(region, keyframes=False, fps=fps, start=start,
+                                           duration=duration, hwaccel=_has_nvidia(),
+                                           pix_fmt="bgr24", stack=[banner, plate]):
+                readings.append((float(t), analyse(stacked)))
+        else:
+            from . import scan
+
+            t0 = float(start or 0.0)
+            length = float(duration) if duration is not None else \
+                max(float(getattr(info, "duration", 0.0) or 0.0) - t0, 0.0)
+            readings = scan.map_frames(str(src_path), region, analyse, fps=fps, start=t0,
+                                       duration=length, hwaccel=_has_nvidia(),
+                                       pix_fmt="bgr24", stack=[banner, plate])
     except Exception as e:
-        log.warning("killfeed: scan failed after %d samples: %s", samples, e)
-        if samples == 0:
+        log.warning("killfeed: scan failed after %d samples: %s", len(readings), e)
+        if not readings:
             return None
+    for t, (rows, conf, plate_on) in readings:
+        if plate_on:
+            plate_times.append(float(t))
+        if conf > 0.0:
+            if banner_runs and float(t) - banner_runs[-1][1] <= 1.5 / fps + 0.05:
+                banner_runs[-1][1] = float(t)
+                banner_runs[-1][2] = max(banner_runs[-1][2], conf)
+            else:
+                banner_runs.append([float(t), float(t), conf])
+        samples += 1
+        with_rows += bool(rows)
+        own_rows += sum(1 for r in rows if r.own)
+        tracker.push(float(t), rows)
     starts = round_starts(plate_times)
     events = drop_spectated(
         merge_banner_kills(tracker.finish(), banner_runs, interval=1.0 / fps), starts)

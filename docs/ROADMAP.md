@@ -47,7 +47,7 @@ No. The measurements point to these gaps, largest first:
 
 | Gap | Evidence | Fix |
 |---|---|---|
-| Each detector decodes the video again | Scoreboard, kill feed, OCR, scene detection and the facecam search each start their own ffmpeg; the Valorant scan alone takes ~170 s for 40 min because 1440p60 decoding is the limit (about 22x realtime) | One shared decode pass that hands cropped regions to every detector (R1) |
+| Each detector decodes the video again | Scoreboard, kill feed, OCR, scene detection and the facecam search each start their own ffmpeg. The kill-feed scan itself is now parallel (48 s for 40 min, was 182 s) | Put the remaining detectors on the same pass (rest of R1) |
 | Recordings with several games | 96.6-min session holds three games; one profile is applied to the whole file | Detect the game per segment (R2) |
 | GPU is mostly idle | Average GPU load 20 % over a full run | Follows from R1; batch OCR and VLM frames |
 | Source is copied into the data folder | 3.9 GB copy, 28 s, doubles disk use | Reference or hard-link local sources (R5) |
@@ -59,7 +59,7 @@ No. The measurements point to these gaps, largest first:
 
 ### Next (highest value, each about a day or less)
 
-- **R1 Shared decode pass.** One ffmpeg process per recording that emits all HUD regions stacked (`hud/scan.py` already supports `stack`). Target: Valorant scan under 60 s for 40 min, total pipeline time down by a third.
+- **R1 Fast dense scan: done (2026-11-13).** The Valorant scan of the 40.7-min recording went from 182 s to 48 s with identical kills. `hud/scan.map_frames` cuts the video into chunks read by one GPU decoder plus CPU decoders at once (the GPU alone tops out at 26x realtime; with two CPU workers it is 43x), frames stay on the GPU until after frame dropping, and CPU decoders skip non-reference frames. Still open under R1: OCR, scene detection and the facecam search each decode on their own; moving them onto the same pass is the remaining part.
 - **R2 Game segmentation.** Sample one frame per 20 s, test each game's HUD anchor (EA FC scoreboard, Valorant top bar, ...), split the file into game segments and run the matching tracker on each. Fixes the mixed-session case and removes the need to rename files.
 - **R3 More Valorant events.** Spike plant and defuse (HUD icon and timer), round win or loss from the top-bar score, clutch (last one alive and round won), headshot icon in the feed row. Scores to feed: ace > clutch > quadra > triple.
 - **R4 Ball-follow framing for EA FC.** YOLO ball and player detection at 5 fps, smoothed crop path; fall back to a blurred-background 16:9 layout for wide plays. Building blocks exist ([Football-PitchVision](https://github.com/DesusLove/Football-PitchVision), [MatchVision](https://github.com/BlazeWild/MatchVision-AI-Sports-Video-Analytics-Tracking-Pipeline)), none of them does the vertical crop.
