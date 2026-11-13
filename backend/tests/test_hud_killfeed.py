@@ -170,6 +170,21 @@ def test_banner_is_confirmed_by_a_nearby_feed_kill():
     assert len([e for e in out if e.kind == "death"]) == 1
 
 
+def test_a_banner_hidden_for_one_sample_is_still_one_kill():
+    # Seen on a real recording: banner at 1697.5 s, hidden by a screen flash at
+    # 1698.0 s, back at 1698.5 s, with a single own-kill row in the feed.
+    feed = [K.KillEvent(t=1697.0, kind="kill", confidence=0.8, t_last=1701.0)]
+    out = K.merge_banner_kills(feed, [[1697.5, 1697.5, 0.93], [1698.5, 1698.5, 0.96]], interval=0.5)
+    assert [(e.t, e.t_last, e.sources) for e in out] == [(1697.25, 1698.5, ["banner", "feed"])]
+    # A real second kill a second later has its own feed row and stays.
+    feed = [K.KillEvent(t=10.0, kind="kill", confidence=0.8), K.KillEvent(t=11.0, kind="kill", confidence=0.8)]
+    out = K.merge_banner_kills(feed, [[10.5, 10.5, 0.9], [11.5, 11.5, 0.9]], interval=0.5)
+    assert [e.sources for e in out] == [["banner", "feed"], ["banner", "feed"]]
+    # Banners further apart than one missed sample are separate kills.
+    out = K.merge_banner_kills([], [[10.5, 10.5, 0.9], [12.0, 12.0, 0.9]], interval=0.5)
+    assert len(out) == 2
+
+
 def test_spectated_banner_after_own_death_is_dropped():
     events = [_death(30.0), _kill(40.0, ["banner"])]
     assert [e.kind for e in K.drop_spectated(events, starts=[0.0])] == ["death"]

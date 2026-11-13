@@ -491,17 +491,27 @@ def merge_banner_kills(events: list[KillEvent], banner_runs: list[list[float]], 
     out = [e for e in events if e.kind != "kill"]
     feed = [e for e in events if e.kind == "kill"]
     used: set[int] = set()
+    previous: KillEvent | None = None
     for first, last, conf in banner_runs:
         t = max(first - interval / 2.0, 0.0)
         near = [i for i, k in enumerate(feed) if i not in used and abs(k.t - t) <= window_s]
+        # A screen flash can hide the banner for one sample, which splits one
+        # banner into two sightings. A sighting that resumes a single missed
+        # sample after the previous one, with no feed row of its own, is the
+        # same banner; a real second kill brings its own feed row.
+        if (previous is not None and not near
+                and first - previous.t_last <= 2.0 * interval + 0.05):
+            previous.t_last = round(last, 3)
+            continue
         sources = ["banner"]
         confidence = 0.6 + 0.3 * conf
         if near:
             used.add(min(near, key=lambda i: abs(feed[i].t - t)))
             sources.append("feed")
             confidence = min(0.99, confidence + 0.08)
-        out.append(KillEvent(t=round(t, 3), kind="kill", confidence=round(confidence, 3),
-                             t_last=round(last, 3), sources=sources))
+        previous = KillEvent(t=round(t, 3), kind="kill", confidence=round(confidence, 3),
+                             t_last=round(last, 3), sources=sources)
+        out.append(previous)
     out.sort(key=lambda e: e.t)
     return out
 
