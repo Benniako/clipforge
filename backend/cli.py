@@ -401,7 +401,9 @@ def _cmd_killfeed(args: argparse.Namespace, src: Path, info) -> int:
                 "events": [dataclasses.asdict(e) for e in result.events],
                 "rounds": [{"index": r.index, "label": r.label, "kills": r.count,
                             "t_first": r.t_first, "t_last": r.t_last, "won": r.won,
-                            "after_plant": r.after_plant} for r in result.rounds],
+                            "after_plant": r.after_plant,
+                            "clutch": r.clutch.enemies if r.clutch is not None else None}
+                           for r in result.rounds],
                 "samples": result.samples, "active_s": result.active_s,
                 "diagnostics": result.diagnostics,
             }
@@ -423,7 +425,9 @@ def _cmd_killfeed(args: argparse.Namespace, src: Path, info) -> int:
         for r in result.rounds:
             times = ", ".join(clock(k.t) for k in r.kills)
             outcome = {True: "round won", False: "round lost", None: ""}[r.won]
-            notes = ", ".join(n for n in (outcome, "spike planted" if r.after_plant else "") if n)
+            clutch = f"clutch 1v{r.clutch.enemies}" if r.clutch is not None else ""
+            notes = ", ".join(n for n in (clutch, outcome, "spike planted" if r.after_plant else "")
+                              if n)
             lines.append(f"  round {r.index:2d}  {r.label:<12s} {r.count} kill(s) at {times}"
                          + (f"  ({notes})" if notes else ""))
         if result.deaths:
@@ -435,6 +439,10 @@ def _cmd_killfeed(args: argparse.Namespace, src: Path, info) -> int:
                 f"{clock(r.t)}={r.score[0]}-{r.score[1]}" for r in rounds))
         if plants:
             lines.append(f"  spike planted ({len(plants)}): " + ", ".join(clock(a) for a, _b in plants))
+        clutches = result.diagnostics.get("clutches", [])
+        if clutches:
+            lines.append(f"  last one alive ({len(clutches)}): " + ", ".join(
+                f"{clock(c['t'])} 1v{c['enemies']} {'won' if c['won'] else 'lost'}" for c in clutches))
     _print_text("\n".join(lines))
     return 0 if healthy else 1
 

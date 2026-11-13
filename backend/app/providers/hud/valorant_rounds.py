@@ -1,8 +1,10 @@
-"""Valorant round results and spike plants, read off the top bar.
+"""Valorant round results, spike plants and clutches, read off the top bar.
 
 The top bar shows the own team's score left of the round timer and the
 enemy's right of it, as white digits on translucent plates. When the spike is
-planted the timer is replaced by a red spike icon.
+planted the timer is replaced by a red spike icon. Further out sit the
+portraits of the players still alive: a dead player's portrait is removed and
+the others move up towards the centre.
 
 * **Scores** are read with the digit OCR on every keyframe (about every 4 s).
   Reads on the translucent plates are noisy (measured: 40-60 % come back
@@ -11,10 +13,16 @@ planted the timer is replaced by a red spike icon.
   everything else is a misread; a value needs two reads, or one read that
   fills a +1 step exactly.
 * **Spike plants** need the red icon on two keyframes in a row.
+* **Alive counts** are the filled portrait slots counted from the centre
+  outwards: a portrait has strong edges, the empty band almost none
+  (measured mean |Sobel| 80-200 against 5-30). A **clutch** is a round in
+  which the streamer was the last one alive on two samples in a row, had not
+  died, and the team won.
 
 Checked on a 40-minute match that ended 8-13: the 20 score changes up to 8-12
 decode in order (the final 13 never shows before the end screen; spot-checked
-by eye at 1:40, 3:20 and 5:00), and 10 plants are found.
+by eye at 1:40, 3:20 and 5:00), 10 plants are found, and the alive counts match
+the frames at six moments checked by eye.
 """
 from __future__ import annotations
 
@@ -42,6 +50,23 @@ POST_ROUND_S = 10.0        # kills can still happen for a few seconds after a ro
 MIN_READS = 2              # reads a score value needs before it counts
 RESET_MIN_SUM = 4          # a 0-0 read after this many rounds starts a new match
 MATCH_GAP_S = 180.0        # samples further apart than this belong to different matches
+# The whole top bar: portraits, score plates and timer.
+STRIP_Y = 36 / _M
+STRIP_H = 58 / _M
+STRIP_W = 1380 / _M
+# Portrait slot k (0 = next to the score plate) is centred this far from the middle.
+SLOT_DX = 310 / _M
+SLOT_PITCH = 87.5 / _M
+SLOT_HALF = 24 / _M
+SLOT_Y0 = 38 / _M
+SLOT_Y1 = 88 / _M
+PORTRAIT_MIN_EDGE = 60.0   # mean |Sobel| in a slot: portraits read 80-200, the empty band 5-30
+CLUTCH_CONFIRM_S = 10.0    # the two samples showing the streamer alone must be this close
+# A death this long before the last full-team sample still counts for the round:
+# the feed row and the portrait leaving do not line up exactly with a keyframe
+# (seen: a death at 16:52 and a full team on the 16:52 keyframe). The previous
+# round's deaths are at least the 30 s buy phase earlier.
+DEATH_SLACK_S = 5.0
 
 Span = tuple[float, float]
 FrameSource = Callable[..., Iterator[tuple[float, object]]]
@@ -62,6 +87,67 @@ class BarSample:
     ally: int | None
     enemy: int | None
     spike: bool
+    alive_ally: int | None = None      # players alive per team; None when unsure
+    alive_enemy: int | None = None
+
+
+@dataclass
+class Clutch:
+    t: float                       # first sample with the streamer as the last one alive
+    enemies: int                   # enemies alive then: the N of 1vN
+    t_end: float                   # first sample showing the round's result
+    won: bool
+    t_live: float = 0.0            # last sample with the whole team alive (the round was on)
+
+
+def strip_region(width: int, height: int) -> tuple[int, int, int, int]:
+    """The whole top bar; :func:`bar_region` lies inside it."""
+    w = min(int(STRIP_W * height), width)
+    w -= w % 2
+    h = max(int(STRIP_H * height), 2)
+    h -= h % 2
+    x = (width - w) // 2
+    x -= x % 2
+    y = int(STRIP_Y * height)
+    y -= y % 2
+    return x, y, w, h
+
+
+def alive_counts(strip, height: int) -> tuple[int | None, int | None]:
+    """Players alive per team in a :func:`strip_region` image; None where unsure.
+
+    A count is the number of filled slots from the centre outwards. A filled
+    slot beyond an empty one cannot happen in the game, so that reads as None;
+    so does everything when the team bands are not on screen (menus, flashes).
+    """
+    import cv2
+    import numpy as np
+
+    from .segments import topbar_present
+
+    if not topbar_present(strip, height):
+        return None, None
+    gray = cv2.cvtColor(np.ascontiguousarray(strip), cv2.COLOR_BGR2GRAY).astype(np.float32)
+    mag = (np.abs(cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3))
+           + np.abs(cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)))
+    w = strip.shape[1]
+    c = w // 2
+    y0 = max(int((SLOT_Y0 - STRIP_Y) * height), 0)
+    y1 = min(int((SLOT_Y1 - STRIP_Y) * height), strip.shape[0])
+
+    def filled(sign: int, k: int) -> bool:
+        cx = c + sign * (SLOT_DX + SLOT_PITCH * k) * height
+        x0, x1 = int(cx - SLOT_HALF * height), int(cx + SLOT_HALF * height)
+        if x0 < 0 or x1 > w or y1 <= y0:
+            return False
+        return float(mag[y0:y1, x0:x1].mean()) >= PORTRAIT_MIN_EDGE
+
+    counts: list[int | None] = []
+    for sign in (-1, 1):
+        flags = [filled(sign, k) for k in range(5)]
+        n = flags.index(False) if False in flags else 5
+        counts.append(None if any(flags[n:]) else n)
+    return counts[0], counts[1]
 
 
 def bar_region(width: int, height: int) -> tuple[int, int, int, int]:
@@ -122,7 +208,7 @@ def _read_score(reader, bgr) -> int | None:
 
 def read_bar(src_path: str, info, *, spans: list[Span] | None = None, reader=None,
              frame_source: FrameSource | None = None) -> list[BarSample]:
-    """One keyframe pass over the top bar; scores are read inside ``spans`` only."""
+    """One keyframe pass over the top bar; samples outside ``spans`` are skipped."""
     width, height = int(getattr(info, "width", 0) or 0), int(getattr(info, "height", 0) or 0)
     if width <= 0 or height <= 0:
         return []
@@ -130,26 +216,32 @@ def read_bar(src_path: str, info, *, spans: list[Span] | None = None, reader=Non
         from .readers import pick_readers
 
         reader = pick_readers()[0]
-    region = bar_region(width, height)
+    region = strip_region(width, height)
+    bar = bar_region(width, height)
+    rows = slice(max(bar[1] - region[1], 0), min(bar[1] - region[1] + bar[3], region[3]))
+    cols = slice(bar[0] - region[0], bar[0] - region[0] + bar[2])
     if frame_source is None:
         from . import scan
 
         def frame_source(reg, **kw):
             return scan.iter_frames(src_path, reg, **kw)
 
-    ally = _cols(region[2], height, -SCORE_DX, SCORE_HALF)
-    enemy = _cols(region[2], height, SCORE_DX, SCORE_HALF)
+    ally = _cols(bar[2], height, -SCORE_DX, SCORE_HALF)
+    enemy = _cols(bar[2], height, SCORE_DX, SCORE_HALF)
     out: list[BarSample] = []
     n = 0
-    for t, frame in frame_source(region, keyframes=True, pix_fmt="bgr24"):
+    for t, strip in frame_source(region, keyframes=True, pix_fmt="bgr24"):
         t = float(t)
         if spans and not any(a <= t <= b for a, b in spans):
             continue
+        frame = strip[rows, cols]
         a = e = None
         if reader is not None and n % OCR_EVERY == 0:
             a, e = _read_score(reader, frame[:, ally]), _read_score(reader, frame[:, enemy])
         n += 1
-        out.append(BarSample(t=t, ally=a, enemy=e, spike=spike_icon(frame, height)))
+        alive_a, alive_e = alive_counts(strip, height)
+        out.append(BarSample(t=t, ally=a, enemy=e, spike=spike_icon(frame, height),
+                             alive_ally=alive_a, alive_enemy=alive_e))
     return out
 
 
@@ -284,14 +376,71 @@ def spike_plants(samples: list[BarSample]) -> list[Span]:
     return [(a, b) for a, b, n in runs if n >= 2]
 
 
-def annotate(result, rounds: list[RoundResult], plants: list[Span]) -> None:
-    """Mark each kill round of a kill-feed ``result`` as won / lost / after a plant.
+def _result_for(rounds: list[RoundResult], t: float, own_start: float | None,
+                nxt: float | None) -> RoundResult | None:
+    """The score change that ended the round live at ``t``; None when unsure.
 
-    A round's result is the first score change after its last kill. It only
-    counts when the old score was still read during this round (after its buy
-    phase) and the change came before the next buy phase; otherwise the round
-    stays unknown rather than getting a neighbouring round's result.
+    It only counts when the old score was still read during this round (after
+    its buy phase) and the change came before the next buy phase; otherwise
+    the round stays unknown rather than getting a neighbouring round's result.
     """
+    after = next((r for r in rounds if r.t >= t - POST_ROUND_S), None)
+    if after is None or after.t > t + RESULT_WINDOW_S:
+        return None
+    if nxt is not None and after.t_low >= nxt:
+        return None
+    if own_start is not None and after.t_low < own_start - POST_ROUND_S:
+        return None
+    return after
+
+
+def find_clutches(samples: list[BarSample], rounds: list[RoundResult],
+                  deaths: list[float]) -> list[Clutch]:
+    """Rounds in which the streamer was the last one alive, won or lost.
+
+    Rounds are told apart by the portraits themselves: every buy phase brings
+    the whole team back. (The buy-phase plate is no good here: the round-end
+    banner in the same spot makes it fire 8-26 s early, still inside the old
+    round.) One portrait left is the streamer only when they have not died
+    since the whole team was last alive. The old score must still have been
+    read after the streamer was left alone, so a teammate dying after the
+    round was already decided is not taken for a clutch.
+    """
+    valid = [s for s in samples if s.alive_ally is not None and s.alive_enemy is not None]
+    if not valid:
+        return []
+    full = max(s.alive_ally for s in valid)
+    if full < 2:
+        return []
+    deaths = sorted(float(d) for d in deaths)
+    out: list[Clutch] = []
+    t_full: float | None = None
+    judged = False                     # this round's last-one-alive moment was already looked at
+    for i, a in enumerate(valid):
+        if a.alive_ally >= full:
+            t_full, judged = a.t, False
+            continue
+        if judged or t_full is None or i + 1 >= len(valid):
+            continue
+        b = valid[i + 1]
+        if not (a.alive_ally == 1 and b.alive_ally == 1 and a.alive_enemy >= 1
+                and b.t - a.t <= CLUTCH_CONFIRM_S):
+            continue
+        judged = True
+        if any(t_full - DEATH_SLACK_S < d <= b.t for d in deaths):
+            continue                       # the one left is a teammate
+        nxt = next((s.t for s in valid[i + 1:] if s.alive_ally >= full), None)
+        res = _result_for(rounds, a.t, t_full, nxt)
+        if res is not None and res.t_low >= a.t - 2.0:
+            out.append(Clutch(t=a.t, enemies=int(a.alive_enemy), t_end=res.t,
+                              won=res.winner == "ally", t_live=t_full))
+    return out
+
+
+def annotate(result, rounds: list[RoundResult], plants: list[Span],
+             clutches: list[Clutch] = ()) -> None:
+    """Mark each kill round of a kill-feed ``result``: won / lost, after a
+    plant, and the won clutch it belongs to (a kill while that round was on)."""
     import bisect
 
     starts = sorted(float(s) for s in result.diagnostics.get("round_starts", []))
@@ -300,16 +449,26 @@ def annotate(result, rounds: list[RoundResult], plants: list[Span]) -> None:
         i = bisect.bisect_right(starts, t_first)
         own_start = starts[i - 1] if i else None
         nxt = next((s for s in starts if s > t_last), None)
-        after = next((r for r in rounds if r.t >= t_last - POST_ROUND_S), None)
-        ok = (after is not None and after.t <= t_last + RESULT_WINDOW_S
-              and (nxt is None or after.t_low < nxt)
-              and (own_start is None or after.t_low >= own_start - POST_ROUND_S))
-        rnd.won = (after.winner == "ally") if ok else None
+        after = _result_for(rounds, t_last, own_start, nxt)
+        rnd.won = (after.winner == "ally") if after is not None else None
         rnd.after_plant = any(a - 2.0 <= float(k.t) <= b + 8.0 for a, b in plants for k in rnd.kills)
+        rnd.clutch = None
+    rows = []
+    for c in clutches:
+        match = None
+        if c.won:
+            match = next((rnd for rnd in result.rounds
+                          if any(c.t_live <= float(k.t) <= c.t_end + POST_ROUND_S
+                                 for k in rnd.kills)), None)
+        if match is not None:
+            match.clutch, match.won = c, True
+        rows.append({"t": c.t, "t_end": c.t_end, "enemies": c.enemies, "won": c.won,
+                     "round": match.index if match is not None else None})
     result.diagnostics["round_results"] = [
         {"t": r.t, "t_low": r.t_low, "winner": r.winner, "score": list(r.score),
          "exact": r.exact} for r in rounds]
     result.diagnostics["spike_plants"] = [[round(a, 1), round(b, 1)] for a, b in plants]
+    result.diagnostics["clutches"] = rows
 
 
 def enrich(src_path: str, info, result, spans: list[Span] | None = None, **kw
@@ -319,11 +478,13 @@ def enrich(src_path: str, info, result, spans: list[Span] | None = None, **kw
     try:
         samples = read_bar(src_path, info, spans=spans, **kw)
         rounds, plants = decode_rounds(samples), spike_plants(samples)
-        annotate(result, rounds, plants)
+        clutches = find_clutches(samples, rounds, [float(d.t) for d in result.deaths])
+        annotate(result, rounds, plants, clutches)
     except Exception as e:
         log.warning("valorant rounds: top bar could not be read: %s", e)
         return [], []
     final = rounds[-1].score if rounds else None
-    log.info("valorant rounds: %d result(s), last score %s, %d spike plant(s), read in %.0fs",
-             len(rounds), final, len(plants), time.monotonic() - started)
+    log.info("valorant rounds: %d result(s), last score %s, %d spike plant(s), %d clutch(es) "
+             "(%d won), read in %.0fs", len(rounds), final, len(plants), len(clutches),
+             sum(c.won for c in clutches), time.monotonic() - started)
     return rounds, plants

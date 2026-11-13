@@ -64,6 +64,42 @@ def bar_image(ally: str | None = "3", enemy: str | None = "7", *, spike=False) -
     return img
 
 
+STRIP = V.strip_region(W, H)
+
+
+def draw_portrait(img: np.ndarray, sign: int, k: int) -> None:
+    """A busy patch in portrait slot ``k`` (sign -1: own team, +1: enemies)."""
+    c = img.shape[1] // 2
+    cx = int(c + sign * (V.SLOT_DX + V.SLOT_PITCH * k) * H)
+    half = int(V.SLOT_HALF * H)
+    y0, y1 = int((V.SLOT_Y0 - V.STRIP_Y) * H), int((V.SLOT_Y1 - V.STRIP_Y) * H)
+    stripes = (np.indices((y1 - y0, 2 * half)).sum(axis=0) // 4 % 2 * 255).astype(np.uint8)
+    img[y0:y1, cx - half:cx + half] = stripes[..., None]
+
+
+def strip_image(ally: str | None = "3", enemy: str | None = "7", *, spike=False,
+                alive=(5, 5)) -> np.ndarray:
+    """The whole top bar: team bands, ``alive`` portraits per side packed towards
+    the centre, and :func:`bar_image` in the middle."""
+    x, y, w, h = STRIP
+    img = np.zeros((h, w, 3), np.uint8)
+    c = w // 2
+    img[:, :c] = (70, 120, 80)                       # green-teal own-team band
+    img[:, c:] = (60, 60, 150)                       # red enemy band
+    for sign, n in ((-1, alive[0]), (1, alive[1])):
+        for k in range(n):
+            draw_portrait(img, sign, k)
+    bx, by, bw, bh = V.bar_region(W, H)
+    img[by - y:by - y + bh, bx - x:bx - x + bw] = bar_image(ally, enemy, spike=spike)
+    return img
+
+
+def A(t, allies, enemies) -> V.BarSample:
+    """A sample with alive counts only."""
+    return V.BarSample(t=float(t), ally=None, enemy=None, spike=False,
+                       alive_ally=allies, alive_enemy=enemies)
+
+
 class FakeReader:
     name = "fake"
 
@@ -116,18 +152,29 @@ def test_score_reads_need_confidence_and_a_plausible_value():
     assert V._read_score(FakeReader("40", 0.9), img) is None     # no match gets that far
 
 
-def test_read_bar_reads_scores_and_the_spike_icon_inside_the_spans():
-    frames = [(0.0, bar_image()), (4.0, bar_image(None, None, spike=True)),
-              (8.0, bar_image()), (500.0, bar_image())]
+def test_alive_counts_are_the_filled_slots_from_the_centre():
+    for alive in ((5, 5), (1, 3), (0, 2), (3, 0)):
+        assert V.alive_counts(strip_image(alive=alive), H) == alive
+    gap = strip_image(alive=(2, 5))
+    draw_portrait(gap, -1, 4)                        # filled behind an empty slot: not the game
+    assert V.alive_counts(gap, H) == (None, 5)
+    menu = np.full_like(strip_image(), 40)           # no team bands on screen
+    assert V.alive_counts(menu, H) == (None, None)
+
+
+def test_read_bar_reads_scores_spike_and_alive_counts_inside_the_spans():
+    frames = [(0.0, strip_image(alive=(5, 4))),
+              (4.0, strip_image(None, None, spike=True, alive=(1, 2))),
+              (8.0, strip_image()), (500.0, strip_image())]
 
     def source(region, **kw):
-        assert region == REGION and kw == {"keyframes": True, "pix_fmt": "bgr24"}
+        assert region == STRIP and kw == {"keyframes": True, "pix_fmt": "bgr24"}
         yield from frames
 
     reader = FakeReader("4")
     samples = V.read_bar("x.mp4", INFO, spans=[(0.0, 100.0)], reader=reader, frame_source=source)
-    assert [(s.t, s.ally, s.enemy, s.spike) for s in samples] == [
-        (0.0, 4, 4, False), (4.0, None, None, True), (8.0, 4, 4, False)]
+    assert [(s.t, s.ally, s.enemy, s.spike, s.alive_ally, s.alive_enemy) for s in samples] == [
+        (0.0, 4, 4, False, 5, 4), (4.0, None, None, True, 1, 2), (8.0, 4, 4, False, 5, 5)]
     assert reader.calls == 4                          # no OCR without a digit on the plate
 
 
@@ -182,6 +229,34 @@ def test_decode_rounds_needs_both_scores():
     assert V.decode_rounds([]) == []
 
 
+def test_find_clutches_won_lost_and_a_teammates_clutch():
+    samples = (
+        [A(t, 5, 5) for t in (10, 20)] + [A(t, 1, 3) for t in (40, 44, 48)] + [A(52, 1, 1)]
+        + [A(t, 5, 5) for t in (110, 120)] + [A(t, 1, 2) for t in (130, 134)]
+        + [A(t, 5, 5) for t in (210, 220)] + [A(t, 1, 2) for t in (230, 234)]
+        + [A(t, 5, 5) for t in (310, 320)] + [A(330, 1, 1), A(340, 2, 1)]
+    )
+    rounds = [
+        V.RoundResult(t=60.0, winner="ally", score=(1, 0), t_low=56.0),
+        V.RoundResult(t=150.0, winner="enemy", score=(1, 1), t_low=146.0),
+        V.RoundResult(t=250.0, winner="ally", score=(2, 1), t_low=246.0),
+        V.RoundResult(t=360.0, winner="ally", score=(3, 1), t_low=356.0),
+    ]
+    # The streamer died at 218, just before the round's last full-team sample:
+    # the one left at 230 is a teammate. At 330 only one sample shows one left.
+    clutches = V.find_clutches(samples, rounds, deaths=[218.0])
+    assert [(c.t, c.enemies, c.t_end, c.won, c.t_live) for c in clutches] == [
+        (40.0, 3, 60.0, True, 20.0), (130.0, 2, 150.0, False, 120.0)]
+
+
+def test_find_clutches_ignores_being_left_alone_after_the_round_was_decided():
+    samples = ([A(t, 5, 5) for t in (400, 404)] + [A(t, 2, 2) for t in (408, 412)]
+               + [A(t, 1, 2) for t in (418, 422)])
+    rounds = [V.RoundResult(t=414.0, winner="ally", score=(4, 1), t_low=410.0)]
+    assert V.find_clutches(samples, rounds, deaths=[]) == []
+    assert V.find_clutches([], rounds, deaths=[]) == []
+
+
 def test_spike_plants_need_two_sightings():
     flags = {8: True, 12: True, 16: True, 60: True}
     samples = [S(t, spike=flags.get(t, False)) for t in range(0, 100, 4)]
@@ -213,6 +288,36 @@ def test_annotate_does_not_take_the_previous_rounds_result():
     # at 150, before this round's buy phase.
     V.annotate(result, [V.RoundResult(t=235.0, winner="ally", score=(1, 0), t_low=150.0)], [])
     assert result.rounds[0].won is None
+
+
+def test_annotate_puts_a_won_clutch_on_its_kill_round():
+    result = _result([_kill(45), _kill(50), _kill(250)], [0.0, 100.0, 200.0])
+    clutches = [V.Clutch(t=40.0, enemies=2, t_end=60.0, won=True, t_live=20.0),
+                V.Clutch(t=140.0, enemies=1, t_end=170.0, won=True, t_live=120.0),   # no kill
+                V.Clutch(t=240.0, enemies=3, t_end=260.0, won=False, t_live=220.0)]
+    rounds = [V.RoundResult(t=60.0, winner="ally", score=(1, 0), t_low=56.0)]
+    V.annotate(result, rounds, [], clutches)
+    assert result.rounds[0].clutch is clutches[0] and result.rounds[0].won is True
+    assert result.rounds[1].clutch is None
+    assert [c["round"] for c in result.diagnostics["clutches"]] == [1, None, None]
+
+
+def test_a_clutch_leads_its_kill_clip_and_gets_its_own_clip_without_kills():
+    result = _result([_kill(45)], [0.0, 100.0])
+    clutch = V.Clutch(t=30.0, enemies=3, t_end=60.0, won=True, t_live=10.0)
+    alone = V.Clutch(t=140.0, enemies=1, t_end=175.0, won=True, t_live=120.0)
+    V.annotate(result, [V.RoundResult(t=60.0, winner="ally", score=(1, 0), t_low=56.0)], [],
+               [clutch, alone])
+    settings = ImportSettings(game_profile="valorant")
+    clips = DG._killfeed_clips(result, types.SimpleNamespace(duration=600.0), settings,
+                               lead=12.0, tail=4.0)
+    assert [c.title for c in clips] == ["Clutch 1v3 — 0:45", "Clutch 1v1 — 2:20"]
+    kill_clip, alone_clip = clips
+    assert kill_clip.score == DG._CLUTCH_SCORES[3] and alone_clip.score == DG._CLUTCH_SCORES[1]
+    assert kill_clip.start <= 27.0 and kill_clip.end >= 60.0     # left alone .. round over
+    assert alone_clip.start <= 137.0 and alone_clip.end >= 175.0
+    for c in clips:
+        assert settings.min_len <= c.end - c.start <= settings.max_len
 
 
 def test_won_rounds_and_planted_spikes_raise_the_clip_score():

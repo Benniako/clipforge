@@ -526,6 +526,8 @@ def _hud_goal_clips(hud, info: MediaInfo, settings: ImportSettings, *,
 
 _KILL_TITLES = {1: "Kill", 2: "Double kill", 3: "Triple kill", 4: "Quadra kill", 5: "Ace"}
 _KILL_SCORES = {1: 76, 2: 86, 3: 91, 4: 95, 5: 98}
+# A won round as the last one alive, by the number of enemies left then.
+_CLUTCH_SCORES = {1: 88, 2: 92, 3: 95, 4: 97, 5: 98}
 
 
 def _track_killfeed(src_path: str, info: MediaInfo, settings: ImportSettings,
@@ -571,18 +573,23 @@ def _track_killfeed(src_path: str, info: MediaInfo, settings: ImportSettings,
 
 def _killfeed_clips(kills, info: MediaInfo, settings: ImportSettings, *,
                     lead: float, tail: float) -> list["GameplayClip"]:
-    """One clip per round in which the streamer got kills, multi-kills first."""
+    """One clip per round in which the streamer got kills, multi-kills first,
+    plus one per clutch won without a kill (a defuse, the spike going off)."""
     out: list[GameplayClip] = []
+
+    def bounded(start: float, end: float) -> tuple[float, float]:
+        if end - start > settings.max_len:
+            start = max(0.0, end - settings.max_len)
+        if end - start < settings.min_len:
+            start = max(0.0, end - settings.min_len)
+        return start, end
+
     for rnd in kills.rounds:
         n = min(rnd.count, 5)
         t_last = float(rnd.t_last)
         end = min(info.duration, t_last + tail)
         # Start before the first kill when the whole streak fits in one clip.
         start = max(0.0, min(float(rnd.t_first) - 3.0, t_last - lead))
-        if end - start > settings.max_len:
-            start = max(0.0, end - settings.max_len)
-        if end - start < settings.min_len:
-            start = max(0.0, end - settings.min_len)
         confidence = min(float(k.confidence) for k in rnd.kills)
         quick = rnd.count >= 2 and rnd.span <= 6.0
         score = min(99, _KILL_SCORES[n] + (2 if quick else 0))
@@ -602,14 +609,44 @@ def _killfeed_clips(kills, info: MediaInfo, settings: ImportSettings, *,
             factors.append(ScoreFactor(label="Kill with the spike planted", weight=1.0,
                                        detail="The spike icon was on screen"))
         m, s = divmod(int(rnd.t_first), 60)
+        title = f"{_KILL_TITLES[n]} — {m}:{s:02d}"
+        clutch = getattr(rnd, "clutch", None)
+        if clutch is not None:
+            score = max(score, _CLUTCH_SCORES[min(int(clutch.enemies), 5)])
+            factors.append(_clutch_factor(int(clutch.enemies)))
+            # Show the whole clutch: from being left alone to the round's end.
+            start = min(start, max(0.0, float(clutch.t) - 3.0))
+            end = max(end, min(info.duration, float(clutch.t_end) + 1.0, t_last + 30.0))
+            streak = f" ({_KILL_TITLES[n]})" if n >= 2 else ""
+            title = f"Clutch 1v{clutch.enemies}{streak} — {m}:{s:02d}"
+        start, end = bounded(start, end)
         out.append(GameplayClip(
             start=round(start, 3), end=round(end, 3), score=score, peak_t=t_last,
-            title=f"{_KILL_TITLES[n]} — {m}:{s:02d}", cue_ts=[],
+            title=title, cue_ts=[],
             features={"ocr": round(confidence, 4), "hud": 1.0, "kills": float(rnd.count),
                       "intensity": 0.0, "sustain": 0.0, "transient": 0.0, "spikes": 0.0,
                       "cue": 0.0, "climax_t": round(t_last, 3)},
             factors=factors))
+    for c in kills.diagnostics.get("clutches", []):
+        if not c.get("won") or c.get("round") is not None:
+            continue
+        t, t_end = float(c["t"]), float(c["t_end"])
+        start, end = bounded(max(0.0, t - 3.0), min(info.duration, t_end + 1.0))
+        m, s = divmod(int(t), 60)
+        out.append(GameplayClip(
+            start=round(start, 3), end=round(end, 3),
+            score=_CLUTCH_SCORES[min(int(c["enemies"]), 5)], peak_t=t_end,
+            title=f"Clutch 1v{c['enemies']} — {m}:{s:02d}", cue_ts=[],
+            features={"ocr": 0.8, "hud": 1.0, "kills": 0.0, "intensity": 0.0, "sustain": 0.0,
+                      "transient": 0.0, "spikes": 0.0, "cue": 0.0, "climax_t": round(t_end, 3)},
+            factors=[_clutch_factor(int(c["enemies"]))]))
     return out
+
+
+def _clutch_factor(enemies: int) -> ScoreFactor:
+    return ScoreFactor(label=f"Clutch 1v{enemies}",
+                       weight=float(_CLUTCH_SCORES[min(enemies, 5)] - 80),
+                       detail="Last one alive on the team, and the round was won")
 
 
 def _add_goal_loudness(clips: list["GameplayClip"], times, rms, *,
@@ -719,6 +756,15 @@ def detect_gameplay(src_path: str, info: MediaInfo, settings: ImportSettings,
                     t=round(float(a), 3), source="ocr", label="spike_plant",
                     detail="Top bar: spike planted", confidence=0.8,
                     data={"detector": "valorant_rounds", "until": b}))
+            for c in kills.diagnostics.get("clutches", []):
+                events_out.append(DetectedEvent(
+                    t=round(float(c["t"]), 3), source="ocr",
+                    label="clutch" if c["won"] else "clutch_lost",
+                    detail=f"Top bar: last one alive against {c['enemies']}, round "
+                           f"{'won' if c['won'] else 'lost'}",
+                    confidence=0.75,
+                    data={"detector": "valorant_rounds", "enemies": c["enemies"],
+                          "until": c["t_end"]}))
 
     # On-screen text markers (VICTORY / ELIMINATED / GOAL / kill-feed).
     # For footage with audio we run OCR after finding likely moments, so it reads
