@@ -65,6 +65,7 @@ class FeedRow:
     own: str | None               # "kill" | "death" | None
     strength: float               # outline strength behind ``own`` (0..1)
     sig: object = None            # boolean text-mask signature
+    headshot: float = 0.0         # match (0..1) of the headshot icon left of the victim
 
 
 @dataclass
@@ -76,12 +77,14 @@ class KillEvent:
     round_index: int = 0          # 1-based group of kills (see ROUND_GAP_S)
     streak: int = 1               # n-th own kill of that round
     sources: list[str] = field(default_factory=lambda: ["feed"])   # "feed" and/or "banner"
+    headshot: bool = False        # the feed row carried the headshot icon
 
     @property
     def detail(self) -> str:
         if self.kind == "death":
             return "Kill feed: the streamer was killed"
-        return f"Kill feed: kill {self.streak} of round group {self.round_index}"
+        shot = " (headshot)" if self.headshot else ""
+        return f"Kill feed: kill {self.streak}{shot} of round group {self.round_index}"
 
 
 @dataclass
@@ -112,6 +115,10 @@ class MultiKill:
     @property
     def span(self) -> float:
         return self.t_last - self.t_first
+
+    @property
+    def headshots(self) -> int:
+        return sum(1 for k in self.kills if k.headshot)
 
 
 @dataclass
@@ -336,6 +343,111 @@ def _two_line_share(mask, lines, xa: int, xb: int) -> float:
     return vals[1] if len(vals) > 1 else 0.0
 
 
+# --- headshot icon: a reticle just left of the victim's half of a kill row -----
+# Four bars around an empty centre and four short arcs on the diagonals,
+# white, about 0.7 row heights across, its centre 0.6 row heights left of where
+# the victim's colour starts (measured on 1440p rows: 26-29 px of 45).
+# Score needed to call a row a headshot. The score is the template match times
+# the mirror symmetry of the matched patch: the wall-penetration icon (an arrow
+# into a bar) sits in the same spot and half-matches the template, but it is
+# lopsided. Measured on a 40-minute 1440p match, 1,356 kill-row sightings: no
+# icon (wall-penetration icons included) at most 0.29, the headshot icon 0.39
+# to 0.78, and 0.70 or more on the streamer's own rows. Nothing in between.
+HEADSHOT_MIN = 0.34
+HEADSHOT_UNSURE = 0.05        # +/- around HEADSHOT_MIN reported as "unsure"
+
+
+def _reticle(row_h: float):
+    """The headshot icon drawn at ``row_h``, as a float32 image (0..1)."""
+    import cv2
+    import numpy as np
+
+    u = row_h / 45.0
+    size = int(round(36 * u)) | 1
+    c = size // 2
+    img = np.zeros((size, size), np.uint8)
+    t = max(1, int(round(3 * u)))
+
+    def seg(x0, y0, x1, y1):
+        cv2.line(img, (int(round(c + x0 * u)), int(round(c + y0 * u))),
+                 (int(round(c + x1 * u)), int(round(c + y1 * u))), 255, t)
+
+    seg(0, -16, 0, -5)            # top bar
+    seg(0, 5, 0, 16)              # bottom bar
+    seg(-15, 0, -6, 0)            # left bar
+    seg(6, 0, 15, 0)              # right bar
+    for sx in (-1, 1):            # four arcs, tangent to a circle of radius 12.5
+        for sy in (-1, 1):
+            mx, my = sx * 8.8, sy * 8.8
+            seg(mx - sy * 3.4, my + sx * 3.4, mx + sy * 3.4, my - sx * 3.4)
+    img = cv2.GaussianBlur(img, (3, 3), 0)
+    return img.astype(np.float32) / 255.0
+
+
+_RETICLES: dict[int, object] = {}
+
+
+def _symmetry(patch) -> float:
+    """How mirror-symmetric a patch is, left-right and top-bottom (-1..1)."""
+    import numpy as np
+
+    if patch.size == 0 or float(patch.std()) < 1e-6:
+        return 0.0
+    flat = patch.ravel()
+    lr = float(np.corrcoef(flat, patch[:, ::-1].ravel())[0, 1])
+    ud = float(np.corrcoef(flat, patch[::-1, :].ravel())[0, 1])
+    return min(lr, ud)
+
+
+def headshot_score(white, y0: int, y1: int, boundary: int, row_h: float) -> float:
+    """How surely the strip left of ``boundary`` shows the headshot icon (0..1).
+
+    ``white`` is the white-pixel mask of the feed image, ``boundary`` the first
+    column of the victim's half of the row. The score is the best template
+    match there times the symmetry of the patch it matched (see HEADSHOT_MIN).
+    """
+    import cv2
+    import numpy as np
+
+    key = int(round(row_h * 4))
+    tpl = _RETICLES.get(key)
+    if tpl is None:
+        tpl = _RETICLES[key] = _reticle(row_h)
+    pad = max(2, int(round(0.08 * row_h)))
+    ya, yb = max(y0 - pad, 0), min(y1 + pad, white.shape[0])
+    xa, xb = max(boundary - int(round(1.3 * row_h)), 0), min(boundary + pad, white.shape[1])
+    win = white[ya:yb, xa:xb].astype(np.float32)
+    if win.shape[0] < tpl.shape[0] or win.shape[1] < tpl.shape[1] or not win.any():
+        return 0.0
+    win = cv2.GaussianBlur(win, (3, 3), 0)
+    res = cv2.matchTemplate(win, tpl, cv2.TM_CCOEFF_NORMED)
+    _lo, match, _lo_at, (x, y) = cv2.minMaxLoc(res)
+    if match <= 0.0:
+        return 0.0
+    th, tw = tpl.shape
+    sym = _symmetry(win[y:y + th, x:x + tw])
+    return float(match * max(sym, 0.0))
+
+
+def _victim_start(lab, victim_code: int, start: int, row_h: float) -> int:
+    """First column of the victim's colour, walking left from ``start``.
+
+    White name text and the slanted edge interrupt the colour for a few
+    columns, so gaps up to half a row height are bridged.
+    """
+    gap_max = int(0.5 * row_h)
+    x, gap, bx = start, 0, start
+    while x > 0:
+        if lab[x] == victim_code:
+            bx, gap = x, 0
+        else:
+            gap += 1
+            if gap > gap_max:
+                break
+        x -= 1
+    return bx
+
+
 def read_rows(bgr, row_h: float, edge_x: int | None = None) -> list[FeedRow]:
     """Kill-feed rows in a colour image of the feed region, top to bottom.
 
@@ -401,12 +513,19 @@ def read_rows(bgr, row_h: float, edge_x: int | None = None) -> list[FeedRow]:
             if strength >= OWN_DEATH_MIN:
                 own = "death"
 
+        hs = 0.0
+        if killer != victim:
+            start = min(edge_x - int(2.0 * row_h), width - 1)
+            boundary = _victim_start(lab, 1 if victim == "ally" else 2, start, row_h)
+            hs = headshot_score(white, y0, y1, boundary, row_h)
+
         sa = max(edge_x - int(12 * row_h), 0)
         sb = max(edge_x - int(1.75 * row_h), sa + 2)
         patch = white[y0:y1, sa:sb].astype(np.uint8) * 255
         sig = cv2.resize(patch, (48, 6), interpolation=cv2.INTER_AREA) > 60
         rows.append(FeedRow(y0=y0, y1=y1, killer=killer, victim=victim, own=own,
-                            strength=round(float(strength), 3), sig=sig))
+                            strength=round(float(strength), 3), sig=sig,
+                            headshot=round(hs, 3)))
     return rows
 
 
@@ -449,14 +568,16 @@ class FeedTracker:
         self._expire(t)
 
     def _pair(self, t: float, row: FeedRow, best: int | None, taken: set[int]) -> None:
+        hs = 1 if row.headshot >= HEADSHOT_MIN else 0
         if best is None:
             self._active.append({"kind": row.own, "sig": row.sig, "first": t,
-                                 "last": t, "seen": 1, "strength": row.strength})
+                                 "last": t, "seen": 1, "strength": row.strength, "hs": hs})
             taken.add(len(self._active) - 1)
             return
         a = self._active[best]
         a["last"] = t
         a["seen"] += 1
+        a["hs"] += hs
         a["strength"] = max(a["strength"], row.strength)
         a["sig"] = row.sig
         taken.add(best)
@@ -468,10 +589,13 @@ class FeedTracker:
                 keep.append(a)
             elif a["seen"] >= MIN_SIGHTINGS:
                 # The row appeared somewhere in the sample gap before "first".
+                # The icon stays on the row its whole life; a majority of the
+                # sightings rides out a fade or a frame where it was covered.
                 self.events.append(KillEvent(
                     t=round(max(a["first"] - self.interval / 2.0, 0.0), 3), kind=a["kind"],
                     confidence=round(min(0.99, 0.6 + 0.4 * a["strength"]), 3),
-                    t_last=round(a["last"], 3)))
+                    t_last=round(a["last"], 3),
+                    headshot=a["hs"] > 0 and 2 * a["hs"] >= a["seen"]))
         self._active = keep
 
     def finish(self) -> list[KillEvent]:
@@ -508,12 +632,16 @@ def merge_banner_kills(events: list[KillEvent], banner_runs: list[list[float]], 
             continue
         sources = ["banner"]
         confidence = 0.6 + 0.3 * conf
+        headshot = False
         if near:
-            used.add(min(near, key=lambda i: abs(feed[i].t - t)))
+            match = min(near, key=lambda i: abs(feed[i].t - t))
+            used.add(match)
             sources.append("feed")
             confidence = min(0.99, confidence + 0.08)
+            # Only the feed row shows whether it was a headshot.
+            headshot = feed[match].headshot
         previous = KillEvent(t=round(t, 3), kind="kill", confidence=round(confidence, 3),
-                             t_last=round(last, 3), sources=sources)
+                             t_last=round(last, 3), sources=sources, headshot=headshot)
         out.append(previous)
     out.sort(key=lambda e: e.t)
     return out
@@ -576,6 +704,7 @@ def track_killfeed(src_path: str, info, *, frame_source: FrameSource | None = No
     edge_x = region[2] - int(round(EDGE_MARGIN * height))
     tracker = FeedTracker(interval=1.0 / fps)
     samples = with_rows = own_rows = 0
+    hs_bands = [0, 0, 0]                     # kill-row sightings: no / unsure / yes icon
     banner = banner_region(width, height)
     banner_runs: list[list[float]] = []      # [first_t, last_t, best confidence]
     plate = plate_region(width, height)
@@ -628,6 +757,14 @@ def track_killfeed(src_path: str, info, *, frame_source: FrameSource | None = No
         samples += 1
         with_rows += bool(rows)
         own_rows += sum(1 for r in rows if r.own)
+        for r in rows:
+            if r.killer != r.victim:
+                # Icon scores split cleanly on real footage; many rows close
+                # to the cut-off would mean the icon or the layout has changed.
+                if abs(r.headshot - HEADSHOT_MIN) < HEADSHOT_UNSURE:
+                    hs_bands[1] += 1
+                else:
+                    hs_bands[2 if r.headshot >= HEADSHOT_MIN else 0] += 1
         tracker.push(float(t), rows)
     starts = round_starts(plate_times)
     events = drop_spectated(
@@ -642,6 +779,8 @@ def track_killfeed(src_path: str, info, *, frame_source: FrameSource | None = No
         healthy=samples >= 20 and active_s >= 20.0,
         diagnostics={"own_row_sightings": own_rows, "round_starts": [round(s, 1) for s in starts],
                      "banner_sightings": len(banner_runs),
+                     "headshot_icon_rows": {"no": hs_bands[0], "unsure": hs_bands[1],
+                                            "yes": hs_bands[2]},
                      "seconds": round(time.monotonic() - started, 1)})
     log.info("kill feed: %d kill(s), %d death(s), %d round group(s), feed visible %.0fs, read in %.0fs",
              len(result.kills), len(result.deaths), len(rounds), active_s,

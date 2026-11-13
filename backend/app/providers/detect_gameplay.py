@@ -608,8 +608,20 @@ def _killfeed_clips(kills, info: MediaInfo, settings: ImportSettings, *,
             score = min(99, score + 1)
             factors.append(ScoreFactor(label="Kill with the spike planted", weight=1.0,
                                        detail="The spike icon was on screen"))
+        headshots = int(getattr(rnd, "headshots", 0) or 0)
+        if headshots:
+            bonus = 2 * min(headshots, 2)
+            score = min(99, score + bonus)
+            factors.append(ScoreFactor(
+                label=f"{headshots} headshot{'s' if headshots != 1 else ''}", weight=float(bonus),
+                detail="The kill feed showed the headshot icon"))
         m, s = divmod(int(rnd.t_first), 60)
-        title = f"{_KILL_TITLES[n]} — {m}:{s:02d}"
+        kind = _KILL_TITLES[n]
+        if n == 1 and headshots:
+            kind = "Headshot"
+        elif n >= 2 and headshots >= rnd.count:
+            kind = f"{kind}, all headshots"
+        title = f"{kind} — {m}:{s:02d}"
         clutch = getattr(rnd, "clutch", None)
         if clutch is not None:
             score = max(score, _CLUTCH_SCORES[min(int(clutch.enemies), 5)])
@@ -741,7 +753,8 @@ def detect_gameplay(src_path: str, info: MediaInfo, settings: ImportSettings,
                     t=round(float(ev.t), 3), source="ocr", label=ev.kind,
                     detail=ev.detail, confidence=round(float(ev.confidence), 3),
                     data={"detector": "killfeed", "round": ev.round_index,
-                          "streak": ev.streak, "sources": list(ev.sources)}))
+                          "streak": ev.streak, "sources": list(ev.sources),
+                          "headshot": bool(ev.headshot)}))
             for r in kills.diagnostics.get("round_results", []):
                 won = r["winner"] == "ally"
                 events_out.append(DetectedEvent(

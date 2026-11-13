@@ -177,5 +177,8 @@ def track_killfeed_spans(src_path: str, info, spans: list[Span]):
             "round_starts": [s for p in parts for s in p.diagnostics.get("round_starts", [])],
             "banner_sightings": sum(p.diagnostics.get("banner_sightings", 0) for p in parts),
             "own_row_sightings": sum(p.diagnostics.get("own_row_sightings", 0) for p in parts),
+            "headshot_icon_rows": {
+                k: sum(p.diagnostics.get("headshot_icon_rows", {}).get(k, 0) for p in parts)
+                for k in ("no", "unsure", "yes")},
             "seconds": round(sum(p.diagnostics.get("seconds", 0.0) for p in parts), 1),
         })

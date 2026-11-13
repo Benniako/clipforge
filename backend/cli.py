@@ -400,6 +400,7 @@ def _cmd_killfeed(args: argparse.Namespace, src: Path, info) -> int:
             payload = {
                 "events": [dataclasses.asdict(e) for e in result.events],
                 "rounds": [{"index": r.index, "label": r.label, "kills": r.count,
+                            "headshots": r.headshots,
                             "t_first": r.t_first, "t_last": r.t_last, "won": r.won,
                             "after_plant": r.after_plant,
                             "clutch": r.clutch.enemies if r.clutch is not None else None}
@@ -419,11 +420,13 @@ def _cmd_killfeed(args: argparse.Namespace, src: Path, info) -> int:
     if result is None:
         lines.append("no result: the video could not be scanned")
     else:
-        lines.append(f"{len(result.kills)} kill(s), {len(result.deaths)} death(s), "
+        headshots = sum(1 for k in result.kills if k.headshot)
+        lines.append(f"{len(result.kills)} kill(s), {headshots} headshot(s), "
+                     f"{len(result.deaths)} death(s), "
                      f"kill feed on screen for {result.active_s:.0f} s"
                      + ("" if healthy else "  [NOT read reliably]"))
         for r in result.rounds:
-            times = ", ".join(clock(k.t) for k in r.kills)
+            times = ", ".join(clock(k.t) + (" (headshot)" if k.headshot else "") for k in r.kills)
             outcome = {True: "round won", False: "round lost", None: ""}[r.won]
             clutch = f"clutch 1v{r.clutch.enemies}" if r.clutch is not None else ""
             notes = ", ".join(n for n in (clutch, outcome, "spike planted" if r.after_plant else "")

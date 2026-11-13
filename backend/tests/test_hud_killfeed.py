@@ -40,19 +40,58 @@ def _bgr(h: int, s: int, v: int) -> tuple[int, int, int]:
 TEAL, RED, YELLOW, WHITE = _bgr(85, 150, 180), _bgr(0, 200, 200), _bgr(27, 120, 220), (240, 240, 240)
 
 
+BOUNDARY = 480                      # where the victim's half of a test row starts
+
+
+def draw_reticle(img, y0: int) -> None:
+    """The headshot icon as the game draws it at 1440p: four bars around an
+    empty centre and four short arcs on the diagonals, white, its centre 27 px
+    left of the victim's half."""
+    cx, cy = BOUNDARY - 27, y0 + ROW // 2
+    for (x0, y0_, x1, y1_) in ((0, -16, 0, -5), (0, 5, 0, 16), (-15, 0, -6, 0), (6, 0, 15, 0)):
+        cv2.line(img, (cx + x0, cy + y0_), (cx + x1, cy + y1_), WHITE, 3)
+    for sx in (-1, 1):
+        for sy in (-1, 1):
+            mx, my = cx + sx * 9, cy + sy * 9
+            cv2.line(img, (mx - sy * 3, my + sx * 3), (mx + sy * 3, my - sx * 3), WHITE, 3)
+
+
+def draw_wallbang(img, y0: int) -> None:
+    """The wall-penetration icon in the same spot: an arrow into a bar."""
+    cx, cy = BOUNDARY - 27, y0 + ROW // 2
+    for dy in (-6, 0, 6):
+        cv2.line(img, (cx - 14, cy + dy), (cx + 4, cy + dy), WHITE, 2)
+    cv2.line(img, (cx + 4, cy - 9), (cx + 10, cy), WHITE, 3)
+    cv2.line(img, (cx + 4, cy + 9), (cx + 10, cy), WHITE, 3)
+    cv2.line(img, (cx + 15, cy - 15), (cx + 15, cy + 15), WHITE, 3)
+
+
+def draw_gun(img, y0: int) -> None:
+    """A rifle whose barrel reaches almost to the victim's half (no icon)."""
+    img[y0 + 13:y0 + 17, 300:BOUNDARY - 8] = WHITE       # barrel
+    img[y0 + 13:y0 + 33, 310:330] = WHITE                # grip
+
+
 def feed_image(rows: list[tuple[int, str]]) -> np.ndarray:
-    """Feed region with ``rows`` of ``(slot, kind)``; kind is own / mate / death."""
+    """Feed region with ``rows`` of ``(slot, kind)``.
+
+    ``kind`` is own / mate / death, optionally followed by what sits left of
+    the victim's half: ``+hs`` (headshot icon), ``+wb`` (wall-penetration
+    icon) or ``+gun`` (a long barrel and no icon), e.g. ``"own+hs"``.
+    """
     img = np.full((FEED[3], FEED[2], 3), 25, np.uint8)
-    for slot, kind in rows:
+    for slot, spec in rows:
+        kind, _, extra = spec.partition("+")
         y0 = 28 + 52 * slot
         y1 = y0 + ROW
         killer, victim = (RED, TEAL) if kind == "death" else (TEAL, RED)
-        img[y0:y1, 200:480] = killer
-        img[y0:y1, 480:EDGE] = victim
+        img[y0:y1, 200:BOUNDARY] = killer
+        img[y0:y1, BOUNDARY:EDGE] = victim
         if kind == "own":
             img[y0:y1, 175:200] = YELLOW                 # arrow tab, ~0.55 row heights
         if kind == "death":
-            img[y0 - 3:y0, 480:EDGE] = YELLOW            # outline along the victim's end
+            img[y0 - 3:y0, BOUNDARY:EDGE] = YELLOW       # outline along the victim's end
+        {"hs": draw_reticle, "wb": draw_wallbang, "gun": draw_gun}.get(extra, lambda *_: None)(img, y0)
     return img
 
 
@@ -126,6 +165,45 @@ def test_wide_yellow_block_is_a_teammates_portrait_not_an_own_kill():
     img = feed_image([(0, "mate")])
     img[28:28 + ROW, 140:200] = YELLOW                   # 1.3 row heights wide
     assert K.read_rows(img, float(ROW), EDGE)[0].own is None
+
+
+def test_read_rows_scores_the_headshot_icon():
+    rows = K.read_rows(feed_image([(0, "own+hs"), (1, "own+gun"), (2, "mate+hs"),
+                                   (3, "death+wb"), (4, "own")]), float(ROW), EDGE)
+    scores = [r.headshot for r in rows]
+    assert len(scores) == 5
+    assert scores[0] >= K.HEADSHOT_MIN and scores[2] >= K.HEADSHOT_MIN       # the icon
+    assert scores[1] < K.HEADSHOT_MIN                                        # a barrel is not one
+    assert scores[3] < K.HEADSHOT_MIN                                        # nor is the wallbang icon
+    assert scores[4] == 0.0                                                  # nothing there at all
+
+
+def test_headshot_score_handles_a_row_at_the_frame_edge():
+    white = np.zeros((40, 30), bool)
+    assert K.headshot_score(white, 0, 40, 10, 45.0) == 0.0                   # window too small
+    assert K.headshot_score(np.zeros((60, 200), bool), 5, 50, 150, 45.0) == 0.0   # blank
+
+
+def test_tracker_calls_a_headshot_by_majority():
+    def row(hs: float) -> K.FeedRow:
+        return K.FeedRow(y0=0, y1=45, killer="ally", victim="enemy", own="kill", strength=0.5,
+                         sig=np.zeros((6, 48), bool), headshot=hs)
+
+    for scores, want in (([0.7, 0.7, 0.1, 0.7], True),     # icon covered once
+                         ([0.1, 0.7, 0.1, 0.1], False),    # one stray match
+                         ([0.7, 0.1], True)):              # a tie keeps the icon
+        tracker = K.FeedTracker()
+        for i, s in enumerate(scores):
+            tracker.push(i * 0.5, [row(s)])
+        (event,) = tracker.finish()
+        assert event.headshot is want, scores
+
+
+def test_banner_kill_takes_the_headshot_from_its_feed_row():
+    feed = [K.KillEvent(t=20.0, kind="kill", confidence=0.8, t_last=24.0, headshot=True)]
+    out = K.merge_banner_kills(feed, [[20.5, 22.0, 0.9], [90.0, 91.5, 0.9]], interval=0.5)
+    assert [(e.sources, e.headshot) for e in out] == [(["banner", "feed"], True), (["banner"], False)]
+    assert "(headshot)" in out[0].detail and "(headshot)" not in out[1].detail
 
 
 def test_banner_present_needs_skull_and_ring():
@@ -216,9 +294,9 @@ def test_five_kills_in_a_round_is_an_ace():
 def _script(t):
     rows = [(3, "mate")] if t < 30 else []               # keeps the feed "in use"
     if 40 <= t < 47:
-        rows.append((0, "own"))
+        rows.append((0, "own+gun"))
     if 44 <= t < 48:
-        rows.append((1, "own"))
+        rows.append((1, "own+hs"))
     if 48 <= t < 52:
         rows.append((2, "death"))
     banner = 40 <= t < 42 or 44 <= t < 46 or 54 <= t < 56   # the last one: spectating
@@ -230,9 +308,12 @@ def test_track_killfeed_end_to_end():
     assert res is not None and res.healthy and res.samples == 120
     assert [round(e.t) for e in res.kills] == [40, 44]
     assert all(e.sources == ["banner", "feed"] for e in res.kills)
+    assert [e.headshot for e in res.kills] == [False, True]
     assert len(res.deaths) == 1 and round(res.deaths[0].t) == 48
-    assert [(r.label, r.count) for r in res.rounds] == [("double_kill", 2)]
+    assert [(r.label, r.count, r.headshots) for r in res.rounds] == [("double_kill", 2, 1)]
     assert res.diagnostics["round_starts"] == [0.0]
+    bands = res.diagnostics["headshot_icon_rows"]
+    assert bands["yes"] >= 6 and bands["unsure"] == 0
 
 
 def test_track_killfeed_on_other_footage_is_unhealthy_and_empty():
@@ -257,6 +338,29 @@ def test_killfeed_clips_score_multi_kills_higher():
     for c in clips:
         assert settings.min_len <= c.end - c.start <= settings.max_len
     assert clips[0].start <= 100.0 and clips[0].end >= 104.0
+
+
+def test_killfeed_clips_reward_and_name_headshots():
+    def kill(t, hs):
+        k = _kill(t)
+        k.headshot = hs
+        return k
+
+    kills = [kill(100.0, True), kill(300.0, True), kill(302.0, True), kill(500.0, False),
+             kill(700.0, True), kill(703.0, False)]
+    rounds = K.group_rounds(kills, starts=[90.0, 250.0, 450.0, 650.0])
+    res = K.KillfeedResult(events=kills, rounds=rounds, samples=100, sample_interval=0.5,
+                           active_s=60.0, healthy=True)
+    clips = DG._killfeed_clips(res, types.SimpleNamespace(duration=900.0),
+                               ImportSettings(game_profile="valorant"), lead=12.0, tail=4.0)
+    by_start = sorted(clips, key=lambda c: c.start)
+    assert [c.title.split(" — ")[0] for c in by_start] == [
+        "Headshot", "Double kill, all headshots", "Kill", "Double kill"]
+    single_hs, double_hs, single, double_one = by_start
+    assert single_hs.score == single.score + 2
+    assert double_hs.score == double_one.score + 2       # two headshots (+4) against one (+2)
+    assert any(f.label == "2 headshots" for f in double_hs.factors)
+    assert not any("headshot" in f.label for f in single.factors)
 
 
 # --- parallel scan ----------------------------------------------------------
