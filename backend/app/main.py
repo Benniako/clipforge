@@ -53,7 +53,7 @@ class SPAStaticFiles(StaticFiles):
 
 from . import feedback, store
 from .config import get_settings
-from .api import routes_clips, routes_cues, routes_projects
+from .api import routes_clips, routes_cues, routes_projects, routes_recordings
 from .pipeline.orchestrator import engine
 
 logging.basicConfig(level=logging.INFO,
@@ -164,6 +164,7 @@ def create_app() -> FastAPI:
     # PATCH handler from routes_clips for captions, speakers, layout and style.
     app.include_router(routes_projects.router)
     app.include_router(routes_cues.router)
+    app.include_router(routes_recordings.router)
 
     # Generated media (sources, clips, thumbnails). StaticFiles serves Range
     # requests, so <video> scrubbing works out of the box.

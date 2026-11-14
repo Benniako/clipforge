@@ -25,6 +25,52 @@ function mockResponse(body: unknown, ok = true, status = 200): Response {
   } as unknown as Response;
 }
 
+const projectInput = {
+  platform: "tiktok", power_mode: "balanced", min_len: 15, max_len: 60, target_clips: 10,
+  style_id: "bold-pop", language: "de", content_type: "auto", aspect: "9:16",
+  burn_captions: true, game_profile: "auto", tighten: false, denoise: false, motion: "none",
+  ai_boost: { emphasis: true, emoji: true, speakerColors: true, autoZoom: true, broll: false, hookCheck: true },
+  facecam_layout: "auto", use_ocr: false, use_vlm: false, use_cues: true, use_audio_events: false,
+  cue_learning: true, auto_length: false, lead_seconds: null, tail_seconds: null,
+};
+
+describe("importing recordings by path", () => {
+  it("lists recordings from /api/recordings", async () => {
+    const rows = [{ path: "C:\\Videos\\a.mp4", name: "a.mp4", folder: "C:\\Videos",
+                    size_bytes: 5, modified: 1, in_progress: false }];
+    fetchMock.mockResolvedValue(mockResponse(rows));
+    expect(await api.recordings()).toEqual(rows);
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/recordings");
+  });
+
+  it("sends the path in a form and uploads no file", async () => {
+    const sent: { method?: string; url?: string; body?: FormData } = {};
+    class FakeXhr {
+      status = 201;
+      statusText = "Created";
+      responseText = JSON.stringify({ id: "p9" });
+      upload: { onprogress: unknown } = { onprogress: null };
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      open(method: string, url: string) { sent.method = method; sent.url = url; }
+      setRequestHeader() {}
+      send(body: FormData) { sent.body = body; this.onload?.(); }
+    }
+    vi.stubGlobal("XMLHttpRequest", FakeXhr);
+    try {
+      const project = await api.createProject({ ...projectInput, local_path: "C:\\Videos\\match.mp4" });
+      expect(project).toEqual({ id: "p9" });
+      expect(sent.method).toBe("POST");
+      expect(sent.url).toBe("/api/projects");
+      expect(sent.body?.get("local_path")).toBe("C:\\Videos\\match.mp4");
+      expect(sent.body?.get("file")).toBeNull();
+      expect(sent.body?.get("platform")).toBe("tiktok");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
 describe("api client", () => {
   it("parses the error detail from a non-ok JSON response", async () => {
     fetchMock.mockResolvedValue(mockResponse({ detail: "clip not found" }, false, 404));

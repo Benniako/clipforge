@@ -248,6 +248,16 @@ export interface ProjectSummary {
   updated_at: number;
 }
 
+/** A video found in the user's recording folders, importable by path. */
+export interface Recording {
+  path: string;
+  name: string;
+  folder: string;
+  size_bytes: number;
+  modified: number;       // epoch seconds
+  in_progress: boolean;   // changed in the last seconds: OBS may still be writing it
+}
+
 export interface StatusPayload {
   id: string;
   status: ProjectStatus;

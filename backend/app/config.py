@@ -530,6 +530,14 @@ class Settings:
     # single-user tool processing your own VODs shouldn't reject them — set
     # this only to guard a small disk.
     max_upload_mb: int = int(os.environ.get("CLIPFORGE_MAX_UPLOAD_MB", "0"))
+    # How a video imported by its path gets into the project folder: "link"
+    # (default) makes a hard link — instant, no extra disk space, and deleting
+    # the project never touches the original — and copies when the data folder
+    # is on another drive; "copy" always copies, as before.
+    import_mode: str = os.environ.get("CLIPFORGE_IMPORT_MODE", "link").strip().lower()
+    # Extra folders the import screen lists recordings from (separated by ';'
+    # on Windows, ':' elsewhere), next to Videos and OBS's recording folders.
+    footage_dirs: str = os.environ.get("CLIPFORGE_FOOTAGE_DIRS", "")
     # Compute device for the neural models ("cpu" or "cuda").
     device: str = os.environ.get("CLIPFORGE_DEVICE", "cpu")
     # Batched-inference batch size for faster-whisper on GPU (BatchedInference

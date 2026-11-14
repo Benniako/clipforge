@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../lib/api";
 import type { CuesStatus } from "../lib/api";
-import type { Health, ProjectSummary, StyleTemplate } from "../lib/types";
+import type { Health, ProjectSummary, Recording, StyleTemplate } from "../lib/types";
 import { fmtDuration, timeAgo } from "../lib/format";
 import { useT } from "../lib/i18n";
 import Toast from "../components/Toast";
@@ -120,6 +120,20 @@ const CAPTION_PRESETS = [
 ];
 
 
+/** "3.9 GB" / "640 MB" for the recordings list. */
+function fmtSize(bytes: number): string {
+  const gb = bytes / 1024 ** 3;
+  return gb >= 1 ? `${gb.toFixed(1)} GB` : `${Math.max(1, Math.round(bytes / 1024 ** 2))} MB`;
+}
+
+/** Last part of a path: "C:\\Videos\\obs recording" -> "obs recording". */
+function lastPart(path: string): string {
+  const parts = path.split(/[\\/]/).filter(Boolean);
+  return parts[parts.length - 1] ?? path;
+}
+
+const RECORDINGS_SHOWN = 5;
+
 export default function Upload({ health }: { health: Health | null }) {
   const { t } = useT();
   const nav = useNavigate();
@@ -173,6 +187,10 @@ export default function Upload({ health }: { health: Health | null }) {
   const [batchUpload, setBatchUpload] = useState<{ index: number; total: number; name: string } | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
+  // Videos in the user's recording folders: imported by path, nothing uploaded.
+  const [recordings, setRecordings] = useState<Recording[]>([]);
+  const [picked, setPicked] = useState<string[]>([]);
+  const [showAllRec, setShowAllRec] = useState(false);
   const [capDefaultsApplied, setCapDefaultsApplied] = useState(false);
   const caps = health?.capabilities;
   const ocrAvailable = Boolean(caps?.ocr);
@@ -192,6 +210,7 @@ export default function Upload({ health }: { health: Health | null }) {
   useEffect(() => {
     api.styles().then(setStyles).catch(() => {});
     api.cues().then(setCues).catch(() => {});
+    api.recordings().then(setRecordings).catch(() => {});
     refreshProjects();
   }, []);
 
@@ -220,6 +239,7 @@ export default function Upload({ health }: { health: Health | null }) {
     if (!next.length) return;
     setFiles(next);
     setUrl("");
+    setPicked([]);
     if (fileRef.current) fileRef.current.value = "";
   }, []);
 
@@ -229,8 +249,14 @@ export default function Upload({ health }: { health: Health | null }) {
     selectFiles(e.dataTransfer.files);
   }, [selectFiles]);
 
+  const togglePicked = (path: string) => {
+    setPicked((prev) => (prev.includes(path) ? prev.filter((p) => p !== path) : [...prev, path]));
+    setFiles([]);
+    setUrl("");
+  };
+
   const submit = async () => {
-    if (!files.length && !url.trim()) {
+    if (!files.length && !picked.length && !url.trim()) {
       setErr(t("up.errNoSource"));
       return;
     }
@@ -294,6 +320,21 @@ export default function Upload({ health }: { health: Health | null }) {
         tail_seconds: manualContext ? tailSeconds : null,
         game_config: gameConfig,
       });
+
+      if (picked.length) {
+        // Recordings on this PC: the backend hard-links them, so this is instant.
+        const created = [];
+        for (let i = 0; i < picked.length; i += 1) {
+          setBatchUpload({ index: i + 1, total: picked.length, name: lastPart(picked[i]) });
+          created.push(await api.createProject({ ...createProjectInput(), url: undefined, local_path: picked[i] }));
+        }
+        await refreshProjects();
+        setBusy(false);
+        setBatchUpload(null);
+        setPicked([]);
+        if (created.length === 1) nav(`/p/${created[0].id}`);
+        return;
+      }
 
       if (files.length) {
         const created = [];
@@ -439,7 +480,10 @@ export default function Upload({ health }: { health: Health | null }) {
                 }
                 value={url}
                 disabled={urlDisabled}
-                onChange={(e) => setUrl(e.target.value)}
+                onChange={(e) => {
+                  setUrl(e.target.value);
+                  if (e.target.value) setPicked([]);
+                }}
               />
             </div>
           </>
@@ -453,6 +497,45 @@ export default function Upload({ health }: { health: Health | null }) {
           onChange={(e) => selectFiles(e.target.files)}
         />
       </div>
+
+      {recordings.length > 0 && (
+        <section className="card rec-card">
+          <div className="card-head">
+            <h3>{t("up.recTitle")}</h3>
+            <span className="muted tiny">{t("up.recHint")}</span>
+          </div>
+          <div className="rec-list">
+            {(showAllRec ? recordings : recordings.slice(0, RECORDINGS_SHOWN)).map((r) => {
+              const on = picked.includes(r.path);
+              return (
+                <button
+                  key={r.path}
+                  type="button"
+                  className={"rec-row" + (on ? " on" : "")}
+                  aria-pressed={on}
+                  title={r.path}
+                  disabled={busy}
+                  onClick={() => togglePicked(r.path)}
+                >
+                  <span className="rec-check" aria-hidden="true">{on ? "✓" : ""}</span>
+                  <span className="col">
+                    <span className="name">{r.name}</span>
+                    <span className="muted tiny">
+                      {lastPart(r.folder)} · {fmtSize(r.size_bytes)} · {timeAgo(r.modified, t)}
+                    </span>
+                  </span>
+                  {r.in_progress && <span className="drop-badge">{t("up.recLive")}</span>}
+                </button>
+              );
+            })}
+          </div>
+          {recordings.length > RECORDINGS_SHOWN && (
+            <button className="btn ghost sm" type="button" onClick={() => setShowAllRec((v) => !v)}>
+              {showAllRec ? t("up.recShowLess") : t("up.recShowAll", { count: recordings.length })}
+            </button>
+          )}
+        </section>
+      )}
 
       <section className="card">
         <div className="card-head">
@@ -956,7 +1039,7 @@ export default function Upload({ health }: { health: Health | null }) {
 
       <div className="submit-bar">
         <span className="submit-summary">
-          {file ? <b>{files.length > 1 ? t("up.batchVideoLabel", { count: files.length }) : file.name}</b> : url.trim() ? <b>{url.trim()}</b> : t("up.errNoSource")}
+          {file ? <b>{files.length > 1 ? t("up.batchVideoLabel", { count: files.length }) : file.name}</b> : picked.length ? <b>{picked.length > 1 ? t("up.recPicked", { count: picked.length }) : lastPart(picked[0])}</b> : url.trim() ? <b>{url.trim()}</b> : t("up.errNoSource")}
           {" · "}{aspect}{" · "}{autoLength ? t("up.autoLength") : LENGTHS[lenIdx].label}{" · "}{t("up.sumClips", { target })}
         </span>
         <button className="btn primary lg" onClick={submit} disabled={busy}>
@@ -981,7 +1064,11 @@ export default function Upload({ health }: { health: Health | null }) {
               </>
             )
           ) : (
-            <>{files.length > 1 ? t("up.generateBatch", { count: files.length }) : t("up.generateClips")}</>
+            <>
+              {files.length > 1 || picked.length > 1
+                ? t("up.generateBatch", { count: Math.max(files.length, picked.length) })
+                : t("up.generateClips")}
+            </>
           )}
         </button>
       </div>

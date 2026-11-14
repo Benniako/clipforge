@@ -543,7 +543,10 @@ async def create_project(
             if ext not in ingest.VIDEO_EXTS:
                 raise HTTPException(400, f"unsupported file type '{ext}'")
             dest = ingest.project_dir(project.id) / f"source{ext}"
-            shutil.copy2(str(p), str(dest))  # copy preserves metadata; move if same drive
+            # A hard link when the data folder is on the same drive (instant,
+            # no extra space, the original is never touched), else a copy.
+            how = await run_in_threadpool(ingest.place_local_source, p, dest)
+            log.info("imported %s by %s", p.name, how)
             src = await run_in_threadpool(
                 ingest.finalize_source, project, dest, filename=p.name, url=None)
         else:

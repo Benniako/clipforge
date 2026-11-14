@@ -8,6 +8,7 @@ its duration, dimensions, and whether it carries audio.
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 from pathlib import Path
 
@@ -35,6 +36,26 @@ def finalize_source(project: Project, path: Path, *, filename: str, url: str | N
     additionally handles the temp-file move.
     """
     return _finalize(project, path, filename=filename, url=url)
+
+
+def place_local_source(src: str | Path, dest: str | Path, *, mode: str | None = None) -> str:
+    """Put a local video at ``dest`` without copying it when possible.
+
+    A hard link takes no time and no disk space, and the original is never
+    touched: deleting the project removes only the link, and no pipeline step
+    writes into the source (they all write new files next to it). It needs
+    the data folder on the same drive; otherwise, or with ``mode`` (default:
+    the ``CLIPFORGE_IMPORT_MODE`` setting) ``"copy"``, the file is copied.
+    Returns ``"link"`` or ``"copy"``.
+    """
+    if (mode or get_settings().import_mode) != "copy":
+        try:
+            os.link(src, dest)
+            return "link"
+        except OSError as e:
+            log.info("hard link not possible (%s); copying %s instead", e, Path(src).name)
+    shutil.copy2(str(src), str(dest))
+    return "copy"
 
 
 def attach_source_file(project: Project, tmp_path: str | Path, filename: str) -> SourceMedia:

@@ -10,7 +10,7 @@ Everything runs on the local machine. No cloud API is called.
 
 | Area | Capability | Engine |
 |---|---|---|
-| Import | Local files, URLs (yt-dlp), batch CLI, resumable projects | ffmpeg 8, yt-dlp |
+| Import | Local files, URLs (yt-dlp), batch CLI, resumable projects; your recordings (Videos, OBS's folders) picked in the app and hard-linked instead of uploaded | ffmpeg 8, yt-dlp |
 | Speech | Transcription with word timing and speakers, German and English | whisperX, faster-whisper, pyannote |
 | EA FC goals | Reads the scoreboard: matches, every goal, the minute, who scored | `providers/hud` scoreboard tracker |
 | Valorant kills | Reads the kill banner and kill feed: own kills, deaths, double / triple / quadra kills and aces per round; round won or lost and spike plants from the top bar | `providers/hud/killfeed.py`, `providers/hud/valorant_rounds.py` |
@@ -50,7 +50,7 @@ No. The measurements point to these gaps, largest first:
 | Each detector decodes the video again | Scoreboard, kill feed, OCR, scene detection and the facecam search each start their own ffmpeg. The kill-feed scan itself is now parallel (48 s for 40 min, was 182 s) | Put the remaining detectors on the same pass (rest of R1) |
 | Recordings with several games | HUD trackers now run per game stretch (R2 done); audio cues and keyword OCR still use one profile per file | Per-stretch profiles for the remaining detectors |
 | GPU is mostly idle | Average GPU load 20 % over a full run | Follows from R1; batch OCR and VLM frames |
-| Source is copied into the data folder | 3.9 GB copy, 28 s, doubles disk use | Reference or hard-link local sources (R5) |
+| Source is copied into the data folder | Recordings picked in the app are now hard-linked (R5); a file dropped into the browser is still uploaded, and the CLI still copies | Hard-link in the CLI batch import too |
 | Football framing | The vertical crop now follows the ball (R4); clips with a facecam layout still show a fixed game pane | Ball-follow inside the facecam layouts |
 | Two engines do not load | PaddleOCR needs `opencv-contrib-python`, which conflicts with OpenCV 5; emotion2vec fetches from modelscope.cn, which answers 403 | RapidOCR on ONNX (R6); load emotion2vec from the local cache (R7) |
 | LLM cold start | First Ollama call can hit the 30 s timeout while the model loads | Warm the model during transcription (R7) |
@@ -66,7 +66,7 @@ No. The measurements point to these gaps, largest first:
 
 ### Soon
 
-- **R5 No-copy import** for local files, with a setting to keep the old behaviour.
+- **R5 No-copy import: done (2026-11-14).** The import screen lists "Deine Aufnahmen" from the Videos folder (two levels deep: OBS, Source Record, NVIDIA), the recording folders set in OBS's profiles and `CLIPFORGE_FOOTAGE_DIRS`, newest first; picked recordings are imported by path (`/api/recordings`, `local_path`). `ingest.place_local_source` hard-links the file into the project: no upload, no copy, no extra disk space, and deleting the project removes only the link (checked: same file, 2 links; after deleting the test project the recording was intact with 1 link). Another drive falls back to a copy; `CLIPFORGE_IMPORT_MODE=copy` restores the old behaviour. Not yet: the CLI batch import still copies, and a file dragged into the browser is still uploaded (a browser cannot reveal its path).
 - **R6 RapidOCR** (PP-OCRv5 models on `onnxruntime-gpu`) as the default text reader: faster than EasyOCR and no OpenCV conflict.
 - **R7 Engine reliability:** emotion2vec from the local cache, Ollama warm-up, a health line per engine in the UI that says why something is off.
 - **R8 Kill-feed names by OCR.** Read killer and victim names once per row; needed for "who killed whom" titles and as a second check on own kills ([montage_maker](https://github.com/rlmsinclair/montage_maker) works this way).

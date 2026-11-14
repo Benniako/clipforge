@@ -9,6 +9,7 @@ import type {
   Project,
   ProjectSummary,
   PublishContent,
+  Recording,
   StatusPayload,
   StyleTemplate,
 } from "./types";
@@ -67,6 +68,8 @@ export interface CreateProjectInput {
   name?: string;
   file?: File;
   url?: string;
+  /** A video on this PC: hard-linked into the project, nothing is uploaded. */
+  local_path?: string;
   platform: string;
   power_mode: string;
   min_len: number;
@@ -168,6 +171,9 @@ function parseXhrError(xhr: XMLHttpRequest): Error {
 
 export const api = {
   health: () => fetchWithTimeout("/api/health").then((r) => json<Health>(r)),
+
+  /** Recent videos in Videos and OBS's recording folders, newest first. */
+  recordings: () => fetchWithTimeout("/api/recordings").then((r) => json<Recording[]>(r)),
 
   /** AI-generated publish-ready content for a clip (titles, description, hashtags). */
   publishContent: (projectId: string, clipId: string, platform?: string) =>
@@ -351,6 +357,7 @@ export const api = {
         const fd = new FormData();
         appendProjectFormFields(fd, input);
         if (input.url) fd.set("url", input.url);
+        if (input.local_path) fd.set("local_path", input.local_path);
         if (input.file) fd.set("file", input.file);
 
         const xhr = new XMLHttpRequest();
