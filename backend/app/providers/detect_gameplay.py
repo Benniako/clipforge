@@ -560,6 +560,65 @@ _CLUTCH_SCORES = {1: 88, 2: 92, 3: 95, 4: 97, 5: 98}
 # Ceiling for cue / keyword-OCR / audio-event clips while the kill feed is read:
 # below a single kill, so an on-screen word or a kill sound never outranks one.
 KILLFEED_UNVERIFIED_CAP = _KILL_SCORES[1] - 1
+# While the streamer is dead the screen follows a teammate, so sounds, words
+# and loud moments there are not their play. Muted from a few seconds after
+# the death (the death and the reaction to it stay) to the round's end on the
+# top bar plus its banner.
+SPECTATE_GRACE_S = 3.0
+SPECTATE_ROUND_END_S = 5.0
+SPECTATE_BUY_S = 30.0      # a buy phase: nothing to miss before it is over
+SPECTATE_MAX_S = 150.0     # no round end read: a round's longest stretch
+
+
+def _spectating_spans(kills, duration: float) -> list[tuple[float, float]]:
+    """Stretches in which the streamer is dead and watches a teammate.
+
+    Each ends with its round on the top bar. The buy-phase plate also lights up
+    before a round is over (on the round-end banner, or on the scoreboard a
+    dead player opens: 13 s early on a real recording), so a round start only
+    caps a stretch at the end of that buy phase, which also covers a round end
+    the top bar did not show. Without round starts or results (deathmatch
+    respawns at once, or the rounds were not read) there are none.
+    """
+    if kills is None:
+        return []
+    diag = getattr(kills, "diagnostics", None) or {}
+    starts = sorted(float(s) for s in diag.get("round_starts", []))
+    ends = sorted(float(r["t"]) + SPECTATE_ROUND_END_S for r in diag.get("round_results", []))
+    if not starts and not ends:
+        return []
+    spans: list[tuple[float, float]] = []
+    for d in sorted(float(e.t) for e in kills.deaths):
+        a = d + SPECTATE_GRACE_S
+        bounds = [float(duration), d + SPECTATE_MAX_S]
+        bounds += [e for e in ends if e > d][:1]
+        bounds += [s + SPECTATE_BUY_S for s in starts if s > d][:1]
+        b = min(bounds)
+        if b <= a:
+            continue
+        if spans and a <= spans[-1][1]:
+            spans[-1] = (spans[-1][0], max(spans[-1][1], b))
+        else:
+            spans.append((a, b))
+    return spans
+
+
+def _in_spans(t: float, spans) -> bool:
+    return any(a <= t <= b for a, b in spans)
+
+
+def _drop_spectating(events: list, spans, *, ocr: bool = False) -> list:
+    """``events`` minus those from while the streamer was dead.
+
+    On-screen text that never makes a clip (a menu, the death screen) stays: it
+    is a record of what was shown, and a menu still mutes what is around it.
+    """
+    if not spans:
+        return events
+    return [e for e in events
+            if not _in_spans(float(e.t), spans)
+            or (ocr and (str(getattr(e, "label", "") or "").lower() in CONTEXT_OCR_LABELS
+                         or _is_menu_ocr_event(e)))]
 
 
 def _track_killfeed(src_path: str, info: MediaInfo, settings: ImportSettings,
@@ -813,6 +872,7 @@ def detect_gameplay(src_path: str, info: MediaInfo, settings: ImportSettings,
                     data={"detector": "valorant_rounds", "enemies": c["enemies"],
                           "until": c["t_end"]}))
     cap = _unverified_cap(hud, kills)
+    spectating = _spectating_spans(kills, info.duration)
 
     # On-screen text markers (VICTORY / ELIMINATED / GOAL / kill-feed).
     # For footage with audio we run OCR after finding likely moments, so it reads
@@ -823,9 +883,9 @@ def detect_gameplay(src_path: str, info: MediaInfo, settings: ImportSettings,
     ocr_events: list = []
     defer_ocr = bool(use_ocr and info.has_audio)
     if use_ocr and not defer_ocr:
-        ocr_events = _ocr_events_beside_hud(
+        ocr_events = _drop_spectating(_ocr_events_beside_hud(
             _find_ocr_events(src_path, info, settings, warnings_out=warnings_out),
-            hud, gate)
+            hud, gate), spectating, ocr=True)
 
     if not info.has_audio:
         clips = _uniform_fallback(info, settings)
@@ -865,6 +925,9 @@ def detect_gameplay(src_path: str, info: MediaInfo, settings: ImportSettings,
         cue_events = [e for e in cue_events if hud.allows(float(e.t))]
         audio_window_events = [e for e in audio_window_events
                                if hud.allows(float(e.t))]
+    # A kill sound or a cheer while the streamer is dead is a teammate's.
+    cue_events = _drop_spectating(cue_events, spectating)
+    audio_window_events = _drop_spectating(audio_window_events, spectating)
 
     if defer_ocr:
         focus_times = [float(e.t) for e in cue_events]
@@ -874,13 +937,14 @@ def detect_gameplay(src_path: str, info: MediaInfo, settings: ImportSettings,
                 peak_idxs, _thr, _floor = _pick_peaks(
                     times, rms, settings=settings, profile=profile)
                 focus_times += [float(times[i]) for i in peak_idxs
-                                if not gate or hud.allows(float(times[i]))]
+                                if (not gate or hud.allows(float(times[i])))
+                                and not _in_spans(float(times[i]), spectating)]
             except Exception as e:
                 log.warning("ocr focus peaks failed: %s", e)
-        ocr_events = _ocr_events_beside_hud(
+        ocr_events = _drop_spectating(_ocr_events_beside_hud(
             _find_ocr_events(src_path, info, settings, focus_times=focus_times,
                              warnings_out=warnings_out),
-            hud, gate)
+            hud, gate), spectating, ocr=True)
 
     menu_events = _menu_events(ocr_events, hud)
     audio_window_events = _suppress_audio_events_near_menu(
@@ -919,10 +983,15 @@ def detect_gameplay(src_path: str, info: MediaInfo, settings: ImportSettings,
     # fails the whole project, so then the gate stays open.
     gate_peaks = gate and (bool(goal_clips)
                            or any(hud.allows(float(times[i])) for i in peaks))
+    # The same for loud moments while the streamer is dead.
+    mute_spectating = bool(spectating) and (
+        bool(goal_clips) or any(not _in_spans(float(times[i]), spectating) for i in peaks))
     clips: list[GameplayClip] = []
     for idx in peaks:
         pt = float(times[idx])
         if gate_peaks and not hud.allows(pt):
+            continue
+        if mute_spectating and _in_spans(pt, spectating):
             continue
         if menu_times and any(abs(pt - mt) <= MENU_CONTEXT_WINDOW * 2.0 for mt in menu_times):
             continue

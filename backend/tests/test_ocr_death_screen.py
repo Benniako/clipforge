@@ -23,6 +23,7 @@ from app.models import ImportSettings  # noqa: E402
 from app.providers import detect_gameplay as DG  # noqa: E402
 from app.providers import detect_ocr as O  # noqa: E402
 from app.providers.audio_events import AudioEvent  # noqa: E402
+from app.providers.detect_cues import CueEvent  # noqa: E402
 from app.providers.detect_ocr import OcrEvent  # noqa: E402
 from app.providers.hud import killfeed as K  # noqa: E402
 
@@ -187,7 +188,8 @@ def _kills() -> K.KillfeedResult:
     kills = [K.KillEvent(t=t, kind="kill", confidence=0.9, t_last=t + 2.0,
                          sources=["banner", "feed"]) for t in (100.0, 300.0)]
     death = K.KillEvent(t=320.0, kind="death", confidence=0.9, t_last=324.0)
-    diagnostics = {"round_starts": [90.0, 250.0],
+    # The round start at 400 s ends the streamer's death at 320 s.
+    diagnostics = {"round_starts": [90.0, 250.0, 400.0],
                    "round_results": [{"t": 110.0, "winner": "ally", "score": [1, 0]}],
                    "spike_plants": [(150.0, 190.0)],
                    "clutches": [{"t": 400.0, "t_end": 420.0, "enemies": 2, "won": False,
@@ -205,34 +207,50 @@ OCR = [OcrEvent(t=104.0, label="death", text="kampfbericht", confidence=0.96),
        OcrEvent(t=470.0, label="victory", text="victory", confidence=0.96)]
 
 
-def _envelope():
-    """10 Hz loudness with bursts at 100 s, 200 s and 470 s (exact arithmetic)."""
+BURSTS = ((100.0, 0.8), (200.0, 0.6), (470.0, 0.7))
+
+
+def _envelope(bursts=BURSTS):
+    """10 Hz loudness with a burst at each (time, height) (exact arithmetic)."""
     import numpy as np
 
     idx = np.arange(int(DUR * 10))
     times = idx * 0.1
     rms = 0.01 + ((idx * 7919) % 6007) * 1e-8
-    for centre, amp in ((100.0, 0.8), (200.0, 0.6), (470.0, 0.7)):
+    for centre, amp in bursts:
         rms = rms + amp * np.clip(1.0 - np.abs(times - centre) / 3.0, 0.0, None)
     return times, rms.astype(np.float32)
 
 
-@pytest.mark.parametrize("mode", ["normal", "no_peaks", "no_rms", "no_audio"])
-def test_keyword_clips_rank_below_the_kill_feed(monkeypatch, mode):
+def _detect(monkeypatch, *, mode: str = "normal", kills=None, ocr=OCR, audio=(), cues=(),
+            bursts=BURSTS, peaks=None):
+    """detect_gameplay with the kill tracker and every detector faked.
+
+    ``peaks`` pins the loud moments (seconds) instead of picking them.
+    """
+    if peaks is not None:
+        idxs = [int(round(t * 10)) for t in peaks]
+        monkeypatch.setattr(DG, "_pick_peaks", lambda *a, **k: (list(idxs), 0.1, 0.01))
+    kills = _kills() if kills is None else kills
     monkeypatch.setattr(DG, "_track_hud", lambda *a, **k: None)
-    monkeypatch.setattr(DG, "_track_killfeed", lambda *a, **k: _kills())
-    monkeypatch.setattr(DG, "_find_ocr_events", lambda *a, **k: list(OCR))
-    monkeypatch.setattr(DG, "_cue_events", lambda wav, st: [])
-    monkeypatch.setattr(DG, "_audio_events", lambda *a, **k: [])
+    monkeypatch.setattr(DG, "_track_killfeed", lambda *a, **k: kills)
+    monkeypatch.setattr(DG, "_find_ocr_events", lambda *a, **k: list(ocr))
+    monkeypatch.setattr(DG, "_cue_events", lambda wav, st: list(cues))
+    monkeypatch.setattr(DG, "_audio_events", lambda *a, **k: list(audio))
     monkeypatch.setattr(DG, "_load_rms",
                         (lambda wav, **k: (None, None)) if mode == "no_rms"
-                        else (lambda wav, **k: _envelope()))
+                        else (lambda wav, **k: _envelope(bursts)))
     if mode == "no_peaks":
         monkeypatch.setattr(DG, "_pick_peaks", lambda *a, **k: ([], 0.0, 0.0))
-
     events: list = []
     clips = DG.detect_gameplay("unused.mp4", _info(has_audio=mode != "no_audio"), _settings(),
                                wav_path="unused.wav", events_out=events, warnings_out=[])
+    return clips, events
+
+
+@pytest.mark.parametrize("mode", ["normal", "no_peaks", "no_rms", "no_audio"])
+def test_keyword_clips_rank_below_the_kill_feed(monkeypatch, mode):
+    clips, events = _detect(monkeypatch, mode=mode)
 
     kills = [c for c in clips if c.features.get("hud")]
     others = [c for c in clips if not c.features.get("hud")]
@@ -252,3 +270,60 @@ def test_keyword_clips_rank_below_the_kill_feed(monkeypatch, mode):
     # The death recap is kept as an event.
     assert [(e.t, e.label) for e in events if e.source == "ocr" and not e.data] == [
         (104.0, "death"), (200.0, "kill"), (470.0, "victory")]
+
+
+# --------------------------------------------------------------------------- #
+# While the streamer is dead
+# --------------------------------------------------------------------------- #
+def _dead(deaths, *, starts=(), results=()) -> K.KillfeedResult:
+    events = [K.KillEvent(t=t, kind="death", confidence=0.9, t_last=t + 4.0) for t in deaths]
+    diagnostics = {"round_starts": list(starts),
+                   "round_results": [{"t": t, "winner": "enemy", "score": [0, 1]}
+                                     for t in results]}
+    return K.KillfeedResult(events=events, rounds=[], samples=1200, sample_interval=0.5,
+                            active_s=600.0, healthy=True, diagnostics=diagnostics)
+
+
+def test_spectating_runs_from_the_death_to_the_round_end():
+    # The Valorant cut: died at 66.2 s, the top bar showed the round lost at
+    # 110.9 s, and the buy-phase plate lit up early at 97.5 s (the scoreboard).
+    (span,) = DG._spectating_spans(
+        _dead([66.2], starts=[3.5, 97.5], results=[110.9]), 120.0)
+    assert span == pytest.approx((69.2, 115.9))
+    # A round end the top bar missed: the next buy phase is over 30 s after
+    # the plate, so the next round's play is never muted.
+    assert DG._spectating_spans(_dead([300.0], starts=[0.0, 340.0]), 600.0) == [(303.0, 370.0)]
+    # No later round marker at all: until the end of the footage at most.
+    assert DG._spectating_spans(_dead([500.0], starts=[0.0]), 600.0) == [(503.0, 600.0)]
+    # Deathmatch (no round starts or results) respawns at once: nothing is muted.
+    assert DG._spectating_spans(_dead([100.0]), 600.0) == []
+    assert DG._spectating_spans(None, 600.0) == []
+
+
+def test_nothing_from_a_teammate_while_the_streamer_is_dead(monkeypatch):
+    # _kills(): died at 320 s, the next round starts at 400 s (muted to 430 s).
+    ocr = OCR + [OcrEvent(t=350.0, label="defeat", text="verloren", confidence=0.96),
+                 OcrEvent(t=352.0, label="death", text="kampfbericht", confidence=0.96)]
+    audio = [AudioEvent(t=360.0, label="explosive_action", confidence=0.8, detail="CLAP")]
+    cues = [CueEvent(t=365.0, label="kill", similarity=0.95)]
+    for mode in ("normal", "no_peaks", "no_rms"):
+        clips, events = _detect(monkeypatch, mode=mode, ocr=ocr, audio=audio, cues=cues,
+                                bursts=BURSTS + ((350.0, 0.9),))
+        assert not any(323.0 <= c.peak_t <= 430.0 for c in clips), mode
+        assert sorted(c.title for c in clips) == [
+            "Kill — 1:40", "Kill — 3:20", "Kill — 5:00", "Victory — 7:50"], mode
+        seen = [(e.t, e.source, e.label) for e in events if 323.0 <= e.t <= 430.0]
+        # Only the death recap is left from those 107 s (plus the tracker's own
+        # clutch event at 400 s, read off the top bar).
+        assert seen == [(352.0, "ocr", "death"), (400.0, "ocr", "clutch_lost")], mode
+
+
+def test_loud_moments_while_dead_are_muted_unless_nothing_else_is_left(monkeypatch):
+    # No kills: died at 320 s, next round at 400 s, the loudest burst at 350 s.
+    clips, _ = _detect(monkeypatch, kills=_dead([320.0], starts=[0.0, 400.0]), ocr=[],
+                       bursts=BURSTS + ((350.0, 0.95),))
+    assert clips and not any(323.0 <= c.peak_t <= 400.0 for c in clips)
+    # Every loud moment while dead: keep them rather than return no clips at all.
+    clips, _ = _detect(monkeypatch, kills=_dead([90.0], starts=[0.0]), ocr=[],
+                       bursts=((100.0, 0.8), (200.0, 0.6)), peaks=[100.0, 200.0])
+    assert clips and all(93.0 <= c.peak_t <= 240.0 for c in clips)
