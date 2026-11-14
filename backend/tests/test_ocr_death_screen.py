@@ -1,10 +1,11 @@
-"""Death screens and round-state text in the keyword OCR, and keyword clips
-beside the Valorant kill tracker.
+"""Death screens, round-state text and map callouts in the keyword OCR, and
+keyword clips beside the Valorant kill tracker.
 
 RapidOCR reads Valorant's death recap ("GETÖTET VON …", "KAMPFBERICHT") and
 "RUNDE LÄUFT" cleanly, at ~0.96 confidence. Counted as kills or clutches they
-outscored the kills read off the kill banner. The texts below are real reads
-from a German Valorant recording.
+outscored the kills read off the kill banner. Map callouts such as "C Lobby"
+read as the lobby menu and muted the loud moments around them. The texts
+below are real reads from a German Valorant recording.
 
     cd backend && python -m pytest tests/test_ocr_death_screen.py -q
 """
@@ -78,6 +79,39 @@ def test_a_round_result_is_not_a_kill():
                                   "GEGNER GETÖTET", "HEADSHOT", "ENEMY DOUBLE KILL"])
 def test_kill_words_still_count(text):
     assert "kill" in _labels(text)
+
+
+# --------------------------------------------------------------------------- #
+# Map callouts are places, not menus
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("text", [
+    "C Lobby 1:33 100 3090 550 :13.09,00.5804228",          # mid-round, by the minimap
+    "A Lobby GETÖTET VON JETT 06 Oneshot3308 Eisblock VERURSACHT KAMPFBERICHT",
+    "Mid Shops 0:41", "B LOBBY", "ALobby 1:02",
+])
+def test_a_map_callout_is_not_a_menu(text):
+    assert "menu" not in _labels(text)
+    event = OcrEvent(t=48.0, label="death", text=f"kampfbericht | {text}", confidence=0.96)
+    assert not DG._is_menu_ocr_event(event)
+    assert DG._menu_events([event], None) == []
+
+
+@pytest.mark.parametrize("text", [
+    "LOBBY", "PARTY LOBBY", "MAIN MENU SETTINGS",
+    "0:22 SHOP R1 SEKUNDÄRWAFFEN MASCHINENPISTOLEN STURMGEWEHRE",   # the buy menu
+])
+def test_real_menus_still_count(text):
+    assert "menu" in _labels(text)
+    assert DG._is_menu_ocr_event(OcrEvent(t=1.0, label="kill", text=text, confidence=0.9))
+
+
+def test_a_callout_does_not_mute_the_moment_beside_it():
+    callout = OcrEvent(t=48.0, label="death", text="kampfbericht | C Lobby GETÖTET VON CLOVE",
+                       confidence=0.96)
+    menu = OcrEvent(t=48.0, label="menu", text="lobby | PARTY LOBBY", confidence=0.96)
+    audio = [AudioEvent(t=50.0, label="explosive_action", confidence=0.8, detail="CLAP")]
+    assert DG._suppress_audio_events_near_menu(audio, [callout]) == audio
+    assert DG._suppress_audio_events_near_menu(audio, [menu]) == []
 
 
 # --------------------------------------------------------------------------- #

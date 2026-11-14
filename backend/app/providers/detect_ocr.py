@@ -142,6 +142,14 @@ DEATH_OVERRULES = frozenset({"kill", "ace", "clutch", "eliminated"})
 
 _NORM_RE = re.compile(r"[^a-z0-9 ]+")
 _WS_RE = re.compile(r"\s+")
+# A map callout on the HUD ("A Lobby", "C Lobby", "Mid Shops" in Valorant) names
+# a spot in the match, not the game's lobby or shop menu.
+_CALLOUT_RE = re.compile(r"\b(?:[abc]|mid)\s*(?:lobby|shops?)\b", re.IGNORECASE)
+
+
+def strip_callouts(text: str) -> str:
+    """``text`` with map callouts such as "A Lobby" blanked out."""
+    return _CALLOUT_RE.sub(" ", text or "")
 
 
 def _norm(text: str) -> str:
@@ -198,7 +206,7 @@ def match_keywords(text: str, profile: str | None, *,
     retried with edit-distance matching, so stylized/garbled game text
     ("VICT0RY", "ELiMiNATED", "HEADSHOTI") still resolves to its marker.
     """
-    norm = _norm(text)
+    norm = _norm(strip_callouts(text))
     if not norm:
         return []
     padded = f" {norm} "

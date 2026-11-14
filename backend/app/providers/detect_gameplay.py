@@ -1126,7 +1126,9 @@ def _is_menu_ocr_event(event) -> bool:
     label = str(getattr(event, "label", "") or "").lower()
     if label in MENU_OCR_LABELS:
         return True
-    detail = str(getattr(event, "text", "") or getattr(event, "detail", "") or "").lower()
+    detail = str(getattr(event, "text", "") or getattr(event, "detail", "") or "")
+    # "A Lobby" on the minimap is a spot in the match, not the lobby menu.
+    detail = detect_ocr.strip_callouts(detail).lower()
     # If labelled scoreboard, drop if it matches menu words or lacks actual score numbers
     if label == "scoreboard":
         if any(word in detail for word in MENU_OCR_WORDS):
