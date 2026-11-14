@@ -28,6 +28,8 @@ _OPENCV_DISTRIBUTIONS = (
     "opencv-contrib-python",
 )
 _OCR_DISTRIBUTIONS = (
+    "rapidocr",
+    "onnxruntime",
     "paddleocr",
     "paddlepaddle",
     "easyocr",
@@ -162,11 +164,15 @@ def _detect_opencv_runtime() -> tuple[bool, str | None, tuple[str, ...]]:
 def _detect_ocr(has_gpu: bool | None = None) -> str:
     """Best available OCR backend for on-screen game text, or "" if none.
 
-    On GPU systems EasyOCR is preferred — it uses torch CUDA directly and
-    doesn't need the separate paddlepaddle-gpu package. PaddleOCR is more
-    accurate on static HUD text but falls to CPU inference on most installs
-    (no paddlepaddle-gpu), making it slower per-frame than EasyOCR GPU.
+    RapidOCR comes first: on this project's footage it read German HUD text
+    cleanly where EasyOCR garbled it (the Valorant buy plate, the EA FC clock,
+    loading screens), and its models ship inside the wheel and run on the CPU,
+    so it needs no download and no GPU memory; a full 1280-px frame takes about
+    as long as EasyOCR on the GPU. Otherwise EasyOCR on GPU systems (torch
+    CUDA, no paddlepaddle-gpu needed), then PaddleOCR, then EasyOCR on CPU.
     """
+    if _has_module("rapidocr"):
+        return "rapidocr"
     gpu = (_torch_cuda_available() or _detect_nvidia_gpu()) if has_gpu is None else has_gpu
     if gpu and _has_module("easyocr"):
         return "easyocr"
@@ -490,7 +496,7 @@ class Settings:
     has_nvenc: bool         # ffmpeg has the h264_nvenc encoder compiled in
     has_nvidia: bool        # an NVIDIA GPU + driver is actually present
     has_av1_nvenc: bool = False  # ffmpeg has av1_nvenc (RTX 40/50 series)
-    ocr_engine: str = ""    # on-screen text OCR: "easyocr"|"paddleocr"|""
+    ocr_engine: str = ""    # on-screen text OCR: "rapidocr"|"easyocr"|"paddleocr"|""
     ocr_packages: tuple[str, ...] = ()  # detected OCR-related package versions
     # --- optional power-ups (graceful: no-op when absent) ---------------
     has_vad: bool = False        # Silero VAD — snap captions to exact speech
@@ -511,6 +517,7 @@ class Settings:
     ollama_vision: str = "qwen3-vl:8b"  # vision model, smaller when VRAM tight
     has_openmodel: bool = False  # OpenModel.ai API key — cloud LLM replacement
     has_torchaudio: bool = False # wav2vec2 forced alignment for tighter captions
+    has_rapidocr: bool = False   # OCR engine (PP-OCRv6 on onnxruntime, models bundled)
     has_paddleocr: bool = False  # OCR engine (best accuracy overall)
     has_easyocr: bool = False    # OCR engine (best on noisy frames)
     has_tesseract: bool = False  # OCR fallback via pytesseract + tesseract binary
@@ -674,6 +681,10 @@ class Settings:
                      "Improved face detection. Replaces YuNet. ONNX GPU-accelerated."),
             ]},
             {"name": "ocr", "items": [
+                item("rapidocr", self.has_rapidocr,
+                     pkg_label("RapidOCR", "rapidocr"),
+                     "PP-OCRv6 on onnxruntime with models bundled in the package: the "
+                     "cleanest reads of German HUD text, scores and clocks. Used first."),
                 item("paddleocr", self.has_paddleocr,
                      pkg_label("PaddleOCR", "paddleocr"),
                      "Best overall OCR accuracy for in-game HUD text. "
@@ -876,6 +887,7 @@ class Settings:
             "vlm": self.has_ollama,
             "vlm_model": self.ollama_vision if self.has_ollama else None,
             "torchaudio": self.has_torchaudio,
+            "rapidocr": self.has_rapidocr,
             "paddleocr": self.has_paddleocr,
             "easyocr": self.has_easyocr,
             "tesseract": self.has_tesseract,
@@ -952,6 +964,7 @@ def get_settings() -> Settings:
         ollama_text="qwen3:14b" if (vram_mb > 14000 and has_cuda) else "qwen3:8b",
         ollama_vision="qwen3-vl:8b",
         has_torchaudio=_has_module("torchaudio"),
+        has_rapidocr=_has_module("rapidocr"),
         has_paddleocr=_has_module("paddleocr"),
         has_easyocr=_has_module("easyocr"),
         has_tesseract=_has_module("pytesseract") and bool(_find_executable("tesseract")),

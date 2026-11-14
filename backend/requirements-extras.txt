@@ -18,8 +18,11 @@ onnxruntime>=1.27
 # headless wheel, and both packages share the same cv2 namespace.
 scenedetect>=0.7
 
-# Gameplay on-screen text (kill banners / scorelines / VICTORY). PaddleOCR v6
-# is tried first when installed; EasyOCR remains the robust fallback.
+# Gameplay on-screen text (kill banners / scorelines / VICTORY). RapidOCR is
+# used first: PP-OCRv6 small models ship inside the wheel (no download), run on
+# the onnxruntime above, and read German HUD text cleanly where EasyOCR garbled
+# it. EasyOCR / PaddleOCR / Tesseract remain fallbacks.
+rapidocr>=3.10
 paddleocr>=3.7
 paddlepaddle>=3.3
 transformers>=4.57

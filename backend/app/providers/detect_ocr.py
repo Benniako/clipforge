@@ -9,7 +9,8 @@ installed, and matches the text against a per-game lexicon of viral markers.
 Backends, best-accuracy first (all optional — none installed ⇒ this returns
 nothing and the audio/cue path still works):
 
-  PaddleOCR (PP-OCRv6 -> PP-OCRv5) → EasyOCR (strong on noisy game overlays) → Tesseract.
+  RapidOCR (PP-OCRv6 small, bundled, onnxruntime) → PaddleOCR (PP-OCRv6 -> PP-OCRv5)
+  → EasyOCR (strong on noisy game overlays) → Tesseract.
 
 Only ~1 frame every couple of seconds is read, downscaled, so even a long VOD
 stays cheap. Pure helpers (keyword matching, frame-time sampling, de-dup) carry
@@ -26,10 +27,10 @@ import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 
+from .. import engine_status, visual_cues
 from ..config import get_settings
 from ..media import ffmpeg
 from ..media.ffmpeg import MediaInfo
-from .. import visual_cues
 
 log = logging.getLogger("clipforge.ocr")
 
@@ -444,6 +445,20 @@ def _make_easyocr(gpu: bool, langs: list[str] | None = None):
     return easyocr.Reader(langs or ["en"], gpu=gpu, verbose=False)
 
 
+# RapidOCR's detector by default enlarges every image to a 736-px short side,
+# which made a 280x115 HUD crop take 300 ms; only shrinking (longest side at
+# most 1280) read the same text in 80 ms and keeps full 1280-px frames intact.
+RAPID_PARAMS = {"Global.log_level": "warning",
+                "Det.limit_type": "max", "Det.limit_side_len": 1280}
+
+
+def _make_rapid():
+    """RapidOCR with its bundled PP-OCRv6 small models on onnxruntime (CPU)."""
+    from rapidocr import RapidOCR
+
+    return RapidOCR(params=dict(RAPID_PARAMS))
+
+
 def _make_surya():
     """Construct a Surya OCR RecognitionPredictor (VLM-based, GPU-accelerated).
 
@@ -470,7 +485,10 @@ def _get_reader(engine: str, lang: str = "en"):
         gpu = _easyocr_gpu_available()
         ocr_langs = {"de": ["de", "en"], "en": ["en"]}.get(lang[:2].lower(), ["en"])
         attempts = []
-        if engine == "paddleocr":
+        if engine == "rapidocr":
+            attempts.append(("rapidocr", _make_rapid))
+            attempts.append(("easyocr", lambda: _make_easyocr(gpu, ocr_langs)))
+        elif engine == "paddleocr":
             # PaddleOCR needs paddlepaddle compiled with CUDA — the PyPI package
             # and official CDN wheels for Windows are all CPU-only as of 2026.
             # Skip the GPU attempt entirely (it logs a scary "device not available"
@@ -492,9 +510,11 @@ def _get_reader(engine: str, lang: str = "en"):
                 # GPU model loads can hang indefinitely (CUDA deadlock). Wrap the
                 # constructor with a timeout so the CPU fallback gets a chance.
                 _reader = (kind, _try_with_timeout(make, timeout=15.0))
+                engine_status.clear(kind)
                 return _reader
             except Exception as e:
                 log.warning("%s OCR unavailable, trying fallback if present: %s", kind, e)
+                engine_status.report(kind, f"Could not start: {e}")
         _reader = ("", None)
         return _reader
 
@@ -564,6 +584,17 @@ def _paddle_read(reader, path: str) -> tuple[str, float]:
 
 def _paddle_text(reader, path: str) -> str:
     return _paddle_read(reader, path)[0]
+
+
+def _rapid_read(reader, path: str) -> tuple[str, float]:
+    """Text of one image and the mean line confidence, from RapidOCR."""
+    res = reader(path)
+    pairs = [(str(t), s) for t, s in zip(getattr(res, "txts", None) or (),
+                                         getattr(res, "scores", None) or ()) if t]
+    if not pairs:
+        return "", 0.0
+    mean = sum(float(s) for _t, s in pairs) / len(pairs)
+    return " ".join(t for t, _s in pairs), max(0.0, min(1.0, mean))
 
 
 def _is_garbled(text: str, threshold: float = 0.40) -> bool:
@@ -643,6 +674,8 @@ def _ocr_image_conf(path: str, engine: str, lang: str = "en") -> tuple[str, floa
     ocr_path, cleanup = _bounded_ocr_image(path)
     kind, reader = _get_reader(engine, lang)
     try:
+        if kind == "rapidocr":
+            return _rapid_read(reader, ocr_path)
         if kind == "paddleocr":
             return _paddle_read(reader, ocr_path)
         if kind == "easyocr":
@@ -664,7 +697,7 @@ def _ocr_image_conf(path: str, engine: str, lang: str = "en") -> tuple[str, floa
             return _surya_read(reader, ocr_path)
     except Exception as e:  # one bad frame mustn't sink detection
         log.warning("ocr read failed for %s: %s", path, e)
-        if engine == "paddleocr" and _easyocr_available():
+        if engine in ("paddleocr", "rapidocr") and _easyocr_available():
             try:
                 return _ocr_image_conf(path, "easyocr", lang)
             except Exception as e2:

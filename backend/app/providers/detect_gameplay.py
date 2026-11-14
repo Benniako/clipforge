@@ -137,7 +137,7 @@ def auto_detect_profile(src_path: str, n_samples: int = 5) -> str:
             for t in ts:
                 dst = os.path.join(td, f"f{t}.jpg")
                 grab_frame(src_path, dst, t=t, width=1280)
-                raw, _ = _ocr(dst, "easyocr", lang="de")
+                raw, _ = _ocr(dst, get_settings().ocr_engine or "easyocr", lang="de")
                 text_lower += " " + raw.lower()
 
         hits: dict[str, int] = {}

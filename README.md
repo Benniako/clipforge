@@ -231,7 +231,7 @@ multiple `opencv-*` packages, uninstall the duplicate GUI/contrib wheels so
 | **PANNs audio events** | Hears the *sounds* that signal a highlight — **cheering, laughter, applause, explosions** — as an explainable, zero-shot virality factor (no per-game cue needed). | `panns-inference` |
 | **Demucs clean voice** | Isolates the **voice** from background music / game audio so speech and captions sound studio-clean. Opt-in per project (*Clean voice*). | `demucs` |
 | **VLM vision read** | A local **vision-language second opinion** on virality from a clip's keyframes (expression, action, framing) — bounded & explainable, like the text re-rank. | `ollama pull qwen2.5vl` |
-| **OCR** | On-screen game text (kill banners, scorelines, VICTORY) → highlights, and **learns reusable audio cues** from them. | `easyocr` / `paddleocr` / `pytesseract` |
+| **OCR** | On-screen game text (kill banners, scorelines, VICTORY) → highlights, and **learns reusable audio cues** from them. RapidOCR is used first: its models ship in the wheel, it runs on the CPU, and it reads German HUD text cleanly. | `rapidocr` / `easyocr` / `paddleocr` / `pytesseract` |
 | **YOLO reframe** | Content-aware 9:16 — tracks people/objects through cuts when no face is visible. | `ultralytics` |
 | **SCRFD faces** | Stronger face detection for speaker-aware reframing than the OpenCV fallback. | `scrfd` |
 | **LR-ASD** | Active-speaker detection: crop & captions follow the *real* talker in multi-person shots. | clone [LR-ASD](https://github.com/Junhua-Liao/LR-ASD), set `CLIPFORGE_ASD_DIR` |

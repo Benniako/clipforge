@@ -550,6 +550,7 @@ def test_pick_readers_survives_missing_engines(monkeypatch):
     def boom(*_a, **_k):
         raise RuntimeError("not installed")
 
+    monkeypatch.setattr(R, "RapidOcrReader", boom)
     monkeypatch.setattr(R, "EasyOcrReader", boom)
     monkeypatch.setattr(R, "TesseractCliReader", boom)
     assert R.pick_readers() == (None, None)

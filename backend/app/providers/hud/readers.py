@@ -1,14 +1,19 @@
 """OCR back-ends for the scoreboard tracker, plus the string clean-up they need.
 
-Two engines, each used for what it measurably does well on real HUD pixels:
+Three engines, each measured on real HUD pixels:
 
+* **RapidOCR** (recognition only, PP-OCRv6 small, models bundled; used first
+  when installed) — reads both the score digits and the ``MM:SS`` clock
+  line. On the 16.6-min EA FC recording it gave the same 9 goals and minutes
+  as EasyOCR + Tesseract, faster (13 s against 16 s); on the 40-min Valorant
+  match it read 829 of 1174 score plates against EasyOCR's 596.
 * **EasyOCR** (recognition only, no text detection) — read every isolated bold
   score digit correctly, where Tesseract returned nothing for 0, 4, 5 and 6.
 * **Tesseract** (the plain ``tesseract`` binary; no Python wrapper needed) —
   read the ``MM:SS`` clock line correctly, where EasyOCR turned the colon into
   an "8".
 
-Either one alone is enough: the tracker fills digits the engine cannot read
+Any one alone is enough: the tracker fills digits the engine cannot read
 from the rule that a score only ever goes up by one, and the clock parser
 repairs a colon that came back as a digit.
 """
@@ -130,6 +135,53 @@ class EasyOcrReader:
 
 
 # --------------------------------------------------------------------------- #
+# RapidOCR — recognition only (PP-OCRv6 small, bundled with the package)
+# --------------------------------------------------------------------------- #
+# Letters the recogniser returns for digit shapes; applied only to characters
+# outside the wanted charset, since RapidOCR has no allow-list of its own.
+_DIGIT_LOOKALIKES = str.maketrans({"O": "0", "o": "0", "D": "0", "I": "1", "l": "1",
+                                   "|": "1", "S": "5", "s": "5", "B": "8"})
+
+
+def restrict(text: str, charset: str) -> str:
+    """``text`` limited to ``charset``, after mapping digit look-alikes."""
+    mapped = "".join(ch if ch in charset else ch.translate(_DIGIT_LOOKALIKES)
+                     for ch in (text or "").replace(" ", ""))
+    return "".join(ch for ch in mapped if ch in charset)
+
+
+class RapidOcrReader:
+    """RapidOCR without its text detector: the tracker already knows where the
+    text is. Measured on the EA FC clock strip: ``35:32`` at 0.9998 in 9.5 ms
+    a read on the CPU (314 ms with the detector), where EasyOCR read the colon
+    as an 8."""
+    name = "rapidocr"
+
+    def __init__(self) -> None:
+        from rapidocr import RapidOCR
+
+        self._engine = RapidOCR(params={"Global.log_level": "warning",
+                                        "Global.use_det": False, "Global.use_cls": False})
+
+    def _recognize(self, img, charset: str) -> tuple[str, float]:
+        if img is None or getattr(img, "size", 0) == 0:
+            return "", 0.0
+        res = self._engine(img, use_det=False, use_cls=False, use_rec=True)
+        txts = getattr(res, "txts", None) or ()
+        scores = getattr(res, "scores", None) or ()
+        if not txts:
+            return "", 0.0
+        conf = float(scores[0]) if scores else 0.0
+        return restrict(str(txts[0]), charset), max(0.0, min(1.0, conf))
+
+    def read_digits(self, img) -> tuple[str, float]:
+        return self._recognize(img, DIGITS)
+
+    def read_line(self, img, charset: str) -> tuple[str, float]:
+        return self._recognize(img, charset)
+
+
+# --------------------------------------------------------------------------- #
 # Tesseract — the command-line binary
 # --------------------------------------------------------------------------- #
 def _tessdata_dir(exe: str) -> str | None:
@@ -220,10 +272,16 @@ class TesseractCliReader:
 def pick_readers() -> tuple[Reader | None, Reader | None]:
     """``(digit_reader, line_reader)`` from what is installed.
 
-    Digits prefer EasyOCR, the clock line prefers Tesseract; whichever engine
-    is missing is covered by the other. ``(None, None)`` when neither works —
-    the tracker then relies on the score-only-goes-up rule alone.
+    RapidOCR reads both when installed. Otherwise digits prefer EasyOCR, the
+    clock line prefers Tesseract, and whichever engine is missing is covered
+    by the other. ``(None, None)`` when none works — the tracker then relies
+    on the score-only-goes-up rule alone.
     """
+    try:
+        rapid = RapidOcrReader()
+        return rapid, rapid
+    except Exception as e:
+        log.info("hud: RapidOCR not usable (%s)", e)
     easy: Reader | None = None
     tess: Reader | None = None
     try:
