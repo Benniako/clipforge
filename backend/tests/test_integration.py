@@ -133,8 +133,14 @@ class TestProjectLifecycle:
         store.delete(p.id)
         assert store.get(p.id) is None
 
-    def test_project_enqueue_and_status(self):
+    def test_project_enqueue_and_status(self, monkeypatch):
         """Enqueuing a project transitions it to queued status."""
+        import queue
+
+        # setup_method started the worker, which would take this job at once
+        # and fail it (the project has no source), sometimes before the status
+        # is read back (seen on CI). Hand enqueue a queue no worker reads.
+        monkeypatch.setattr(engine, "_q", queue.Queue())
         p = Project(
             name="Queue Test",
             status=ProjectStatus.created,
@@ -145,6 +151,8 @@ class TestProjectLifecycle:
         loaded = store.get(p.id)
         assert loaded.status == ProjectStatus.queued
         assert loaded.progress.stage == "queued"
+        assert engine._q.get_nowait() == p.id
+        engine._queued_projects.discard(p.id)
 
     def test_pipeline_stage_order(self):
         """The pipeline stage list is well-defined and in order."""
