@@ -79,6 +79,7 @@ export default function ClipCard({ clip, projectId, rank, selected, onToggleSele
         onClick={open}
         role="button"
         tabIndex={0}
+        aria-label={clip.title || t("cc.untitled")}
         onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } }}
       >
         <StatusChip status={clip.status} />
@@ -90,8 +91,10 @@ export default function ClipCard({ clip, projectId, rank, selected, onToggleSele
               e.stopPropagation();
               onToggleSelect(clip.id);
             }}
+            role="checkbox"
+            aria-checked={!!selected}
             title={t("cc.selectTitle")}
-className={"thumb-select" + (selected ? " on" : "")}
+            className={"thumb-select" + (selected ? " on" : "")}
           >
             {selected ? "✓" : ""}
           </span>
@@ -109,60 +112,75 @@ className={"thumb-select" + (selected ? " on" : "")}
         </span>
       </div>
       <div className="clip-body">
-        <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
+        <div className="clip-top">
           <ScoreBadge score={clip.score} />
-          {ready && (
+          <div className="rate-pair">
             <button
-              className={"copy-tiktok-btn" + (copied ? " copied" : "")}
-              onClick={copyCaption}
-              title="Copy formatted viral caption and tags for TikTok, Reels & Shorts"
+              className={"rate-btn up" + (fb === "up" ? " on" : "")}
+              title={t("cc.likeTitle")}
+              aria-pressed={fb === "up"}
+              onClick={(e) => rate(e, "up")}
             >
-              <span>{copied ? "Copied" : "Copy caption"}</span>
+              {t("cc.like")}
             </button>
-          )}
+            <button
+              className={"rate-btn down" + (fb === "down" ? " on" : "")}
+              title={t("cc.dislikeTitle")}
+              aria-pressed={fb === "down"}
+              onClick={(e) => rate(e, "down")}
+            >
+              {t("cc.dislike")}
+            </button>
+          </div>
         </div>
         <div className="clip-title" onClick={open} role="button" tabIndex={0}
              onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } }}>
           {clip.title || t("cc.untitled")}
         </div>
-        <div className="factors">
-          {clip.factors.slice(0, 3).map((f, i) => (
-            <span className="factor" key={i} title={f.detail}>
-              {f.label}
-              <span className="w">+{Math.round(f.weight)}</span>
-            </span>
-          ))}
+        <div className="clip-span muted tiny">
+          {t("cc.inSource", { start: fmtClock(clip.start), end: fmtClock(clip.end) })}
         </div>
+        {clip.factors.length > 0 && (
+          <div className="factors inline">
+            {clip.factors.slice(0, 3).map((f, i) => (
+              <span className="factor" key={i} title={f.detail}>
+                {f.label}
+                <span className="w">+{Math.round(f.weight)}</span>
+              </span>
+            ))}
+          </div>
+        )}
         {/* Quick trim: drag the two ends to nudge clip start/end before re-render. */}
         {ready && (
-          <div className="clip-trim">
-            <div className="row" style={{ justifyContent: "space-between", fontSize: 11 }}>
-              <span className="muted tiny">{fmtClock(clip.start)}</span>
-              <span className="muted tiny">{fmtClock(clip.end)}</span>
+          <details className="clip-trim">
+            <summary>{t("cc.trim")}</summary>
+            <div className="clip-trim-body">
+              <label>
+                <span className="muted tiny">{t("cc.trimStart")} {fmtClock(clip.start)}</span>
+                <input
+                  type="range"
+                  min={Math.max(0, clip.start - 5)}
+                  max={Math.max(clip.start + 1, clip.end - 3)}
+                  step={0.1}
+                  value={clip.start}
+                  onChange={(e) => { void api.trimClip(projectId, clip.id, { start: Number(e.target.value) }); }}
+                  title={t("cc.trimStart")}
+                />
+              </label>
+              <label>
+                <span className="muted tiny">{t("cc.trimEnd")} {fmtClock(clip.end)}</span>
+                <input
+                  type="range"
+                  min={Math.min(clip.start + 3, clip.end + 5)}
+                  max={clip.end + 5}
+                  step={0.1}
+                  value={clip.end}
+                  onChange={(e) => { void api.trimClip(projectId, clip.id, { end: Number(e.target.value) }); }}
+                  title={t("cc.trimEnd")}
+                />
+              </label>
             </div>
-            <div className="row" style={{ gap: 4 }}>
-              <input
-                type="range"
-                min={Math.max(0, clip.start - 5)}
-                max={Math.max(clip.start + 1, clip.end - 3)}
-                step={0.1}
-                value={clip.start}
-                onChange={(e) => { void api.trimClip(projectId, clip.id, { start: Number(e.target.value) }); }}
-                style={{ flex: 1, height: 14 }}
-                title="Trim start"
-              />
-              <input
-                type="range"
-                min={Math.min(clip.start + 3, clip.end + 5)}
-                max={clip.end + 5}
-                step={0.1}
-                value={clip.end}
-                onChange={(e) => { void api.trimClip(projectId, clip.id, { end: Number(e.target.value) }); }}
-                style={{ flex: 1, height: 14 }}
-                title="Trim end"
-              />
-            </div>
-          </div>
+          </details>
         )}
         <div className="card-actions">
           <button className="btn sm ghost" onClick={open}>
@@ -183,28 +201,20 @@ className={"thumb-select" + (selected ? " on" : "")}
               href={api.downloadSrtUrl(projectId, clip.id)}
               download
               title={t("cc.srtTitle")}
-              style={{ padding: "7px 9px", fontSize: 12 }}
             >
               .srt
             </a>
           )}
-          <div className="spacer" style={{ flex: 1 }} />
-          <button
-            className="btn sm ghost"
-            title={t("cc.likeTitle")}
-            onClick={(e) => rate(e, "up")}
-            style={{ padding: "7px 9px", color: fb === "up" ? "var(--good)" : undefined }}
-          >
-            {t("cc.like")}
-          </button>
-          <button
-            className="btn sm ghost"
-            title={t("cc.dislikeTitle")}
-            onClick={(e) => rate(e, "down")}
-            style={{ padding: "7px 9px", color: fb === "down" ? "var(--bad)" : undefined }}
-          >
-            {t("cc.dislike")}
-          </button>
+          <div className="spacer" />
+          {ready && (
+            <button
+              className={"copy-tiktok-btn" + (copied ? " copied" : "")}
+              onClick={copyCaption}
+              title={t("cc.copyCaptionTitle")}
+            >
+              {copied ? t("cc.copied") : t("cc.copyCaption")}
+            </button>
+          )}
         </div>
       </div>
     </div>

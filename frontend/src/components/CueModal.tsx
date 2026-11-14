@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../lib/api";
 import type { CuesStatus } from "../lib/api";
-import { useT, LanguageToggle } from "../lib/i18n";
+import { useT } from "../lib/i18n";
 import CueLab from "./CueLab";
 import CueManager from "./CueManager";
 
@@ -39,7 +39,6 @@ export default function CueModal({ onClose }: { onClose: () => void }) {
         <div className="row" style={{ justifyContent: "space-between", marginBottom: 8 }}>
           <h3>{t("cues.title")}</h3>
           <div className="row" style={{ gap: 8 }}>
-            <LanguageToggle />
             <button className="btn ghost sm" onClick={onClose}>
               {t("cues.close")}
             </button>
