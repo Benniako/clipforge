@@ -28,6 +28,13 @@ def box(x: float, y: float, size: float = 14.0, conf: float = 0.6):
     return (cx - size / 2, cy - size / 2, cx + size / 2, cy + size / 2, conf)
 
 
+def flat_box(x: float, y: float, conf: float = 0.79):
+    """A 14x7-px box: how the penalty spot, a white disc on the grass seen from the
+    raised camera, reads in EA FC 27 at 1440p (the ball itself reads 14x14)."""
+    cx, cy = x * W, y * H
+    return (cx - 7.0, cy - 3.5, cx + 7.0, cy + 3.5, conf)
+
+
 def test_follows_football_only(monkeypatch):
     assert B.follows("eafc") and B.follows("FIFA") and B.follows("EA FC")
     assert not B.follows("valorant") and not B.follows(None)
@@ -43,6 +50,13 @@ def test_candidates_skip_hud_shapes_and_big_round_things():
              box(0.6, 0.3, size=44.0),      # a name-tag icon: too big for the ball
              box(0.7, 0.4, conf=0.05)]      # too unsure
     assert B.candidates_from_boxes(boxes, W, H) == [C(0.5, 0.3, 0.6)]
+
+
+def test_candidates_skip_flat_pitch_markings():
+    # In the goal clips the penalty spot read as a ball at up to 0.79, more sure than
+    # the ball itself; it is twice as wide as tall.
+    boxes = [flat_box(0.24, 0.47), box(0.51, 0.27, conf=0.45)]
+    assert B.candidates_from_boxes(boxes, W, H) == [C(0.51, 0.27, 0.45)]
 
 
 def test_best_track_prefers_the_ball_over_a_brief_white_boot():
@@ -65,6 +79,29 @@ def test_best_track_follows_the_ball_through_a_camera_cut():
     track = B.best_track(samples)
     assert len(track) == 16 and track[0][1] == 0.30 and track[-1][1] == 0.75
     assert B.best_track([]) == [] and B.best_track([(0.0, [])]) == []
+
+
+def _path(xs, conf: float = 0.5, t0: float = 0.0):
+    """A path through one candidate per 0.25-s sample."""
+    return [(t0 + i * 0.25, C(round(x, 3), 0.4, conf)) for i, x in enumerate(xs)]
+
+
+def test_drop_detours_skips_short_visits_and_keeps_real_moves():
+    ramp = [0.40 + 0.01 * i for i in range(12)]
+    # One sample on a white boot 0.15 to the right, two on something 0.2 to the left.
+    visits = [x + 0.15 if i == 4 else x - 0.20 if i in (8, 9) else x for i, x in enumerate(ramp)]
+    assert B.drop_detours(_path(visits)) == [p for i, p in enumerate(_path(ramp))
+                                             if i not in (4, 8, 9)]
+    # Followed: a camera cut (the ball reappears elsewhere and stays), a ball that stays
+    # out longer than DETOUR_S, a wobble smaller than DETOUR_X, and a short visit to a
+    # sure ball: the shot into the net just before the game cuts to the celebration.
+    cut = _path([0.30 if i < 6 else 0.75 for i in range(12)])
+    held = _path([0.60 if 4 <= i < 8 else 0.40 for i in range(12)])
+    wobble = _path([0.52 if i % 2 else 0.50 for i in range(12)])
+    shot = _path(ramp[:6]) + [(1.5, C(0.25, 0.42, B.SURE_CONF))] + _path([0.45] * 4, t0=1.75)
+    for path in (cut, held, wobble, shot):
+        assert B.drop_detours(path) == path
+    assert B.drop_detours([]) == [] and B.drop_detours(_path(ramp[:2])) == _path(ramp[:2])
 
 
 def test_camera_path_holds_in_the_dead_zone_pans_at_a_limit_and_stays_in_frame():
@@ -100,6 +137,29 @@ def test_ball_keyframes_pan_with_the_ball():
                            detector=detector)
     assert kfs and kfs[0].t == 0.0 and kfs[-1].t <= 20.0
     assert kfs[-1].cx > kfs[0].cx + 0.25                        # followed the ball to the right
+
+
+def test_ball_keyframes_never_pan_out_and_back_for_a_moment():
+    # The ball drifts slowly right. At sample 30 it is hidden and a white boot 0.15 to
+    # its right reads as a ball; at samples 50-51 the penalty spot 0.2 to its left reads
+    # as a surer ball than the ball itself. The crop visits neither: it only moves right.
+    def detector(frames):
+        out = []
+        for f in frames:
+            x = 0.40 + 0.002 * f
+            if f == 30:
+                out.append([box(x + 0.15, 0.45, conf=0.5)])
+            elif f in (50, 51):
+                out.append([box(x, 0.40, conf=0.45), flat_box(x - 0.20, 0.47)])
+            else:
+                out.append([box(x, 0.40)])
+        return out
+
+    kfs = B.ball_keyframes("x.mp4", 100.0, 120.0, INFO, frame_source=_source(100.0, 20.0, 80),
+                           detector=detector)
+    cxs = [k.cx for k in kfs]
+    assert all(b >= a for a, b in zip(cxs, cxs[1:])), cxs
+    assert cxs[-1] > cxs[0] + 0.08                              # and still follows the ball
 
 
 def test_ball_keyframes_give_up_without_enough_ball():

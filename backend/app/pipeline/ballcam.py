@@ -9,11 +9,16 @@ speaker tracker produces, so the renderer pans to follow it.
   8-px ball (1440p, zoomed-out camera) is still seen: over a 16-s goal
   sequence it was found in 65 of 80 samples at 0.3-0.85 confidence. Round HUD
   shapes (the ball icon in the radar, the PlayStation icon in name tags,
-  teammates' arrows) are masked out or too big.
+  teammates' arrows) are masked out or too big. Painted spots on the grass
+  (the penalty spot read as a ball at up to 0.79) are flat from the raised
+  camera, about twice as wide as tall, so boxes that wide are skipped.
 * **Track**: the path through the detections that earns the most confidence
   for the least implausible movement (a longest path over the samples). A
   short run of a white boot cannot outweigh the real ball, and a camera cut
-  costs a fixed price instead of an impossible jump.
+  costs a fixed price instead of an impossible jump. A target the path holds
+  for half a second or less beside the ball is then dropped, unless the
+  detector was sure of it (the shot into the net just before the cut to the
+  celebration): the crop would pan over to it and straight back.
 * **Camera**: a dead zone keeps the crop still while the ball moves around
   its middle; then the One-Euro filter and a speed limit smooth the pan.
 """
@@ -34,6 +39,7 @@ BALL_IMGSZ = 1920
 BALL_CLASS = 32            # COCO "sports ball"
 MIN_CONF = 0.10
 MAX_BALL_H = 0.02          # box width as a share of the frame height (the ball reads ~0.01)
+FLAT_MIN = 1.5             # box width / height of a painted spot (reads ~2; the ball ~1)
 BATCH = 8
 # HUD areas (frame fractions x0, y0, x1, y1) where a round shape is never the match ball.
 HUD_MASK = (
@@ -49,6 +55,11 @@ SKIP_COST = 0.05           # per sample without the ball (it is often hidden by 
 RESTART_COST = 0.8         # a camera cut: the ball reappears anywhere
 MAX_SKIP = 12              # samples a track may jump over (3 s at 4 fps)
 MIN_COVERAGE = 0.3         # share of samples on the track needed to follow it
+# A run the track holds this long or less (first to last sample) that lies DETOUR_X or
+# more beyond the track on both sides is a detour: the crop would pan over and back.
+DETOUR_S = 0.5
+DETOUR_X = 0.03            # frame widths, about a tenth of the 9:16 crop
+SURE_CONF = 0.6            # a detection this sure is the ball: a short visit to it is followed
 # Camera.
 DEAD_ZONE = 0.05           # the ball may drift this far (frame widths) before the crop pans
 MAX_SPEED = 0.6            # crop pan limit, frame widths per second
@@ -85,6 +96,8 @@ def candidates_from_boxes(boxes, width: int, height: int) -> list[Candidate]:
         cx, cy = (x0 + x1) / 2 / width, (y0 + y1) / 2 / height
         if conf < MIN_CONF or (x1 - x0) / height > MAX_BALL_H:
             continue
+        if x1 - x0 >= FLAT_MIN * (y1 - y0):      # a painted spot on the grass
+            continue
         if any(a <= cx <= c and b <= cy <= d for a, b, c, d in HUD_MASK):
             continue
         out.append(Candidate(round(cx, 4), round(cy, 4), round(float(conf), 3)))
@@ -98,7 +111,8 @@ def best_track(samples: list[tuple[float, list[Candidate]]], aspect: float = 16 
     A longest path over the samples: a node per candidate and an edge to every
     candidate up to MAX_SKIP samples later. Taking a candidate earns its
     confidence; skipped samples, movement faster than V_MAX and camera cuts
-    cost (a cut never costs more than RESTART_COST).
+    cost (a cut never costs more than RESTART_COST). Short detours are then
+    dropped (drop_detours).
     """
     nodes = [(i, float(t), c) for i, (t, cs) in enumerate(samples) for c in cs]
     if not nodes:
@@ -118,11 +132,50 @@ def best_track(samples: list[tuple[float, list[Candidate]]], aspect: float = 16 
             if score[j] + c.conf - cost > score[k]:
                 score[k], prev[k] = score[j] + c.conf - cost, j
     k = max(range(len(nodes)), key=lambda n: score[n])
-    out: list[tuple[float, float]] = []
+    path: list[tuple[float, Candidate]] = []
     while k >= 0:
-        out.append((nodes[k][1], nodes[k][2].x))
+        path.append((nodes[k][1], nodes[k][2]))
         k = prev[k]
-    return out[::-1]
+    return [(t, c.x) for t, c in drop_detours(path[::-1])]
+
+
+def drop_detours(path: list[tuple[float, Candidate]]) -> list[tuple[float, Candidate]]:
+    """``path`` without detours: runs held for DETOUR_S or less, with no sure ball
+    (SURE_CONF) in them, that lie DETOUR_X or more beyond the points on both sides.
+
+    The longest path takes any candidate the ball could have reached, so a white
+    boot beside the ball, or a guess during a camera cut, costs it nothing, and the
+    crop pans over and straight back. Without the run, the ball's path is the line
+    between its neighbours. Kept: a cut (the ball stays at the new place), a ball
+    that stays out longer, and a sure ball (the shot into the net just before the
+    game cuts to the celebration).
+    """
+    pts = list(path)
+    changed = True
+    while changed:
+        changed = False
+        k = 1
+        while k < len(pts) - 1:
+            n = _detour_len(pts, k)
+            if n:
+                del pts[k:k + n]
+                changed = True
+            else:
+                k += 1
+    return pts
+
+
+def _detour_len(pts: list[tuple[float, Candidate]], k: int) -> int:
+    """Points in the shortest detour that starts at ``pts[k]``, or 0."""
+    for n in range(1, len(pts) - k):
+        t, last = pts[k + n - 1]
+        if t - pts[k][0] > DETOUR_S + 1e-9 or last.conf >= SURE_CONF:
+            break
+        lo, hi = sorted((pts[k - 1][1].x, pts[k + n][1].x))
+        run = [p.x for _t, p in pts[k:k + n]]
+        if all(x >= hi + DETOUR_X for x in run) or all(x <= lo - DETOUR_X for x in run):
+            return n
+    return 0
 
 
 def _interpolate(track: list[tuple[float, float]], times: list[float]) -> list[float]:
