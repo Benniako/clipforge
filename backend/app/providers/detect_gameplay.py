@@ -189,6 +189,9 @@ REACTION_WEIGHT = 0.2
 CONFIRM_WINDOW = 3.0
 MENU_CONTEXT_WINDOW = 5.0
 MENU_OCR_LABELS = {"menu", "substitution"}
+# On-screen text that says what happened without being a highlight (the
+# streamer's own death screen): kept as an event, never a clip or a confirmation.
+CONTEXT_OCR_LABELS = {"death"}
 MENU_OCR_WORDS = {
     "settings", "inventory", "main menu", "menu", "lobby", "store", "shop",
     "collection", "loadout", "agent select", "matchmaking", "einstellungen",
@@ -476,9 +479,25 @@ def _hud_ocr_events(hud) -> list:
             for ev in hud.events]
 
 
-def _cap_unverified(clips: list["GameplayClip"]) -> None:
+def _unverified_cap(hud, kills) -> int | None:
+    """Ceiling for cue / keyword / audio clips beside the HUD trackers, if any.
+
+    A scoreboard keeps them below its goals and a readable kill feed below its
+    kills: what the HUD shows outranks a word or a sound that only suggests it.
+    """
+    caps = []
+    if hud is not None:
+        caps.append(HUD_UNVERIFIED_CAP)
+    if kills is not None:
+        caps.append(KILLFEED_UNVERIFIED_CAP)
+    return min(caps) if caps else None
+
+
+def _cap_unverified(clips: list["GameplayClip"], cap: int | None) -> None:
+    if cap is None:
+        return
     for c in clips:
-        c.score = min(int(c.score), HUD_UNVERIFIED_CAP)
+        c.score = min(int(c.score), cap)
 
 
 def _kickoff_before(hud, t: float) -> float | None:
@@ -535,6 +554,9 @@ _KILL_TITLES = {1: "Kill", 2: "Double kill", 3: "Triple kill", 4: "Quadra kill",
 _KILL_SCORES = {1: 76, 2: 86, 3: 91, 4: 95, 5: 98}
 # A won round as the last one alive, by the number of enemies left then.
 _CLUTCH_SCORES = {1: 88, 2: 92, 3: 95, 4: 97, 5: 98}
+# Ceiling for cue / keyword-OCR / audio-event clips while the kill feed is read:
+# below a single kill, so an on-screen word or a kill sound never outranks one.
+KILLFEED_UNVERIFIED_CAP = _KILL_SCORES[1] - 1
 
 
 def _track_killfeed(src_path: str, info: MediaInfo, settings: ImportSettings,
@@ -760,7 +782,8 @@ def detect_gameplay(src_path: str, info: MediaInfo, settings: ImportSettings,
                     t=round(float(ev.t), 3), source="ocr", label=ev.kind,
                     detail=ev.detail, confidence=round(float(ev.confidence), 3),
                     data={"detector": "killfeed", "round": ev.round_index,
-                          "streak": ev.streak, "sources": list(ev.sources),
+                          # Event data holds plain values only: "banner+feed".
+                          "streak": ev.streak, "sources": "+".join(ev.sources),
                           "headshot": bool(ev.headshot)}))
             for r in kills.diagnostics.get("round_results", []):
                 won = r["winner"] == "ally"
@@ -770,7 +793,8 @@ def detect_gameplay(src_path: str, info: MediaInfo, settings: ImportSettings,
                     detail=f"Top bar: round {'won' if won else 'lost'}, "
                            f"score {r['score'][0]}-{r['score'][1]}",
                     confidence=0.8 if r.get("exact", True) else 0.6,
-                    data={"detector": "valorant_rounds", "score": r["score"]}))
+                    data={"detector": "valorant_rounds",
+                          "score": f"{r['score'][0]}-{r['score'][1]}"}))
             for a, b in kills.diagnostics.get("spike_plants", []):
                 events_out.append(DetectedEvent(
                     t=round(float(a), 3), source="ocr", label="spike_plant",
@@ -785,6 +809,7 @@ def detect_gameplay(src_path: str, info: MediaInfo, settings: ImportSettings,
                     confidence=0.75,
                     data={"detector": "valorant_rounds", "enemies": c["enemies"],
                           "until": c["t_end"]}))
+    cap = _unverified_cap(hud, kills)
 
     # On-screen text markers (VICTORY / ELIMINATED / GOAL / kill-feed).
     # For footage with audio we run OCR after finding likely moments, so it reads
@@ -803,8 +828,7 @@ def detect_gameplay(src_path: str, info: MediaInfo, settings: ImportSettings,
         clips = _uniform_fallback(info, settings)
         ocr_clips = _ocr_clips(ocr_events, info, settings)
         _record_events(events_out, [], ocr_events, [], hud=hud)
-        if hud is not None:
-            _cap_unverified(ocr_clips)
+        _cap_unverified(ocr_clips, cap)
         priority = goal_clips + ocr_clips
         return _merge(priority, clips, settings.target_clips) if priority else clips
 
@@ -864,8 +888,7 @@ def detect_gameplay(src_path: str, info: MediaInfo, settings: ImportSettings,
         clips = _uniform_fallback(info, settings)
         ocr_clips = _ocr_clips(ocr_events, info, settings)
         audio_clips = _audio_event_clips(audio_window_events, info, settings)
-        if hud is not None:
-            _cap_unverified(ocr_clips + audio_clips)
+        _cap_unverified(ocr_clips + audio_clips, cap)
         priority = goal_clips + ocr_clips + audio_clips
         return _merge(priority, clips, settings.target_clips) if priority else clips
 
@@ -877,8 +900,7 @@ def detect_gameplay(src_path: str, info: MediaInfo, settings: ImportSettings,
                       + _ocr_clips(ocr_events, info, settings, lead=lead, tail=tail)
                       + _audio_event_clips(audio_window_events, info, settings,
                                            lead=lead, tail=tail))
-        if hud is not None:
-            _cap_unverified(unverified)
+        _cap_unverified(unverified, cap)
         priority = goal_clips + unverified
         fallback = _uniform_fallback(info, settings)
         return _merge(priority, fallback, settings.target_clips) if priority else fallback
@@ -950,9 +972,8 @@ def detect_gameplay(src_path: str, info: MediaInfo, settings: ImportSettings,
     # A goal read off the scoreboard is on-screen evidence like any OCR hit.
     apply_corroboration(priority + clips, cue_events,
                         ocr_events + _hud_ocr_events(hud), audio_window_events)
-    if hud is not None:
-        # After corroboration, so a bonus cannot lift them past the goals.
-        _cap_unverified(unverified)
+    # After corroboration, so a bonus cannot lift them past the goals or kills.
+    _cap_unverified(unverified, cap)
     merged = _merge(priority, clips, settings.target_clips)
     merged.sort(key=lambda c: c.start)
     return merged
@@ -965,6 +986,8 @@ def apply_corroboration(clips: list["GameplayClip"], cue_events: list,
     A kill *ding* + a kill-feed line, a goal *roar* + a rising score — when the
     audio cue and the OCR banner agree on the same instant, it's a guaranteed
     beat. Mutates clips in place: small score bonus + an explainable factor."""
+    ocr_events = [e for e in ocr_events
+                  if str(getattr(e, "label", "") or "").lower() not in CONTEXT_OCR_LABELS]
     for c in clips:
         cues = _clustered_events(c, cue_events)
         ocrs = _clustered_events(c, ocr_events)
@@ -1153,9 +1176,9 @@ def _ocr_clips(events: list, info: MediaInfo, settings: ImportSettings, *,
         tail = max(target - lead, 2.5)
     out: list[GameplayClip] = []
     for e in events:
-        if _is_menu_ocr_event(e):
-            continue
         lbl = str(getattr(e, "label", "") or "").lower()
+        if lbl in CONTEXT_OCR_LABELS or _is_menu_ocr_event(e):
+            continue
         t_event = e.t
         # EA FC / Sports broadcast delay calibration: scoreboard update occurs ~4.5s AFTER the ball crossed the line
         if lbl in {"goal", "scoreboard"} and getattr(settings, "game_profile", "auto") in {"eafc", "fifa", "rocketleague", "auto"}:

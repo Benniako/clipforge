@@ -59,13 +59,16 @@ _GENERIC: dict[str, tuple[str, ...]] = {
                    "team eliminiert", "team eliminated", "eliminated team"),
     "kill": ("double kill", "triple kill", "multi kill", "ultra kill", "rampage",
              "killing spree", "first blood", "headshot", "doppelkill",
-             "dreifachkill", "mehrfachkill", "kopfschuss", "getötet",
+             "dreifachkill", "mehrfachkill", "kopfschuss", "gegner getötet",
              "abgeschossen", "eliminiert",
-             "getötet von", "kampfbericht", "tödlich", "verursacht",
              "assist"),
+    # The streamer's own death screen: "GETÖTET VON …" and the combat report
+    # (damage "verursacht" / "erhalten"). Recorded, but never a clip, and it
+    # overrules kill words read off the same screen (see match_keywords).
+    "death": ("getötet von", "du wurdest getötet", "kampfbericht",
+              "killed by", "you were killed", "combat report"),
     "ace": ("ace", "team ace", "flawless"),
-    "clutch": ("clutch", "1v5", "1v4", "1v3", "1v2",
-               "runde läuft", "letzte runde", "last round", "letzter spieler",
+    "clutch": ("clutch", "1v5", "1v4", "1v3", "1v2", "letzter spieler",
                "last player standing"),
     "bomb": ("spike planted", "spike defused", "spike platziert",
              "spike entschärft", "spike entscharft",
@@ -98,16 +101,16 @@ _PROFILE_EXTRA: dict[str, dict[str, tuple[str, ...]]] = {
                    "letzte spielerin", "last player standing"),
         "kill": ("headshot", "kopfschuss", "abgeschossen", "eliminiert",
                  "enemy killed", "gegner ausgeschaltet", "gegner ubrig",
-                 "gegner übrig",
-                 "kampfbericht", "tödlich", "verursacht", "getötet von",
-                 "erhalten"),
+                 "gegner übrig"),
+        # The combat report's columns, read even when its title is garbled.
+        "death": ("verursacht", "erlitten", "tödlich"),
         "spike": ("spike planted", "spike defused", "defusing",
                   "spike platziert", "spike entscharft", "spike entschärft",
                   "spike-entschärfer", "spike-entscharfer",
                   "spike entschärft", "spike entscharft",
                   "spike-entschärft", "spike-entscharft"),
         "round_win": ("round won", "runde gewonnen", "victory"),
-        "defeat": ("runden verloren", "letzte runde", "runde verloren"),
+        "defeat": ("runden verloren", "runde verloren"),
     },
     "cs2": {
         "bomb": ("bomb has been planted", "bomb planted", "bomb defused",
@@ -134,6 +137,8 @@ _PROFILE_EXTRA: dict[str, dict[str, tuple[str, ...]]] = {
     },
 }
 _ALIAS = {"auto": "generic", "cs": "cs2", "fifa": "eafc"}
+# Labels a death screen overrules when both are read off the same text.
+DEATH_OVERRULES = frozenset({"kill", "ace", "clutch", "eliminated"})
 
 _NORM_RE = re.compile(r"[^a-z0-9 ]+")
 _WS_RE = re.compile(r"\s+")
@@ -211,6 +216,15 @@ def match_keywords(text: str, profile: str | None, *,
                 best = p
         if best is not None and not visual_cues.is_false_positive(profile, label, text):
             out.append((label, best))
+    # A phrase read only inside another label's longer one belongs to that
+    # label: "TEAM ELIMINIERT" ends a round, it is not a kill ("eliminiert").
+    out = [(label, p) for label, p in out
+           if not any(q != p and f" {p} " in f" {q} "
+                      and padded.count(f" {p} ") <= padded.count(f" {q} ")
+                      for _, q in out)]
+    if any(label == "death" for label, _ in out):
+        # "Kopfschuss" on a death screen is how the streamer died.
+        out = [m for m in out if m[0] not in DEATH_OVERRULES]
     return out
 
 
