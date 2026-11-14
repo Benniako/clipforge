@@ -448,6 +448,64 @@ def test_menu_text_does_not_suppress_loudness_peaks_during_match_time(monkeypatc
     assert not any(abs(c.peak_t - 250.0) < 10.0 for c in legacy.clips)
 
 
+# --------------------------------------------------------------------------- #
+# Kick-off counts like a menu
+# --------------------------------------------------------------------------- #
+def _whistle(t: float) -> AudioEvent:
+    return AudioEvent(t=t, label="referee_whistle", confidence=0.7,
+                      detail="CLAP heard referee whistle")
+
+
+def test_kickoffs_use_the_measured_kickoff_else_the_first_scoreboard_sample():
+    # Spans open one sample interval (2 s here) before their first scoreboard
+    # sample; the second span is the restart after half-time.
+    hud = _hud(in_play=((60.0, 200.0), (300.0, 440.0)))
+    hud.matches[0].kickoff = 61.0
+    assert hud.kickoffs() == [(60.0, 61.0), (300.0, 302.0)]
+    hud.matches[0].kickoff = None
+    assert hud.kickoffs() == [(60.0, 62.0), (300.0, 302.0)]
+
+
+def test_sounds_at_kickoff_and_restart_make_no_clips(monkeypatch):
+    # The real case: the referee's kick-off whistle, 2 s before the scoreboard
+    # appeared, made a clip that was 30 s of pre-match intro. From where the
+    # gate lets a span in until 5 s after its (re)start, sounds count like a
+    # menu; the same whistle in the middle of the match still counts.
+    audio = [_whistle(59.0), _whistle(64.0), _whistle(150.0), _whistle(299.0),
+             _whistle(303.0), AudioEvent(t=252.0, label="crowd_cheer", confidence=0.8,
+                                         detail="crowd")]
+    cues = [CueEvent(t=59.5, label="whistle", similarity=0.95),
+            CueEvent(t=330.0, label="kill", similarity=0.95)]
+    spans = ((60.0, 200.0), (300.0, 440.0))
+    hud = _hud(in_play=spans)                                   # coverage 0.47
+    hud.matches[0].kickoff = 61.0
+
+    out = _run(monkeypatch, hud=hud, audio=audio, cues=cues)
+    assert [e.t for e in out.events if e.source == "audio"] == [150.0]
+    assert [e.t for e in out.events if e.source == "cue"] == [330.0]
+    assert not any(c.peak_t in (59.0, 59.5, 64.0, 299.0, 303.0) for c in out.clips)
+    assert any(c.peak_t == 150.0 for c in out.clips)
+
+    # Below the coverage gate nothing is pre-filtered, kick-off included.
+    loose = _run(monkeypatch, hud=_hud(in_play=spans, coverage=0.2), audio=audio, cues=cues)
+    assert [e.t for e in loose.events if e.source == "audio"] == [
+        59.0, 64.0, 150.0, 252.0, 299.0, 303.0]
+
+
+def test_loudness_right_after_kickoff_makes_no_clip(monkeypatch):
+    # The envelope bursts at 100 s, 250 s, 400 s and 520 s; a goalless match
+    # keeps only its strongest burst. Kick-off at 97.5 s puts the 100 s burst
+    # 2.5 s into the match: that is the kick-off itself, so 250 s wins.
+    hud = _hud([], in_play=((96.0, 300.0),))                   # coverage 0.34
+    hud.matches[0].kickoff = 97.5
+    out = _run(monkeypatch, hud=hud, cues=[], audio=[])
+    assert [c.peak_t for c in out.clips] == [pytest.approx(250.0)]
+
+    # Forty seconds after kick-off the same burst is match action.
+    early = _run(monkeypatch, hud=_hud([], in_play=((60.0, 300.0),)), cues=[], audio=[])
+    assert [c.peak_t for c in early.clips] == [pytest.approx(100.0)]
+
+
 def test_unverified_priority_clips_are_capped_below_the_goals(monkeypatch):
     assert DG.HUD_UNVERIFIED_CAP == 79
     # A kill sound and a kill-feed line at the same instant corroborate each

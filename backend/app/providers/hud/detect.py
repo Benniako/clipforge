@@ -119,6 +119,32 @@ class HudResult:
             return True
         return self.is_in_play(t, pad=pad)
 
+    def kickoffs(self) -> list[tuple[float, float]]:
+        """``(opens, kick)`` for every start of play: one per in-play span.
+
+        A span starts at a match's kick-off or at a restart after half-time
+        (or any break long enough to split it). ``opens`` is where the span
+        begins, one sample interval before its first scoreboard sample;
+        ``kick`` is the measured kick-off (the first frame with the
+        scoreboard) where there is one, else that first sample.
+        """
+        measured = [float(m.kickoff) for m in self.matches if m.kickoff is not None]
+        out = []
+        for a, _b in self.in_play:
+            first = a + float(self.sample_interval)
+            kick = next((k for k in measured if a - 0.5 <= k <= first + 0.5), first)
+            out.append((a, kick))
+        return out
+
+    def at_kickoff(self, t: float, *, after: float, pad: float = 2.0) -> bool:
+        """True from where :meth:`allows` first lets a span in (``pad``
+        before it opens) until ``after`` seconds past its kick-off.
+
+        That stretch is the walk-out or the half-time screen and then the
+        referee's whistle that starts play: neither is a highlight.
+        """
+        return any(opens - pad <= t <= kick + after for opens, kick in self.kickoffs())
+
     @property
     def game_coverage(self) -> float:
         """Share of this game's own stretches with the scoreboard on screen."""

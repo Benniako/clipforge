@@ -473,6 +473,17 @@ def _menu_events(ocr_events: list, hud) -> list:
     return out
 
 
+def _match_sound(hud, t: float, *, after: float = MENU_CONTEXT_WINDOW) -> bool:
+    """Whether a sound or loud moment at ``t`` can be match action (gate on).
+
+    Without the scoreboard on screen it is a menu. Around a kick-off it is
+    the walk-out or the half-time screen and then the whistle that starts
+    play, which count like a menu too: ``after`` seconds past the kick-off
+    (MENU_CONTEXT_WINDOW for sounds, doubled for loudness peaks).
+    """
+    return hud.allows(t) and not hud.at_kickoff(t, after=after)
+
+
 def _hud_ocr_events(hud) -> list:
     """Scoreboard goals as on-screen evidence for :func:`apply_corroboration`."""
     if hud is None:
@@ -812,7 +823,8 @@ def detect_gameplay(src_path: str, info: MediaInfo, settings: ImportSettings,
 
     The scoreboard is tracked first (:func:`_track_hud`). With a result, its
     goals lead the returned clips on every path through this function, and
-    with enough coverage the other detectors only count during match time.
+    with enough coverage the other detectors only count during match time,
+    the seconds around each kick-off left out (:func:`_match_sound`).
     """
     import tempfile
     from pathlib import Path
@@ -922,9 +934,9 @@ def detect_gameplay(src_path: str, info: MediaInfo, settings: ImportSettings,
                                                 warnings_out=warnings_out)
 
     if gate:
-        cue_events = [e for e in cue_events if hud.allows(float(e.t))]
+        cue_events = [e for e in cue_events if _match_sound(hud, float(e.t))]
         audio_window_events = [e for e in audio_window_events
-                               if hud.allows(float(e.t))]
+                               if _match_sound(hud, float(e.t))]
     # A kill sound or a cheer while the streamer is dead is a teammate's.
     cue_events = _drop_spectating(cue_events, spectating)
     audio_window_events = _drop_spectating(audio_window_events, spectating)
@@ -978,18 +990,20 @@ def detect_gameplay(src_path: str, info: MediaInfo, settings: ImportSettings,
 
     menu_times = [float(e.t) for e in menu_events]
     _add_goal_loudness(goal_clips, times, rms)
-    # Hold loud moments to match time — unless that would leave nothing at
-    # all (no goals, and every loud moment outside a match): an empty result
-    # fails the whole project, so then the gate stays open.
+    # Hold loud moments to match time, kick-offs left out — unless that would
+    # leave nothing at all (no goals, and every loud moment outside a match):
+    # an empty result fails the whole project, so then the gate stays open.
+    peak_after = MENU_CONTEXT_WINDOW * 2.0
     gate_peaks = gate and (bool(goal_clips)
-                           or any(hud.allows(float(times[i])) for i in peaks))
+                           or any(_match_sound(hud, float(times[i]), after=peak_after)
+                                  for i in peaks))
     # The same for loud moments while the streamer is dead.
     mute_spectating = bool(spectating) and (
         bool(goal_clips) or any(not _in_spans(float(times[i]), spectating) for i in peaks))
     clips: list[GameplayClip] = []
     for idx in peaks:
         pt = float(times[idx])
-        if gate_peaks and not hud.allows(pt):
+        if gate_peaks and not _match_sound(hud, pt, after=peak_after):
             continue
         if mute_spectating and _in_spans(pt, spectating):
             continue
