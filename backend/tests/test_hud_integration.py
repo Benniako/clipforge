@@ -221,10 +221,32 @@ def test_goal_clip_window_respects_video_bounds_and_length_limits():
                                   lead=lead, tail=tail)
         return c.start, c.end
 
-    assert window(3.0, 10.0, 4.0) == (0.0, 7.0)        # clamped at the start
+    assert window(3.0, 10.0, 4.0) == (0.0, 8.0)        # clamped at the start, min_len made up after
     assert window(598.0, 10.0, 4.0) == (588.0, 600.0)  # clamped at the end
     assert window(100.0, 2.0, 2.0) == (94.0, 102.0)    # stretched back to min_len
     assert window(100.0, 30.0, 5.0) == (85.0, 105.0)   # trimmed at the front to max_len
+
+
+def test_early_goal_clip_starts_at_kickoff_not_in_the_intro():
+    # Kick-off at 88 s, goal 23 s later: 29 s of lead would show the intro.
+    hud = _hud([_goal(111.0, (0, 0), (0, 1), team="b"), _goal(400.0, (0, 1), (1, 1))])
+    hud.matches[0].kickoff = 88.0
+    early, late = DG._hud_goal_clips(hud, _info(), _settings(min_len=15, max_len=60),
+                                     lead=29.0, tail=8.0)
+    assert (early.start, early.end) == (87.0, 119.0)          # 1 s before kick-off
+    assert (late.start, late.end) == (371.0, 408.0)           # far from kick-off: unchanged
+    # A goal right after kick-off still gets a full-length clip, extended after the goal.
+    (quick,) = DG._hud_goal_clips(_hud([_goal(92.0, (0, 0), (1, 0))], in_play=((88.0, 440.0),)),
+                                  _info(), _settings(min_len=15, max_len=60), lead=29.0, tail=4.0)
+    assert quick.start == 0.0 or quick.end - quick.start >= 15.0
+    hud2 = _hud([_goal(92.0, (0, 0), (1, 0))])
+    hud2.matches[0].kickoff = 88.0
+    (quick,) = DG._hud_goal_clips(hud2, _info(), _settings(min_len=15, max_len=60), lead=29.0, tail=4.0)
+    assert (quick.start, quick.end) == (87.0, 102.0)
+    # The kick-off is recorded with the goal, for clips made later from the goal list.
+    events: list = []
+    DG._record_events(events, [], [], [], hud=hud)
+    assert [e.data["kickoff"] for e in events] == [88.0, 88.0]
 
 
 def test_goal_clip_score_arithmetic():
@@ -645,7 +667,7 @@ def test_record_events_writes_goal_events_with_the_full_payload():
         confidence=0.95,
         data={"detector": "hud", "team": "a", "score_before": "1-0", "score_after": "2-0",
               "minute": 13, "clock": "12:29", "t_change": 101.8, "streamer": True,
-              "importance": 9.0})
+              "importance": 9.0, "kickoff": None})
     assert type(goal.data["minute"]) is int
     assert type(goal.data["streamer"]) is bool
     assert type(goal.data["importance"]) is float

@@ -481,22 +481,29 @@ def _cap_unverified(clips: list["GameplayClip"]) -> None:
         c.score = min(int(c.score), HUD_UNVERIFIED_CAP)
 
 
+def _kickoff_before(hud, t: float) -> float | None:
+    """Kick-off of the match a goal at ``t`` belongs to (the last one before it)."""
+    starts = [float(m.play_start) for m in getattr(hud, "matches", []) or []
+              if getattr(m, "kickoff", None) is not None and float(m.play_start) <= t]
+    return max(starts) if starts else None
+
+
 def _hud_goal_clips(hud, info: MediaInfo, settings: ImportSettings, *,
                     lead: float, tail: float) -> list["GameplayClip"]:
     """One clip per goal read off the scoreboard.
 
     ``ev.t`` already is the goal moment (the tracker took the scoreboard's
-    delay out), so unlike :func:`_ocr_clips` no time offset is applied.
+    delay out), so unlike :func:`_ocr_clips` no time offset is applied. A goal
+    soon after kick-off gets a clip that starts at kick-off, not in the intro.
     """
+    from ..goals import goal_window
+
     out: list[GameplayClip] = []
     for ev in hud.events:
         t = float(ev.t)
-        start = max(0.0, t - lead)
-        end = min(info.duration, t + tail)
-        if end - start < settings.min_len:
-            start = max(0.0, end - settings.min_len)
-        if end - start > settings.max_len:
-            start = max(0.0, end - settings.max_len)
+        start, end = goal_window(t, lead=lead, tail=tail, min_len=settings.min_len,
+                                 max_len=settings.max_len, duration=info.duration,
+                                 kickoff=_kickoff_before(hud, t))
         confidence = float(ev.confidence)
         raw = 84.0 + float(ev.importance) - (8.0 if confidence < 0.7 else 0.0)
         score = int(round(max(float(HUD_GOAL_FLOOR), min(99.0, raw))))
@@ -1064,6 +1071,7 @@ def _record_events(events_out: list | None, cue_events: list,
     if events_out is None:
         return
     for ev in (hud.events if hud is not None else []):
+        kickoff = _kickoff_before(hud, float(ev.t))
         events_out.append(DetectedEvent(
             t=round(float(ev.t), 3), source="ocr", label="goal",
             detail=ev.detail, confidence=round(float(ev.confidence), 3),
@@ -1073,7 +1081,9 @@ def _record_events(events_out: list | None, cue_events: list,
                   "minute": ev.minute, "clock": ev.clock,
                   "t_change": round(float(ev.t_change), 3),
                   "streamer": ev.streamer,
-                  "importance": float(ev.importance)}))
+                  "importance": float(ev.importance),
+                  # lets a clip made later from the goal list start at kick-off too
+                  "kickoff": round(kickoff, 3) if kickoff is not None else None}))
     for e in cue_events:
         events_out.append(DetectedEvent(
             t=round(float(e.t), 3), source="cue", label=e.label,

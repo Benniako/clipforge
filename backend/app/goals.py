@@ -16,6 +16,32 @@ from .models import Clip, ClipStatus, DetectedEvent, Project, ScoreFactor
 # goal clips (detect_gameplay.HUD_GOAL_FLOOR and the 84-point base there).
 _BASE_SCORE = 84.0
 _SCORE_FLOOR = 80.0
+# Seconds kept before kick-off: the kick-off camera shot, not the intro screens.
+KICKOFF_LEAD = 1.0
+
+
+def goal_window(t: float, *, lead: float, tail: float, min_len: float, max_len: float,
+                duration: float, kickoff: float | None = None) -> tuple[float, float]:
+    """``(start, end)`` of a clip for a goal at ``t``.
+
+    ``lead`` seconds of build-up and ``tail`` after, kept within the length
+    limits. A goal soon after kick-off would reach back into the pre-match
+    intro, so the clip starts no earlier than just before ``kickoff``. When
+    that (or the start of the video) leaves the clip shorter than ``min_len``,
+    the missing length is added after the goal instead.
+    """
+    start, end = max(0.0, t - lead), min(duration, t + tail)
+    if end - start > max_len:
+        start = end - max_len
+    floor = 0.0
+    if kickoff is not None:
+        floor = max(0.0, min(float(kickoff) - KICKOFF_LEAD, t))
+    if end - start < min_len:
+        start = end - min_len                 # more build-up first ...
+    start = max(start, floor)
+    if end - start < min_len:
+        end = min(duration, start + min_len)  # ... then more after the goal
+    return start, end
 
 
 def is_goal(e: DetectedEvent) -> bool:
@@ -48,7 +74,11 @@ def goals_by_match(project: Project) -> list[dict]:
         d = e.data or {}
         before, after = _pair(d.get("score_before")), _pair(d.get("score_after"))
         if not matches or before is None or before != last_after:
-            matches.append({"index": len(matches) + 1, "start": round(float(e.t), 3),
+            # The match starts at kick-off when the tracker measured it, else
+            # at its first goal (projects processed before it recorded kick-offs).
+            kickoff = d.get("kickoff")
+            first = float(kickoff) if isinstance(kickoff, (int, float)) else float(e.t)
+            matches.append({"index": len(matches) + 1, "start": round(min(first, float(e.t)), 3),
                             "end": round(float(e.t), 3), "final_score": "", "goals": []})
         m = matches[-1]
         clip = _clip_for(project, float(e.t))
@@ -83,11 +113,10 @@ def clip_for_goal(project: Project, goal: DetectedEvent, *, lead: float, tail: f
     t = float(goal.t)
     duration = float(project.source.duration) if project.source else t + tail
     st = project.settings
-    start, end = max(0.0, t - lead), min(duration, t + tail)
-    if end - start < st.min_len:
-        start = max(0.0, end - st.min_len)
-    if end - start > st.max_len:
-        start = max(0.0, end - st.max_len)
+    kickoff = d.get("kickoff")
+    start, end = goal_window(t, lead=lead, tail=tail, min_len=st.min_len, max_len=st.max_len,
+                             duration=duration,
+                             kickoff=float(kickoff) if isinstance(kickoff, (int, float)) else None)
     importance = float(d.get("importance") or 0.0)
     score = int(round(max(_SCORE_FLOOR, min(99.0, _BASE_SCORE + importance))))
     minute = f" ({d.get('minute')}')" if d.get("minute") is not None else ""

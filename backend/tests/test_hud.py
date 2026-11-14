@@ -832,7 +832,21 @@ def test_unrefined_goals_are_still_found():
     assert [e.refined for e in res.events] == [False, False, False, True, False, False, False]
     first = _session().matches[0]
     assert abs(res.events[0].t - first.goal_moment(first.goals[0])) <= 2.0    # coarse: half an interval
-    assert sum(1 for c in src.calls if not c["keyframes"]) == 2               # only the two tail sweeps
+    # Only the two tail sweeps and the two kick-off reads; no goal timing.
+    assert sum(1 for c in src.calls if not c["keyframes"]) == 4
+
+
+def test_kickoff_is_the_first_frame_with_the_scoreboard():
+    timeline = _session()
+    res, src = _run(timeline, refine_limit=0)
+    kickoffs = [m.kickoff for m in res.matches]
+    for got, match in zip(kickoffs, timeline.matches):
+        assert got is not None and 0.0 <= got - match.start <= 1.0 / D.DENSE_FPS + 1e-6
+    assert all(m.play_start == m.kickoff <= m.t_start for m in res.matches)
+    # The first coarse sample of a match can come up to a keyframe gap later.
+    late, src = _run(timeline, refine_limit=0, keyint=4.0)
+    assert [round(m.kickoff, 1) for m in late.matches] == [round(k, 1) for k in kickoffs]
+    assert late.matches[0].t_start - late.matches[0].kickoff > 1.0
 
 
 def test_a_glitch_before_the_whistle_is_not_a_goal():

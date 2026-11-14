@@ -80,6 +80,14 @@ class MatchInfo:
     start_score: tuple[int, int]
     final_score: tuple[int, int]
     goals: int
+    # When play started: the first frame with the scoreboard on screen. The
+    # scoreboard appears at kick-off (its clock reads 00:00), so this is up to a
+    # coarse sample earlier than ``t_start``. None when it was not measured.
+    kickoff: float | None = None
+
+    @property
+    def play_start(self) -> float:
+        return self.kickoff if self.kickoff is not None else self.t_start
 
 
 @dataclass
@@ -333,6 +341,24 @@ def _track_layout(lay: HudLayout, source: FrameSource, width: int, height: int, 
                 tail_goals[id(goal)] = (t_change, t_old)
                 tail_clock[id(goal)] = strip
 
+    # Kick-off per match: walk back over coarse samples that still show the
+    # scoreboard (digits unreadable or not), then find its first frame in the
+    # gap before. Clips of early goals start there instead of in the intro.
+    kickoffs: list[float | None] = []
+    for seg in segments:
+        i = seg.i_first
+        while i > 0 and coarse.present[i - 1] and coarse.times[i] - coarse.times[i - 1] <= 1.5 * interval:
+            i -= 1
+        t_seen = coarse.times[i]
+        t_before = coarse.times[i - 1] if i > 0 else max(t_seen - interval, 0.0)
+        kick = max(t_before, t_seen - 2.0 * interval)  # never more than the gap before
+        if healthy:
+            rows = dense(kick - 0.2, t_seen + 0.2)
+            first = next((row[0] for row in rows if row[1]), None)
+            if first is not None:
+                kick = first
+        kickoffs.append(round(min(kick, t_seen), 3))
+
     # Clock and minute per goal.
     clock_cache: dict[int, tuple[int, int, int] | None] = {}
 
@@ -440,7 +466,8 @@ def _track_layout(lay: HudLayout, source: FrameSource, width: int, height: int, 
     final = sorted((ev for k, (ev, _g, _s) in enumerate(events) if k not in dropped),
                    key=lambda e: e.t)
     matches = [MatchInfo(t_start=s.t_start, t_end=s.t_end, start_score=s.start_score,
-                         final_score=s.final_score, goals=len(s.goals)) for s in segments]
+                         final_score=s.final_score, goals=len(s.goals), kickoff=k)
+               for s, k in zip(segments, kickoffs)]
     diagnostics = {
         "mode": mode,
         "region": list(region),

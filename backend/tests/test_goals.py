@@ -70,6 +70,31 @@ def test_clip_for_goal_has_the_goal_near_its_end_and_a_verified_score():
     assert weak.score == 80
 
 
+def test_goal_window_keeps_early_goals_out_of_the_intro():
+    w = dict(lead=29.3, tail=8.2, min_len=15.0, max_len=60.0, duration=1000.0)
+    assert goals.goal_window(400.0, **w) == (370.7, 408.2)                    # no kick-off known
+    assert goals.goal_window(400.0, kickoff=100.0, **w) == (370.7, 408.2)    # far from kick-off
+    start, end = goals.goal_window(111.0, kickoff=88.0, **w)
+    assert (round(start, 3), round(end, 3)) == (87.0, 119.2)                 # 1 s before kick-off
+    start, end = goals.goal_window(90.0, kickoff=88.0, **w)
+    assert (start, end) == (87.0, 102.0)                                     # min length kept, after
+    assert goals.goal_window(990.0, kickoff=985.0, **w) == (984.0, 999.0)    # 15 s from 1 s before kick-off
+    assert goals.goal_window(995.0, kickoff=990.0, **w) == (989.0, 1000.0)   # cut short by the video's end
+    assert goals.goal_window(3.0, kickoff=0.0, **w) == (0.0, 15.0)
+
+
+def test_clip_from_the_goal_list_starts_at_kickoff_and_lists_it():
+    project = _project([_goal(111.0, "0-0", "0-1", kickoff=88.0), _goal(300.0, "0-1", "1-1", kickoff=88.0)])
+    clip = goals.clip_for_goal(project, goals.find_goal(project, 111.0), lead=29.3, tail=8.2)
+    assert (clip.start, clip.end) == (87.0, 119.2)
+    (match,) = goals.goals_by_match(project)
+    assert match["start"] == 88.0                                            # kick-off, not the first goal
+    old = _project([_goal(111.0, "0-0", "0-1")])                              # processed before kick-offs
+    assert goals.goals_by_match(old)[0]["start"] == 111.0
+    clip = goals.clip_for_goal(old, goals.find_goal(old, 111.0), lead=29.3, tail=8.2)
+    assert (clip.start, clip.end) == (81.7, 119.2)
+
+
 def test_every_scoreboard_goal_is_kept_on_the_project():
     accepted = [_goal(100.0, "0-0", "1-0")]
     detected = [*accepted, _goal(200.0, "1-0", "2-0"),
