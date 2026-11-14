@@ -4707,6 +4707,7 @@ def test_vlm_score_visuals_spans_with_climax():
 
     with patch.object(vlm, "available", return_value=True), \
          patch.object(vlm, "active_model", return_value="qwen2.5-vl"), \
+         patch.object(vlm._oc, "ready", return_value=True), \
          patch.object(vlm, "score_visual", side_effect=mock_score_visual):
         # Test 3-tuple input (start, end, climax_t)
         spans_3 = [(10.0, 30.0, 25.0), (40.0, 60.0, 56.0)]

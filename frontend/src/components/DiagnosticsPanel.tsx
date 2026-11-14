@@ -88,10 +88,10 @@ export default function DiagnosticsPanel({ onClose }: { onClose: () => void }) {
                 {cat.items.map((it) => (
                   <div
                     key={it.key}
-                    className={"diag-item " + (it.available ? "on" : "off")}
-                    title={it.impact}
+                    className={"diag-item " + (it.problem ? "warn" : it.available ? "on" : "off")}
+                    title={it.problem || it.impact}
                   >
-                    <span className={"cap-dot" + (it.available ? "" : " off")} />
+                    <span className={"cap-dot" + (it.problem ? " warn" : it.available ? "" : " off")} />
                     <div className="diag-item-body">
                       <span className="diag-item-label">
                         {it.label}
@@ -101,10 +101,11 @@ export default function DiagnosticsPanel({ onClose }: { onClose: () => void }) {
                             {it.impact.split("Models:")[1]?.split(".")[0] || ""}
                           </span>
                         )}
-                        <span className={"diag-state " + (it.available ? "ok" : "muted")}>
-                          {it.available ? t("diag.available") : t("diag.missing")}
+                        <span className={"diag-state " + (it.problem ? "warn" : it.available ? "ok" : "muted")}>
+                          {it.problem ? t("diag.problem") : it.available ? t("diag.available") : t("diag.missing")}
                         </span>
                       </span>
+                      {it.problem && <span className="diag-problem tiny">{it.problem}</span>}
                       <span className="diag-impact muted tiny">{it.impact}</span>
                     </div>
                   </div>

@@ -598,13 +598,18 @@ class Settings:
     def capability_detail(self) -> dict:
         """Return a grouped inventory of detected capabilities.
 
-        Shape: ``{"categories": [{name, items: [{key, available, label, impact}]}]}``.
-        ``impact`` explains what each capability unlocks (or what degrades when
-        absent) so the panel is actionable, not just a checklist.
+        Shape: ``{"categories": [{name, items: [{key, available, label, impact,
+        problem}]}]}``. ``impact`` explains what each capability unlocks (or what
+        degrades when absent) so the panel is actionable, not just a checklist.
+        ``problem`` (or None) says why an installed engine failed when it ran.
         """
+        from . import engine_status
+
+        problems = engine_status.problems()
+
         def item(key: str, available: bool, label: str, impact: str) -> dict:
             return {"key": key, "available": available,
-                    "label": label, "impact": impact}
+                    "label": label, "impact": impact, "problem": problems.get(key)}
 
         opencv_label = "OpenCV" + (f" {self.opencv_version}" if self.opencv_version else "")
         opencv_impact = "Face tracking for speaker-aware 9:16 reframing."

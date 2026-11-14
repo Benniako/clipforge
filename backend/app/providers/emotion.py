@@ -12,31 +12,65 @@ unchanged. The score-blend is a pure function (tested without the model).
 from __future__ import annotations
 
 import logging
+import os
+from pathlib import Path
 
+from .. import engine_status
 from ..config import get_settings
 from ..models import ScoreFactor
 
 log = logging.getLogger("clipforge.emotion")
 
 _model = None  # cached FunASR AutoModel, or False
+MODEL_ID = "iic/emotion2vec_plus_base"
 
 # emotion2vec_plus labels that read as "high-energy / engaging" for short-form.
 _HIGH_AROUSAL = {"happy", "angry", "surprised", "fearful", "excited", "disgusted"}
+
+
+def model_source() -> str:
+    """Where to load emotion2vec from: a local copy when there is one.
+
+    Loading by name first asks modelscope.cn, which answers 403 from here, and
+    FunASR then calls the model "not registered" even though a full copy sits
+    in the modelscope cache. That copy loads with no network access (2.6 s).
+    ``CLIPFORGE_EMOTION_MODEL`` (a folder or a model name) overrides.
+    """
+    env = os.environ.get("CLIPFORGE_EMOTION_MODEL", "").strip()
+    if env:
+        return env
+    for root in _cache_roots():
+        for sub in ("", "hub", "hub/models"):
+            folder = root / sub / MODEL_ID
+            if (folder / "model.pt").is_file() and (folder / "config.yaml").is_file():
+                return str(folder)
+    return MODEL_ID
+
+
+def _cache_roots() -> list[Path]:
+    """modelscope cache folders: MODELSCOPE_CACHE if set, then the default."""
+    roots = [Path(os.environ["MODELSCOPE_CACHE"])] if os.environ.get("MODELSCOPE_CACHE") else []
+    roots.append(Path.home() / ".cache" / "modelscope")
+    return roots
 
 
 def _load():
     global _model
     if _model is not None:
         return _model or None
+    source = model_source()
     try:
         from funasr import AutoModel
 
-        _model = AutoModel(model="iic/emotion2vec_plus_base",
-                            device=get_settings().device,
-                            disable_update=True)
-        log.info("emotion2vec loaded")
+        _model = AutoModel(model=source, device=get_settings().device,
+                           disable_update=True)
+        log.info("emotion2vec loaded from %s", source)
+        engine_status.clear("emotion")
     except Exception as e:
         log.info("emotion2vec unavailable (%s)", e)
+        hint = ("" if source != MODEL_ID else
+                " No local copy was found in ~/.cache/modelscope/iic/emotion2vec_plus_base.")
+        engine_status.report("emotion", f"The model could not be loaded: {e}.{hint}")
         _model = False
     return _model or None
 

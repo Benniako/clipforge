@@ -361,6 +361,8 @@ export interface CapabilityItem {
   available: boolean;
   label: string;
   impact: string;
+  /** Why an installed engine failed when it ran (a refused download, a server down). */
+  problem?: string | null;
 }
 export interface CapabilityCategory {
   name: string;

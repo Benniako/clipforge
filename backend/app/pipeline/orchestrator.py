@@ -195,6 +195,24 @@ def _speech_intervals(transcript, start: float, end: float
     return [(a - start, b - start) for a, b in segs]
 
 
+def _prewarm_vlm(settings) -> bool:
+    """Start loading the vision model in the background when the run will use it.
+
+    A cold load (5-70 s measured) otherwise happens right before the VLM batch;
+    started a stage early it overlaps the work in between. Never raises.
+    """
+    try:
+        from ..providers import ollama_client
+        from ..providers import vlm as vlm_mod
+
+        if not getattr(settings, "use_vlm", False) or not vlm_mod.available():
+            return False
+        return ollama_client.prewarm(vlm_mod.active_model() or "", images=True)
+    except Exception as e:
+        log.debug("vlm prewarm skipped: %s", e)
+        return False
+
+
 def _score_visual_reads(src_path: str, clips: list[Clip], *,
                         power_mode: str | None = None,
                         lang: str | None = None,
@@ -762,6 +780,9 @@ class Engine:
         ocr_labels: list[str] = []
         ocr_texts: list[str] = []
         if kind == "gameplay":
+            # No text-LLM call follows in this stage, so the vision model can
+            # load in the background now, while the game is being read.
+            _prewarm_vlm(project.settings)
             self._advance(project_id, 1, "Finding gameplay highlights…")
             prof = project.settings.game_profile
             gweights = feedback.learned_weights(
@@ -927,6 +948,9 @@ class Engine:
                     log.debug("talking scene snap skipped: %s", e)
             bscope = feedback.bound_scope("talking", plat)
 
+        # The text-LLM reads are done: load the vision model while the emotion
+        # and audio-event models run (no-op when it is already loading).
+        _prewarm_vlm(project.settings)
         settings = get_settings()
         if settings.has_emotion and wav_path:
             try:

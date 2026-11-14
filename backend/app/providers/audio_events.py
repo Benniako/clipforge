@@ -20,6 +20,7 @@ import logging
 import sys
 from dataclasses import dataclass
 
+from .. import engine_status
 from ..config import get_settings
 from ..models import ScoreFactor
 
@@ -211,8 +212,10 @@ def _load():
         device = _torch_inference_device()
         _tagger = (AudioTagging(checkpoint_path=None, device=device), list(labels))
         log.info("PANNs audio tagging loaded (%d classes)", len(labels))
+        engine_status.clear("panns")
     except Exception as e:
         log.info("PANNs unavailable (%s)", e)
+        engine_status.report("panns", f"The model could not be loaded: {e}")
         _tagger = False
     return _tagger or None
 
@@ -245,6 +248,7 @@ def _load_clap():
                 _load_clap_checkpoint(model)
                 _clap = model
                 log.info("LAION-CLAP audio tagging loaded")
+                engine_status.clear("clap")
             finally:
                 sys.argv = old_argv
         except Exception as e:
@@ -252,6 +256,7 @@ def _load_clap():
             # SystemExit during an interactive shutdown still propagate instead
             # of silently disabling CLAP.
             log.info("CLAP audio tagging unavailable (%s)", e)
+            engine_status.report("clap", f"The model could not be loaded: {e}")
             _clap = False
     return _clap or None
 

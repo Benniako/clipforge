@@ -21,6 +21,8 @@ import time
 import urllib.request
 from typing import Any
 
+from .. import engine_status
+
 log = logging.getLogger("clipforge.ollama")
 
 # Default Ollama base URL; overridable via the same env var both providers used.
@@ -124,10 +126,58 @@ def ensure_loaded(model: str, num_ctx: int) -> bool:
             _LOADED[key] = time.monotonic()
             log.info("ollama model %s ready (ctx %d) after %.1fs", model, num_ctx,
                      time.monotonic() - t0)
+            engine_status.clear("ollama")
             return True
         except Exception as e:
             log.warning("ollama could not load %s: %s", model, e)
+            engine_status.report("ollama", f"Could not load {model}: {e}")
             return False
+
+
+def ready(model: str, *, images: bool = False) -> bool:
+    """Load ``model`` now, outside any time budget; True when it is in memory.
+
+    The batch callers give all their clips one shared time budget. Loading a
+    cold 7-14B model takes 5-70 s on this hardware (measured), so a load
+    inside the budget used to leave no time for the clips: from a cold start
+    the VLM batch scored 0 of 6, with the model loaded first 6 of 6. Waits for a
+    load :func:`prewarm` already started instead of starting a second one.
+    """
+    return ensure_loaded(model, _num_ctx(images))
+
+
+_PREWARMING: set[tuple[str, int]] = set()
+# Its own lock: _LOAD_LOCK is held for a whole load, and prewarm() must return
+# at once even while another model is loading.
+_PREWARM_LOCK = threading.Lock()
+
+
+def prewarm(model: str, *, images: bool = False) -> bool:
+    """Start loading ``model`` in the background; False when nothing was started.
+
+    Call it a stage ahead so the load overlaps other work; :func:`ready`
+    before the batch then waits only for whatever is left of it.
+    """
+    if not model:
+        return False
+    key = (model, _num_ctx(images))
+    last = _LOADED.get(key)
+    if last is not None and time.monotonic() - last < _LOADED_TTL:
+        return False
+    with _PREWARM_LOCK:
+        if key in _PREWARMING:
+            return False
+        _PREWARMING.add(key)
+
+    def run() -> None:
+        try:
+            ensure_loaded(*key)
+        finally:
+            with _PREWARM_LOCK:
+                _PREWARMING.discard(key)
+
+    threading.Thread(target=run, name=f"ollama-prewarm-{model}", daemon=True).start()
+    return True
 
 
 def generate(*, model: str, prompt: str, timeout: float = 30.0,

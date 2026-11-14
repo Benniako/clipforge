@@ -313,7 +313,11 @@ def score_visuals(src_path: str,
 
     Supports both (start, end) and (start, end, climax_t) spans.
     Returns {index: (viral, reason)} for whatever finished in time; the rest keep
-    their existing score — a slow model can never stall a run."""
+    their existing score — a slow model can never stall a run. The model is
+    loaded before the budget starts (see :func:`ollama_client.ready`)."""
+    model = active_model()
+    if not spans or not model or not _oc.ready(model, images=True):
+        return {}
     indexed = list(enumerate(spans))
     items = []
     for _, span in indexed:

@@ -229,6 +229,9 @@ code, kbd { font-family: var(--font-mono); }
 .caps-badge.bad { background: rgba(240, 86, 74, 0.14); color: var(--bad); }
 .cap-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--good); display: inline-block; margin-right: 5px; flex: none; }
 .cap-dot.off { background: var(--muted-2); }
+.cap-dot.warn { background: var(--warn); }
+.diag-state.warn { color: var(--warn); }
+.diag-problem { display: block; color: var(--warn); line-height: 1.35; }
 
 .container { width: 100%; max-width: 1280px; margin: 0 auto; padding: var(--s5) var(--s5) var(--s7); flex: 1; }
 

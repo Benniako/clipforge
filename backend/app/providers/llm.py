@@ -370,6 +370,9 @@ def score_virals(excerpts: list[str], *, lang: str = "de",
         return {}
     # Keep original indices so duplicate transcripts map correctly.
     indexed = [(i, t) for i, t in enumerate(excerpts) if t.strip()]
+    # Load the model before the budget starts, or a cold load eats all of it.
+    if not indexed or not _oc.ready(active_model() or ""):
+        return {}
     items = [(t, lang) for _, t in indexed]
     result, _ = _oc.run_budgeted(lambda a: score_viral(a[0], lang=a[1]), items,
                               budget=budget, max_workers=3, logger=log)
@@ -386,6 +389,8 @@ def suggest_titles(excerpts: list[str], *, lang: str = "de",
     if not available():
         return {}
     indexed = [(i, t) for i, t in enumerate(excerpts) if t.strip()]
+    if not indexed or not _oc.ready(active_model() or ""):
+        return {}
     items = [(t, lang, platform) for _, t in indexed]
     result, _ = _oc.run_budgeted(lambda a: suggest_title(a[0], lang=a[1], platform=a[2]),
                               items, budget=budget, max_workers=3, logger=log)
