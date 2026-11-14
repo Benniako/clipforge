@@ -104,6 +104,8 @@ _PROFILE_EXTRA: dict[str, dict[str, tuple[str, ...]]] = {
                  "gegner übrig"),
         # The combat report's columns, read even when its title is garbled.
         "death": ("verursacht", "erlitten", "tödlich"),
+        # The 30 s before each round: buying behind the barrier, no fighting.
+        "buy_phase": ("kaufphase", "buy phase", "halte zum kaufen"),
         "spike": ("spike planted", "spike defused", "defusing",
                   "spike platziert", "spike entscharft", "spike entschärft",
                   "spike-entschärfer", "spike-entscharfer",

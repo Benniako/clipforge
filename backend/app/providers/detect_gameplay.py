@@ -84,7 +84,7 @@ KNOWN_PROFILES = frozenset(_PROFILES)
 # substrings — the OCR output is noisy, so we keep them loose.
 _AUTO_MARKERS: dict[str, list[str]] = {
     "valorant": [
-        "getötet", "kampfbericht", "kauphase", "spike", "runde läuft",
+        "getötet", "kampfbericht", "kaufphase", "kauphase", "spike", "runde läuft",
         "runde gewonnen", "agent", "taktiker", "unrated", "competitive",
         "schießstand", "gewerte",
     ],
@@ -188,7 +188,10 @@ _GW_FACTOR = {
 REACTION_WEIGHT = 0.2
 CONFIRM_WINDOW = 3.0
 MENU_CONTEXT_WINDOW = 5.0
-MENU_OCR_LABELS = {"menu", "substitution"}
+# Screens where nothing happens in the match: a menu, an EA FC substitution,
+# Valorant's buy phase. No clip of their own, and loud moments around them
+# are muted (MENU_CONTEXT_WINDOW).
+MENU_OCR_LABELS = {"menu", "substitution", "buy_phase"}
 # On-screen text that says what happened without being a highlight (the
 # streamer's own death screen): kept as an event, never a clip or a confirmation.
 CONTEXT_OCR_LABELS = {"death"}

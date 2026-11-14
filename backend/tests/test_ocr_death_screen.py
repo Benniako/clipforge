@@ -105,6 +105,26 @@ def test_real_menus_still_count(text):
     assert DG._is_menu_ocr_event(OcrEvent(t=1.0, label="kill", text=text, confidence=0.9))
 
 
+@pytest.mark.parametrize("text", [
+    "0:11 RUNDE4 KAUFPHASE HALTE ZUM KAUFEN GETÖTET VON JETT 06 Onesho",
+    "Attacker Side Spawn 0:26 KAUFPHASE HALTE ZUM KAUFEN WLZ0",
+    "BUY PHASE 0:25",
+])
+def test_the_buy_phase_is_read_in_valorant(text):
+    assert "buy_phase" in _labels(text)
+    assert "buy_phase" not in _labels(text, "generic")
+
+
+def test_the_buy_phase_makes_no_clip_and_mutes_the_sounds_beside_it():
+    buy = OcrEvent(t=33.5, label="buy_phase", text="kaufphase | C Lobby 0:07 KAUFPHASE",
+                   confidence=0.95)
+    assert DG._is_menu_ocr_event(buy)
+    assert DG._ocr_clips([buy], _info(), _settings()) == []
+    audio = [AudioEvent(t=t, label="explosive_action", confidence=0.8, detail="CLAP")
+             for t in (30.5, 34.5, 60.0)]
+    assert [e.t for e in DG._suppress_audio_events_near_menu(audio, [buy])] == [60.0]
+
+
 def test_a_callout_does_not_mute_the_moment_beside_it():
     callout = OcrEvent(t=48.0, label="death", text="kampfbericht | C Lobby GETÖTET VON CLOVE",
                        confidence=0.96)
