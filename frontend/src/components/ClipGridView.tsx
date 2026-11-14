@@ -2,12 +2,13 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../lib/api";
 import type { ImportSettings, PowerMode, Project } from "../lib/types";
-import { fmtClock, fmtDuration, scoreColor } from "../lib/format";
+import { fmtClock, fmtDuration } from "../lib/format";
 import { mediaTimeUrl } from "../lib/media";
 import { useT } from "../lib/i18n";
 import ClipCard from "./ClipCard";
 import CueModal from "./CueModal";
 import GoalsByMatch from "./GoalsByMatch";
+import ScoreBadge from "./ScoreBadge";
 import VisualCueCalibration from "./VisualCueCalibration";
 
 interface Learning {
@@ -22,24 +23,27 @@ interface Learning {
 type Sort = "score" | "timeline" | "duration";
 type ProjectClip = Project["clips"][number];
 
-const POWER_LABELS: Record<string, string> = {
-  balanced: "Ausgewogen",
-  max_gpu: "Max GPU",
-  quality: "Qualität",
+const POWER_LABEL_KEYS: Record<string, string> = {
+  balanced: "up.powerBalanced",
+  max_gpu: "up.powerMaxGpu",
+  quality: "up.powerQuality",
 };
 
-const SORT_LABELS: Record<Sort, string> = {
-  score: "Score",
-  timeline: "Timeline",
-  duration: "Dauer",
+const SORT_LABEL_KEYS: Record<Sort, string> = {
+  score: "cg.sortScore",
+  timeline: "cg.sortTimeline",
+  duration: "cg.sortDuration",
 };
 
 export default function ClipGridView({
   project,
   onChange,
+  onPhoneView,
 }: {
   project: Project;
   onChange: (p: Project) => void;
+  /** Switch the project to the phone-style swipe review. */
+  onPhoneView?: () => void;
 }) {
   const { t } = useT();
   const [sort, setSort] = useState<Sort>("score");
@@ -131,7 +135,7 @@ export default function ClipGridView({
       setSelected([]);
     } catch (e: any) {
       // a failed *request* creates no montage card, so say it out loud
-      if (alive.current) setMontageErr(e?.message ?? "Montage konnte nicht erstellt werden.");
+      if (alive.current) setMontageErr(e?.message ?? t("cg.errMontage"));
     } finally {
       if (alive.current) setMontaging(false);
     }
@@ -205,7 +209,7 @@ export default function ClipGridView({
   const learnTitle = learn
     ? Object.values(learn.learned_top_features)
         .flatMap((m) => Object.entries(m).map(([k, v]) => `${k} ${Math.round(v * 100)}%`))
-        .join(", ") || "Bewerte Clips mit Gut/Schlecht, um die Auswahl zu personalisieren"
+        .join(", ") || t("cg.learnEmpty")
     : "";
 
   const resetLearning = async () => {
@@ -219,7 +223,7 @@ export default function ClipGridView({
       window.location.reload(); // restart the processing view + polling
     } catch (e: any) {
       // e.g. 409 while a previous run is still processing
-      setMontageErr(e?.message ?? "Projekt konnte nicht neu berechnet werden.");
+      setMontageErr(e?.message ?? t("cg.errRerun"));
     }
   };
 
@@ -228,7 +232,7 @@ export default function ClipGridView({
       await api.reprocess(project.id, normalizedRenderDraft as Partial<ImportSettings>);
       window.location.reload();
     } catch (e: any) {
-      setMontageErr(e?.message ?? "Projekt konnte mit diesen Einstellungen nicht neu berechnet werden.");
+      setMontageErr(e?.message ?? t("cg.errRerunDraft"));
     }
   };
 
@@ -254,68 +258,75 @@ export default function ClipGridView({
         await new Promise((r) => setTimeout(r, 1500));
       }
     } catch (e: any) {
-      if (alive.current) setMontageErr(e?.message ?? "Ausgewählte Clips konnten nicht neu gerendert werden.");
+      if (alive.current) setMontageErr(e?.message ?? t("cg.errRerender"));
     } finally {
       if (alive.current) setRerenderingSelected(false);
     }
   };
 
+  const onOff = (on: boolean) => (on ? t("up.on") : t("up.off"));
+  const showScan = project.events?.length > 0 || (project.content_type === "gameplay" && project.source);
+
   return (
     <div className="container">
       <div className="project-head">
-        <div className="col">
+        <div className="col project-title">
+          <Link className="back-link" to="/">← {t("cg.back")}</Link>
           <div className="row">
             <h2>{project.name}</h2>
             {project.content_type && (
               <span className="pill">
-                {project.content_type === "gameplay" ? "Gameplay" : "Sprache"}
+                {project.content_type === "gameplay" ? t("cg.typeGameplay") : t("cg.typeTalking")}
               </span>
             )}
           </div>
           <div className="project-meta">
-            <span><b>{fmtDuration(project.source?.duration ?? 0)}</b> Quelle</span>
-            <span><b>{project.clips.length}</b> Clips</span>
-            <span><b>{ready}</b> gerendert</span>
+            <span><b>{fmtDuration(project.source?.duration ?? 0)}</b> {t("cg.metaSource")}</span>
+            <span><b>{project.clips.length}</b> {t("cg.metaClips")}</span>
+            <span><b>{ready}</b> {t("cg.metaRendered")}</span>
             <span><b>{project.settings.aspect}</b></span>
-            <span>{POWER_LABELS[project.settings.power_mode] ?? "Ausgewogen"}</span>
+            <span>{t(POWER_LABEL_KEYS[project.settings.power_mode] ?? "up.powerBalanced")}</span>
           </div>
         </div>
         <div className="project-actions">
           {learn && learn.total_ratings > 0 && (
             <span
               className="pill ok"
-              title={`Gelernt: ${learnTitle}. Klicken zum Zurücksetzen.`}
+              title={t("cg.learnTitle", { list: learnTitle })}
               onClick={resetLearning}
               style={{ cursor: "pointer" }}
             >
-              Personalisiert - {learn.likes} gut {learn.dislikes} schlecht
-              {learn.trims > 0 ? ` - ${learn.trims} Schnitte` : ""}
+              {t("cg.learnPill", { likes: learn.likes, dislikes: learn.dislikes })}
+              {learn.trims > 0 ? t("cg.learnTrims", { trims: learn.trims }) : ""}
             </span>
+          )}
+          {onPhoneView && (
+            <div className="seg view-seg">
+              <button className="on" aria-pressed="true">{t("pv.viewGrid")}</button>
+              <button onClick={onPhoneView}>{t("pv.viewPhone")}</button>
+            </div>
           )}
           {project.content_type === "gameplay" && (
             <button className="btn ghost sm" onClick={() => setShowCues(true)}
-              title="Spiel-Sounds oder OCR-Begriffe hinzufügen, testen und dann neu berechnen">
-              Spiel-Cues
+              title={t("cg.cuesTitle")}>
+              {t("nav.cues")}
             </button>
           )}
           <button className="btn ghost sm" onClick={rerun}
-            title="Neu auf demselben Video berechnen - nutzt Bewertungen, neue Cues und Einstellungen">
-            Neu berechnen
+            title={t("cg.rerunTitle")}>
+            {t("cg.rerun")}
           </button>
-          <Link className="btn ghost sm" to="/">
-            Zurück - Neues Projekt
-          </Link>
-          <a className="btn primary sm" href={api.exportBatchUrl(project.id)}>
-            Alle exportieren ({ready})
-          </a>
           <a className="btn ghost sm" href={api.exportPremiereUrl(project.id)}>
-            Premiere EDL
+            {t("cg.premiere")}
+          </a>
+          <a className="btn primary sm" href={api.exportBatchUrl(project.id)}>
+            {t("cg.exportAll", { count: ready })}
           </a>
         </div>
       </div>
 
       {project.warnings?.length > 0 && (
-        <div style={{ marginTop: 16, display: "grid", gap: 8 }}>
+        <div className="notice-list">
           {project.warnings.map((w, i) => {
             const sev = typeof w === "string" ? "warn" : w.severity;
             const message = typeof w === "string" ? w : w.message;
@@ -331,25 +342,25 @@ export default function ClipGridView({
 
       <div className="grid-head">
         <div className="row" style={{ gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-          <span className="eyebrow">Filter</span>
+          <span className="eyebrow">{t("cg.filter")}</span>
           <div className="seg">
             <button
               className={minScore === 0 ? "on" : ""}
               onClick={() => setMinScore(0)}
             >
-              Alle ({project.clips.length})
+              {t("cg.filterAll", { count: project.clips.length })}
             </button>
             <button
               className={minScore === 85 ? "on" : ""}
               onClick={() => setMinScore(85)}
             >
-              Ultra Viral 85+ ({project.clips.filter((c) => c.score >= 85).length})
+              {t("cg.filter85", { count: project.clips.filter((c) => c.score >= 85).length })}
             </button>
             <button
               className={minScore === 70 ? "on" : ""}
               onClick={() => setMinScore(70)}
             >
-              Highlights 70+ ({project.clips.filter((c) => c.score >= 70).length})
+              {t("cg.filter70", { count: project.clips.filter((c) => c.score >= 70).length })}
             </button>
           </div>
         </div>
@@ -357,16 +368,15 @@ export default function ClipGridView({
         <div className="spacer" />
 
         <div className="row" style={{ gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-          <span className="eyebrow">Sortierung</span>
+          <span className="eyebrow">{t("cg.sort")}</span>
           <div className="seg">
             {(["score", "timeline", "duration"] as Sort[]).map((s) => (
               <button
                 key={s}
                 className={sort === s ? "on" : ""}
-                style={{ minWidth: 72 }}
                 onClick={() => setSort(s)}
               >
-                {SORT_LABELS[s]}
+                {t(SORT_LABEL_KEYS[s])}
               </button>
             ))}
           </div>
@@ -374,31 +384,32 @@ export default function ClipGridView({
           <select
             className="input"
             value={project.settings.aspect}
-            title="Ausgabeformat jetzt ändern - rendert alle Clips neu"
+            title={t("cg.aspectTitle")}
+            aria-label={t("cg.aspectTitle")}
             onChange={async (e) => {
               try {
                 await api.setAspect(project.id, e.target.value);
                 window.location.reload();
               } catch (err: any) {
-                setMontageErr(err?.message ?? "Format konnte nicht geändert werden.");
+                setMontageErr(err?.message ?? t("cg.errAspect"));
               }
             }}
           >
-            <option value="9:16">9:16 vertikal</option>
-            <option value="4:5">4:5 Feed</option>
-            <option value="1:1">1:1 Quadrat</option>
-            <option value="16:9">16:9 breit</option>
+            <option value="9:16">{t("cg.aspect916")}</option>
+            <option value="4:5">{t("cg.aspect45")}</option>
+            <option value="1:1">{t("cg.aspect11")}</option>
+            <option value="16:9">{t("cg.aspect169")}</option>
           </select>
 
-          <button className="btn ghost sm" onClick={refresh} title="Aktualisieren">
-            Aktualisieren
+          <button className="btn ghost sm" onClick={refresh} title={t("cg.refresh")}>
+            {t("cg.refresh")}
           </button>
-          <button className="btn ghost sm" onClick={() => setSelected(clips.map((c) => c.id))} title="Alle auswählen">
-            Alle
+          <button className="btn ghost sm" onClick={() => setSelected(clips.map((c) => c.id))} title={t("cg.selectAll")}>
+            {t("cg.selectAll")}
           </button>
           {selected.length > 0 && (
-            <button className="btn ghost sm" onClick={() => setSelected([])} title="Auswahl aufheben">
-              Abwählen ({selected.length})
+            <button className="btn ghost sm" onClick={() => setSelected([])} title={t("cg.deselectTitle")}>
+              {t("cg.deselect", { count: selected.length })}
             </button>
           )}
         </div>
@@ -407,7 +418,7 @@ export default function ClipGridView({
       <GoalsByMatch project={project} onChange={onChange} />
 
       {clips.length === 0 ? (
-        <div className="empty">Keine Clips passen zu diesem Filter. Senke den Mindest-Score.</div>
+        <div className="empty">{t("cg.emptyFilter")}</div>
       ) : (
         <div className="clip-grid">
           {clips.map((c) => (
@@ -423,13 +434,19 @@ export default function ClipGridView({
         </div>
       )}
 
+      {selected.length === 0 && clips.length > 1 && (
+        <p className="grid-hint muted tiny">{t("cg.montageHint")}</p>
+      )}
+
       {selectedClips.length > 0 && (
         <div className="panel section selected-preview">
-          <div className="row" style={{ justifyContent: "space-between", marginBottom: 12 }}>
+          <div className="row" style={{ justifyContent: "space-between", marginBottom: 12, flexWrap: "wrap" }}>
             <div className="col">
-              <h3>Auswahl-Vorschau</h3>
+              <h3>{t("cg.selPreview")}</h3>
               <span className="muted tiny">
-                {selectedClips.length} Clip{selectedClips.length === 1 ? "" : "s"} in Montage-Reihenfolge
+                {selectedClips.length === 1
+                  ? t("cg.selCountOne")
+                  : t("cg.selCountMany", { count: selectedClips.length })}
               </span>
             </div>
             <div className="row selected-preview-actions">
@@ -438,13 +455,13 @@ export default function ClipGridView({
                   className={selectedPreviewMode === "rendered" ? "on" : ""}
                   onClick={() => setSelectedPreviewMode("rendered")}
                 >
-                  Gerendert
+                  {t("ce.tabRendered")}
                 </button>
                 <button
                   className={selectedPreviewMode === "original" ? "on" : ""}
                   onClick={() => setSelectedPreviewMode("original")}
                 >
-                  Original
+                  {t("ce.tabOriginal")}
                 </button>
               </div>
               <button
@@ -452,10 +469,7 @@ export default function ClipGridView({
                 onClick={rerenderSelected}
                 disabled={rerenderingSelected}
               >
-                {rerenderingSelected ? <><span className="spinner" /> Rendert neu...</> : "Auswahl neu rendern"}
-              </button>
-              <button className="btn ghost sm" onClick={() => setSelected([])}>
-                Leeren
+                {rerenderingSelected ? <><span className="spinner" /> {t("cg.rerendering")}</> : t("cg.rerenderSel")}
               </button>
             </div>
           </div>
@@ -463,6 +477,7 @@ export default function ClipGridView({
             {/* Batch style change */}
             <select className="input" style={{ width: "auto" }}
               value=""
+              aria-label={t("cg.applyStyle")}
               onChange={async (e) => {
                 const styleId = e.target.value;
                 if (!styleId) return;
@@ -480,17 +495,17 @@ export default function ClipGridView({
                 onChange(p);
               }}
             >
-              <option value="">Stil auf alle anwenden…</option>
+              <option value="">{t("cg.applyStyle")}</option>
               {[...new Set(project.clips.map(c => c.captions.style_id))].map(sid => (
                 <option key={sid} value={sid}>{sid}</option>
               ))}
             </select>
             {/* Batch download as ZIP */}
             {selectedClips.some(c => c.status === "ready" && c.export_url) && (
-              <a className="btn sm ghost" style={{ fontSize: 12 }}
+              <a className="btn sm ghost"
                 href={api.exportBatchUrl(project.id)}
                 download>
-                Auswahl ZIP ({selectedClips.filter(c => c.export_url).length})
+                {t("cg.zipSel", { count: selectedClips.filter(c => c.export_url).length })}
               </a>
             )}
           </div>
@@ -505,7 +520,7 @@ export default function ClipGridView({
                   poster={selectedPreviewMode === "rendered" ? activeSelected?.thumb_url ?? undefined : undefined}
                 />
               ) : (
-                <div className="empty">Wähle einen Clip aus, um ihn hier anzusehen.</div>
+                <div className="empty">{t("cg.pickToWatch")}</div>
               )}
             </div>
             <div className="selected-list">
@@ -520,7 +535,7 @@ export default function ClipGridView({
                     className="mini-thumb"
                     style={c.thumb_url ? { backgroundImage: `url(${c.thumb_url})` } : undefined}
                   />
-                  <span className="selected-title">{c.title || "Unbenannter Clip"}</span>
+                  <span className="selected-title">{c.title || t("cc.untitled")}</span>
                   <span className="muted tiny">{fmtDuration(c.tightened_duration ?? c.end - c.start)}</span>
                 </button>
               ))}
@@ -529,69 +544,64 @@ export default function ClipGridView({
         </div>
       )}
 
-      {/* Montage builder */}
-      <div className="montage-bar">
-        <span className="muted tiny">
-          {selected.length === 0
-            ? "Tipp: Wähle Clips aus, um sie zu einer Montage zu verbinden."
-            : `${selected.length} ausgewählt - sie spielen in deiner Auswahl-Reihenfolge.`}
-        </span>
-        <div className="spacer" style={{ flex: 1 }} />
-        {selected.length > 0 && (
+      {/* Montage builder: a selection bar that stays in view while clips are picked */}
+      {selected.length > 0 && (
+        <div className="montage-bar">
+          <span className="montage-count">{selected.length}</span>
+          <span className="muted tiny">
+            {selected.length < 2 ? t("cg.montageNeedTwo") : t("cg.montageSelected")}
+          </span>
+          <div className="spacer" />
           <button className="btn ghost sm" onClick={() => setSelected([])}>
-            Leeren
+            {t("cg.clear")}
           </button>
-        )}
-        <button
-          className="btn primary sm"
-          onClick={makeMontage}
-          disabled={selected.length < 2 || montaging}
-        >
-          {montaging ? <><span className="spinner" /> Montage wird gebaut…</> : `Montage erstellen (${selected.length})`}
-        </button>
-      </div>
+          <button
+            className="btn primary sm"
+            onClick={makeMontage}
+            disabled={selected.length < 2 || montaging}
+          >
+            {montaging ? <><span className="spinner" /> {t("cg.montageBuilding")}</> : t("cg.montageCreate", { count: selected.length })}
+          </button>
+        </div>
+      )}
 
       {montageErr && <div className="toast err">{montageErr}</div>}
 
       {showCues && <CueModal onClose={() => setShowCues(false)} />}
 
       {project.montages.length > 0 && (
-        <div style={{ marginTop: 28 }}>
-          <h3 className="section-title">Montagen</h3>
+        <div>
+          <h3 className="section-title">{t("cg.montages")}</h3>
           <div className="clip-grid">
             {project.montages.map((m) => (
               <div className="clip-card" key={m.id}>
                 <div
                   className="thumb"
-                  style={{
-                    aspectRatio: "16 / 10",
-                    backgroundImage: m.thumb_url ? `url(${m.thumb_url})` : undefined,
-                  }}
+                  style={m.thumb_url ? { backgroundImage: `url(${m.thumb_url})` } : undefined}
                 >
                   {m.status !== "ready" && (
                     <span className="status-chip" style={{ color: m.status === "failed" ? "var(--bad)" : "var(--warn)" }}>
-                      {m.status === "failed" ? "Fehlgeschlagen" : "Rendering…"}
+                      {m.status === "failed" ? t("cg.montageFailed") : t("cg.montageRendering")}
                     </span>
                   )}
                   {m.status === "ready" && <span className="dur">{fmtDuration(m.duration)}</span>}
                 </div>
                 <div className="clip-body">
-                  <span className="score-badge" style={{ ["--c" as string]: scoreColor(m.score) }}>
-                    <span className="ring" style={{ ["--p" as string]: m.score }}>
-                      <i>{m.score}</i>
-                    </span>
-                    <span>Score</span>
-                  </span>
-                  <div className="clip-title">{m.title}</div>
-                  <div className="factors">
-                    {m.factors.slice(0, 2).map((f, i) => (
-                      <span className="factor" key={i} title={f.detail}>{f.label}<span className="w">+{Math.round(f.weight)}</span></span>
-                    ))}
+                  <div className="clip-top">
+                    <ScoreBadge score={m.score} />
                   </div>
+                  <div className="clip-title">{m.title}</div>
+                  {m.factors.length > 0 && (
+                    <div className="factors inline">
+                      {m.factors.slice(0, 2).map((f, i) => (
+                        <span className="factor" key={i} title={f.detail}>{f.label}<span className="w">+{Math.round(f.weight)}</span></span>
+                      ))}
+                    </div>
+                  )}
                   {m.status === "ready" && m.export_url && (
                     <div className="card-actions">
-                      <a className="btn sm" href={api.downloadMontageUrl(project.id, m.id)} download>
-                        Download
+                      <a className="btn sm primary" href={api.downloadMontageUrl(project.id, m.id)} download>
+                        {t("cc.download")}
                       </a>
                     </div>
                   )}
@@ -601,237 +611,256 @@ export default function ClipGridView({
           </div>
         </div>
       )}
-      <h3 className="section-title eyebrow">{t("up.secOutput")} &amp; {t("up.secDetect")}</h3>
-      {(project.events?.length > 0 || (project.content_type === "gameplay" && project.source)) && (
-        <details className="fold">
-          <summary>{t("cg.scan")}</summary>
-          <div className="fold-body">
-          <div className="row" style={{ justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
-            <div className="col">
-              <span className="muted tiny">
-                Ereignisse prüfen, visuelle Cues kalibrieren und falsche Treffer entfernen.
-              </span>
+
+      <div className="fold-group project-folds">
+        <h3 className="fold-group-title eyebrow">{t("up.secOutput")} &amp; {t("up.secDetect")}</h3>
+        {showScan && (
+          <details className="fold">
+            <summary>
+              <span>{t("cg.scan")}</span>
+              <span className="fold-summary">{t("cg.eventsCount", { count: project.events?.length ?? 0 })}</span>
+            </summary>
+            <div className="fold-body">
+            <div className="row" style={{ justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap", marginBottom: 10 }}>
+              <span className="muted tiny">{t("cg.scanIntro")}</span>
+              {project.content_type === "gameplay" && project.source && (
+                <div className="seg scan-tabs">
+                  <button className={scanTab === "events" ? "on" : ""} onClick={() => setScanTab("events")}>
+                    {t("cg.tabEvents")}
+                  </button>
+                  <button className={scanTab === "visual" ? "on" : ""} onClick={() => setScanTab("visual")}>
+                    {t("cg.tabVisual")}
+                  </button>
+                </div>
+              )}
             </div>
-            {project.content_type === "gameplay" && project.source && (
-              <div className="seg scan-tabs">
-                <button className={scanTab === "events" ? "on" : ""} onClick={() => setScanTab("events")}>
-                  Ereignisse
+            {scanTab === "events" || project.content_type !== "gameplay" || !project.source ? (
+              <>
+                <span className="muted tiny">
+                  {t("cg.eventsUsed", { count: project.events.length })}
+                </span>
+                <div className="row" style={{ flexWrap: "wrap", gap: 6, marginTop: 8 }}>
+                  {project.events.slice(0, 30).map((e, i) => (
+                    <span key={i} className="pill"
+                      title={t("cg.eventMatch", { detail: e.detail || e.label, pct: Math.round(e.confidence * 100) })}>
+                      {e.source === "ocr" ? "OCR" : "Audio"} {e.label} - {fmtClock(e.t)}
+                    </span>
+                  ))}
+                  {project.events.length > 30 && (
+                    <span className="muted tiny">{t("cg.moreEvents", { count: project.events.length - 30 })}</span>
+                  )}
+                  {project.events.length === 0 && (
+                    <span className="muted tiny">{t("cg.noEvents")}</span>
+                  )}
+                </div>
+              </>
+            ) : (
+              <VisualCueCalibration project={project} />
+            )}
+            </div>
+          </details>
+        )}
+
+        <details className="fold render-controls">
+          <summary>
+            <span>{t("cg.render")}</span>
+            <span className="fold-summary">
+              {t(POWER_LABEL_KEYS[project.settings.power_mode] ?? "up.powerBalanced")} · {project.settings.aspect}
+            </span>
+          </summary>
+          <div className="fold-body">
+          <div className="row" style={{ justifyContent: "space-between", alignItems: "flex-start", gap: 14, flexWrap: "wrap", marginBottom: 12 }}>
+            <span className="muted tiny">{t("cg.renderIntro")}</span>
+            <button className="btn primary sm" onClick={rerunWithDraft} disabled={!renderDirty}>
+              {t("cg.rerunWith")}
+            </button>
+          </div>
+          <div className="render-control-grid">
+            <div className="field">
+              <label>{t("up.powerMode")}</label>
+              <select
+                className="input"
+                value={renderDraft.power_mode}
+                onChange={(e) => setRenderDraft((d) => ({ ...d, power_mode: e.target.value as PowerMode }))}
+              >
+                <option value="balanced">{t("up.powerBalanced")}</option>
+                <option value="max_gpu">{t("up.powerMaxGpu")}</option>
+                <option value="quality">{t("up.powerQuality")}</option>
+              </select>
+            </div>
+            <div className="field">
+              <label>{t("cg.outputFormat")}</label>
+              <select
+                className="input"
+                value={renderDraft.aspect}
+                onChange={(e) => setRenderDraft((d) => ({ ...d, aspect: e.target.value }))}
+              >
+                <option value="9:16">{t("cg.aspect916")}</option>
+                <option value="4:5">{t("cg.aspect45")}</option>
+                <option value="1:1">{t("cg.aspect11")}</option>
+                <option value="16:9">{t("cg.aspect169")}</option>
+              </select>
+            </div>
+            {project.content_type === "gameplay" && (
+              <div className="field">
+                <label>{t("up.facecam")}</label>
+                <select
+                  className="input"
+                  value={renderDraft.facecam_layout}
+                  onChange={(e) => setRenderDraft((d) => ({ ...d, facecam_layout: e.target.value }))}
+                >
+                  <option value="auto">{t("cg.camAuto")}</option>
+                  <option value="split">{t("cg.camSplit")}</option>
+                  <option value="framed">{t("cg.camPip")}</option>
+                  <option value="off">{t("cg.camOff")}</option>
+                </select>
+              </div>
+            )}
+            <div className="field toggle-field">
+              <label>{t("cg.switches")}</label>
+              <div className="toggle-stack compact">
+                <button
+                  className={"toggle" + (renderDraft.burn_captions ? " on" : "")}
+                  onClick={() => setRenderDraft((d) => ({ ...d, burn_captions: !d.burn_captions }))}
+                >
+                  <span>{t("up.captions")}</span>
+                  <i>{onOff(renderDraft.burn_captions)}</i>
                 </button>
-                <button className={scanTab === "visual" ? "on" : ""} onClick={() => setScanTab("visual")}>
-                  Visuelle Kalibrierung
+                <button
+                  className={"toggle" + (renderDraft.tighten ? " on" : "")}
+                  onClick={() => setRenderDraft((d) => ({ ...d, tighten: !d.tighten }))}
+                >
+                  <span>{t("up.jumpCuts")}</span>
+                  <i>{onOff(renderDraft.tighten)}</i>
                 </button>
+                <button
+                  className={"toggle" + (renderDraft.motion === "push" ? " on" : "")}
+                  onClick={() => setRenderDraft((d) => ({ ...d, motion: d.motion === "push" ? "none" : "push" }))}
+                >
+                  <span>{t("up.slowPush")}</span>
+                  <i>{onOff(renderDraft.motion === "push")}</i>
+                </button>
+                <button
+                  className={"toggle" + (renderDraft.denoise ? " on" : "")}
+                  onClick={() => setRenderDraft((d) => ({ ...d, denoise: !d.denoise }))}
+                >
+                  <span>{t("up.cleanVoice")}</span>
+                  <i>{onOff(renderDraft.denoise)}</i>
+                </button>
+                <button
+                  className={"toggle" + (renderDraft.use_ocr ? " on" : "")}
+                  onClick={() => setRenderDraft((d) => ({ ...d, use_ocr: !d.use_ocr }))}
+                >
+                  <span>OCR</span>
+                  <i>{onOff(renderDraft.use_ocr)}</i>
+                </button>
+                <button
+                  className={"toggle" + (renderDraft.use_vlm ? " on" : "")}
+                  onClick={() => setRenderDraft((d) => ({ ...d, use_vlm: !d.use_vlm }))}
+                >
+                  <span>{t("up.aiVision")}</span>
+                  <i>{onOff(renderDraft.use_vlm)}</i>
+                </button>
+                <button
+                  className={"toggle" + (renderDraft.use_audio_events ? " on" : "")}
+                  onClick={() => setRenderDraft((d) => ({ ...d, use_audio_events: !d.use_audio_events }))}
+                >
+                  <span>{t("up.audioEvents")}</span>
+                  <i>{onOff(renderDraft.use_audio_events)}</i>
+                </button>
+                <button
+                  className={"toggle" + (renderDraft.use_cues ? " on" : "")}
+                  onClick={() => setRenderDraft((d) => ({ ...d, use_cues: !d.use_cues }))}
+                  title={t("cg.ownSoundsTitle")}
+                >
+                  <span>{t("cg.ownSounds")}</span>
+                  <i>{onOff(renderDraft.use_cues)}</i>
+                </button>
+                <button
+                  className={"toggle" + (renderDraft.cue_learning ? " on" : "")}
+                  onClick={() => setRenderDraft((d) => ({ ...d, cue_learning: !d.cue_learning }))}
+                >
+                  <span>{t("up.cueLearning")}</span>
+                  <i>{onOff(renderDraft.cue_learning)}</i>
+                </button>
+                <button
+                  className={"toggle" + (renderDraft.auto_length ? " on" : "")}
+                  onClick={() => setRenderDraft((d) => ({ ...d, auto_length: !d.auto_length }))}
+                >
+                  <span>{t("up.autoLength")}</span>
+                  <i>{onOff(renderDraft.auto_length)}</i>
+                </button>
+              </div>
+            </div>
+            {project.content_type === "gameplay" && (
+              <div className="field wide timing-controls">
+                <label>{t("up.clipContext")}</label>
+                <button
+                  className={"toggle context-toggle" + (contextAuto ? " on" : "")}
+                  onClick={() =>
+                    setRenderDraft((d) =>
+                      d.lead_seconds === null && d.tail_seconds === null
+                        ? { ...d, lead_seconds: 16, tail_seconds: 20 }
+                        : { ...d, lead_seconds: null, tail_seconds: null },
+                    )
+                  }
+                >
+                  <span>{t("up.autoContext")}</span>
+                  <i>{onOff(contextAuto)}</i>
+                </button>
+                {(renderDraft.lead_seconds !== null || renderDraft.tail_seconds !== null) && (
+                  <div className="context-ranges">
+                    <div>
+                      <div className="range-label">
+                        <span>{t("up.beforeMoment")}</span>
+                        <b>{renderDraft.lead_seconds ?? 16}s</b>
+                      </div>
+                      <input
+                        type="range"
+                        min={0}
+                        max={30}
+                        step={1}
+                        value={renderDraft.lead_seconds ?? 16}
+                        onChange={(e) => setRenderDraft((d) => ({ ...d, lead_seconds: Number(e.target.value) }))}
+                      />
+                    </div>
+                    <div>
+                      <div className="range-label">
+                        <span>{t("up.afterMoment")}</span>
+                        <b>{renderDraft.tail_seconds ?? 20}s</b>
+                      </div>
+                      <input
+                        type="range"
+                        min={2}
+                        max={30}
+                        step={1}
+                        value={renderDraft.tail_seconds ?? 20}
+                        onChange={(e) => setRenderDraft((d) => ({ ...d, tail_seconds: Number(e.target.value) }))}
+                      />
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </div>
-          {scanTab === "events" || project.content_type !== "gameplay" || !project.source ? (
-            <>
-              <span className="muted tiny">
-                Verwendete Ereignisse ({project.events.length}) - übernommene Cues und Bildschirmtreffer in den finalen Clips
-              </span>
-              <div className="row" style={{ flexWrap: "wrap", gap: 6, marginTop: 8 }}>
-                {project.events.slice(0, 30).map((e, i) => (
-                  <span key={i} className="pill"
-                    title={`${e.detail || e.label} - ${Math.round(e.confidence * 100)}% match`}>
-                    {e.source === "ocr" ? "OCR" : "Audio"} {e.label} - {fmtClock(e.t)}
-                  </span>
-                ))}
-                {project.events.length > 30 && (
-                  <span className="muted tiny">+{project.events.length - 30} weitere</span>
-                )}
-                {project.events.length === 0 && (
-                  <span className="muted tiny">Noch keine Ereignisse gefunden.</span>
-                )}
-              </div>
-            </>
-          ) : (
-            <VisualCueCalibration project={project} />
-          )}
+        </div>
+        </details>
+
+        {/* Streamer.bot webhook: the mark-highlight URL to paste into
+            Streamer.bot's HTTP request action. */}
+        <details className="fold">
+          <summary>
+            <span>{t("cg.webhook")}</span>
+            <span className="fold-summary">POST /mark-highlight</span>
+          </summary>
+          <div className="fold-body">
+            <p className="muted tiny fold-intro">{t("cg.webhookIntro")}</p>
+            <code className="code-line">
+              POST /api/projects/{project.id}/mark-highlight?timestamp=SEC&amp;duration=30
+            </code>
           </div>
         </details>
-      )}
-
-      <details className="fold render-controls">
-        <summary>{t("cg.render")}</summary>
-        <div className="fold-body">
-        <div className="row" style={{ justifyContent: "space-between", alignItems: "flex-start", gap: 14 }}>
-          <div className="col">
-            <span className="muted tiny">
-              Passe Modus oder Ausgabe an und starte dieses Material erneut.
-            </span>
-          </div>
-          <button className="btn primary sm" onClick={rerunWithDraft} disabled={!renderDirty}>
-            Mit Einstellungen neu starten
-          </button>
-        </div>
-        <div className="render-control-grid">
-          <div className="field">
-            <label>Leistungsmodus</label>
-            <select
-              className="input"
-              value={renderDraft.power_mode}
-              onChange={(e) => setRenderDraft((d) => ({ ...d, power_mode: e.target.value as PowerMode }))}
-            >
-              <option value="balanced">Ausgewogen</option>
-              <option value="max_gpu">Max GPU</option>
-              <option value="quality">Qualität</option>
-            </select>
-          </div>
-          <div className="field">
-            <label>Ausgabeformat</label>
-            <select
-              className="input"
-              value={renderDraft.aspect}
-              onChange={(e) => setRenderDraft((d) => ({ ...d, aspect: e.target.value }))}
-            >
-              <option value="9:16">9:16 vertikal</option>
-              <option value="4:5">4:5 Feed</option>
-              <option value="1:1">1:1 Quadrat</option>
-              <option value="16:9">16:9 breit</option>
-            </select>
-          </div>
-          {project.content_type === "gameplay" && (
-            <div className="field">
-              <label>Facecam</label>
-              <select
-                className="input"
-                value={renderDraft.facecam_layout}
-                onChange={(e) => setRenderDraft((d) => ({ ...d, facecam_layout: e.target.value }))}
-              >
-                <option value="auto">Auto</option>
-                <option value="split">Gestapelt</option>
-                <option value="framed">PiP</option>
-                <option value="off">Aus</option>
-              </select>
-            </div>
-          )}
-          <div className="field toggle-field">
-            <label>Schalter</label>
-            <div className="toggle-stack compact">
-              <button
-                className={"toggle" + (renderDraft.burn_captions ? " on" : "")}
-                onClick={() => setRenderDraft((d) => ({ ...d, burn_captions: !d.burn_captions }))}
-              >
-                <span>Untertitel</span>
-                <i>{renderDraft.burn_captions ? "An" : "Aus"}</i>
-              </button>
-              <button
-                className={"toggle" + (renderDraft.tighten ? " on" : "")}
-                onClick={() => setRenderDraft((d) => ({ ...d, tighten: !d.tighten }))}
-              >
-                <span>Jump-Cuts</span>
-                <i>{renderDraft.tighten ? "An" : "Aus"}</i>
-              </button>
-              <button
-                className={"toggle" + (renderDraft.motion === "push" ? " on" : "")}
-                onClick={() => setRenderDraft((d) => ({ ...d, motion: d.motion === "push" ? "none" : "push" }))}
-              >
-                <span>Push-in</span>
-                <i>{renderDraft.motion === "push" ? "An" : "Aus"}</i>
-              </button>
-              <button
-                className={"toggle" + (renderDraft.denoise ? " on" : "")}
-                onClick={() => setRenderDraft((d) => ({ ...d, denoise: !d.denoise }))}
-              >
-                <span>Saubere Stimme</span>
-                <i>{renderDraft.denoise ? "An" : "Aus"}</i>
-              </button>
-              <button
-                className={"toggle" + (renderDraft.use_ocr ? " on" : "")}
-                onClick={() => setRenderDraft((d) => ({ ...d, use_ocr: !d.use_ocr }))}
-              >
-                <span>OCR</span>
-                <i>{renderDraft.use_ocr ? "An" : "Aus"}</i>
-              </button>
-              <button
-                className={"toggle" + (renderDraft.use_vlm ? " on" : "")}
-                onClick={() => setRenderDraft((d) => ({ ...d, use_vlm: !d.use_vlm }))}
-              >
-                <span>KI-Bildanalyse</span>
-                <i>{renderDraft.use_vlm ? "An" : "Aus"}</i>
-              </button>
-              <button
-                className={"toggle" + (renderDraft.use_audio_events ? " on" : "")}
-                onClick={() => setRenderDraft((d) => ({ ...d, use_audio_events: !d.use_audio_events }))}
-              >
-                <span>Audio-Ereignisse</span>
-                <i>{renderDraft.use_audio_events ? "An" : "Aus"}</i>
-              </button>
-              <button
-                className={"toggle" + (renderDraft.use_cues ? " on" : "")}
-                onClick={() => setRenderDraft((d) => ({ ...d, use_cues: !d.use_cues }))}
-                title="Installierte eigene Spielsounds als exaktes Erkennungs-Signal nutzen"
-              >
-                <span>Eigene Sounds</span>
-                <i>{renderDraft.use_cues ? "An" : "Aus"}</i>
-              </button>
-              <button
-                className={"toggle" + (renderDraft.cue_learning ? " on" : "")}
-                onClick={() => setRenderDraft((d) => ({ ...d, cue_learning: !d.cue_learning }))}
-              >
-                <span>Cue-Lernen</span>
-                <i>{renderDraft.cue_learning ? "An" : "Aus"}</i>
-              </button>
-              <button
-                className={"toggle" + (renderDraft.auto_length ? " on" : "")}
-                onClick={() => setRenderDraft((d) => ({ ...d, auto_length: !d.auto_length }))}
-              >
-                <span>Auto-Länge</span>
-                <i>{renderDraft.auto_length ? "An" : "Aus"}</i>
-              </button>
-            </div>
-          </div>
-          {project.content_type === "gameplay" && (
-            <div className="field wide timing-controls">
-              <label>Clip-Kontext</label>
-              <button
-                className={"toggle" + (contextAuto ? " on" : "")}
-                onClick={() =>
-                  setRenderDraft((d) =>
-                    d.lead_seconds === null && d.tail_seconds === null
-                      ? { ...d, lead_seconds: 16, tail_seconds: 20 }
-                      : { ...d, lead_seconds: null, tail_seconds: null },
-                  )
-                }
-                style={{ marginBottom: 8 }}
-              >
-                <span>Automatischer Kontext</span>
-                <i>{contextAuto ? "An" : "Aus"}</i>
-              </button>
-              {(renderDraft.lead_seconds !== null || renderDraft.tail_seconds !== null) && (
-                <>
-              <div className="range-label">
-                <span>Vor dem erkannten Moment</span>
-                <b>{renderDraft.lead_seconds ?? 16}s</b>
-              </div>
-              <input
-                type="range"
-                min={0}
-                max={30}
-                step={1}
-                value={renderDraft.lead_seconds ?? 16}
-                onChange={(e) => setRenderDraft((d) => ({ ...d, lead_seconds: Number(e.target.value) }))}
-              />
-              <div className="range-label">
-                <span>Nach dem erkannten Moment</span>
-                <b>{renderDraft.tail_seconds ?? 20}s</b>
-              </div>
-              <input
-                type="range"
-                min={2}
-                max={30}
-                step={1}
-                value={renderDraft.tail_seconds ?? 20}
-                onChange={(e) => setRenderDraft((d) => ({ ...d, tail_seconds: Number(e.target.value) }))}
-              />
-                </>
-              )}
-            </div>
-          )}
-        </div>
       </div>
-      </details>
     </div>
   );
 }
-
-

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api } from "../lib/api";
 import type { CaptionWord, Clip, Project, Rect, StyleTemplate } from "../lib/types";
@@ -37,6 +37,19 @@ const cropChanged = (c: Clip, next: number | null): boolean => {
   return orig === null || Math.abs(next - orig) > 0.01;
 };
 
+// The settings column is split into tabs; labels live in i18n as `ce.tab.<id>`.
+type EditorTab = "cut" | "captions" | "frame" | "ai" | "montage" | "publish";
+const EDITOR_TABS: EditorTab[] = ["cut", "captions", "frame", "ai", "montage", "publish"];
+const TAB_STORAGE_KEY = "clipforge.editorTab";
+
+// The workflow bar brings its own loud chrome; in the editor it sits quietly.
+const WORKFLOW_BAR_STYLE: CSSProperties = {
+  background: "var(--panel)",
+  border: "1px solid var(--border)",
+  boxShadow: "none",
+  borderRadius: 10,
+};
+
 export default function ClipEditor() {
   const { t } = useT();
   const { projectId, clipId } = useParams();
@@ -65,14 +78,14 @@ export default function ClipEditor() {
         const m = p.montages?.[0];
         if (!m || m.status !== "rendering") {
           setMsg(m?.status === "ready"
-            ? { text: "Montage fertig", type: "info" }
-            : { text: `Montage fehlgeschlagen: ${m?.error ?? "unbekannter Fehler"}`, type: "error" });
+            ? { text: t("ce.montageDone"), type: "info" }
+            : { text: t("ce.montageFailed", { error: m?.error ?? t("ce.renderUnknown") }), type: "error" });
           break;
         }
         await new Promise((r) => setTimeout(r, 1500));
       }
     } catch (e: any) {
-      setMsg({ text: e?.message ?? "Montage konnte nicht erstellt werden.", type: "error" });
+      setMsg({ text: e?.message ?? t("cg.errMontage"), type: "error" });
     } finally {
       setMontageBusy(false);
     }
@@ -101,7 +114,24 @@ export default function ClipEditor() {
   const [captionY, setCaptionY] = useState(0.78);
   const [activeSimulatorPlatform, setActiveSimulatorPlatform] = useState<PlatformType>("tiktok");
   const [showPhoneSimulator, setShowPhoneSimulator] = useState<boolean>(true);
-  const [showMontageTimeline, setShowMontageTimeline] = useState<boolean>(false);
+  // Active settings tab, remembered in this browser between clips.
+  const [tab, setTab] = useState<EditorTab>(() => {
+    try {
+      const v = localStorage.getItem(TAB_STORAGE_KEY);
+      if (v && (EDITOR_TABS as string[]).includes(v)) return v as EditorTab;
+    } catch {
+      /* storage blocked: start on the first tab */
+    }
+    return "cut";
+  });
+  const chooseTab = (next: EditorTab) => {
+    setTab(next);
+    try {
+      localStorage.setItem(TAB_STORAGE_KEY, next);
+    } catch {
+      /* ignore */
+    }
+  };
 
   const activeStyle = useMemo(() => styles.find((s) => s.id === styleId), [styles, styleId]);
 
@@ -419,6 +449,10 @@ export default function ClipEditor() {
     ? Math.min(loopPreviewSeconds, Math.max(baseExportDuration - 0.25, 0))
     : 0;
   const finalExportDuration = baseExportDuration + loopPreviewEffective;
+  // Publishing needs a rendered clip; an unavailable remembered tab falls back.
+  const tabs = EDITOR_TABS.filter((id) => id !== "publish" || clip.status === "ready");
+  const activeTab: EditorTab = tabs.includes(tab) ? tab : "cut";
+  const simulatorShown = Boolean(videoSrc) && showPhoneSimulator && previewMode === "rendered";
 
   return (
     <div className="container">
@@ -466,8 +500,9 @@ export default function ClipEditor() {
       </div>
 
       {/* Streamer Quick Workflow Bar: Hotkeys, Tactile/HUD Feedback, Batch Toolbar */}
-      <div style={{ marginBottom: 14 }}>
+      <div className="editor-workflow">
         <StreamerWorkflowBar
+          style={WORKFLOW_BAR_STYLE}
           projectId={projectId}
           clips={project?.clips}
           activeClipId={clipId}
@@ -518,7 +553,7 @@ export default function ClipEditor() {
             if (projectId && clipId) {
               await api.rateClip(projectId, clipId, nextFb ?? "none").catch(() => {});
             }
-            setMsg({ text: `Clip rated ${score} stars (${score * 20} pts)`, type: "success", duration: 2000 });
+            setMsg({ text: t("ce.rated", { score, pts: score * 20 }), type: "success", duration: 2000 });
           }}
           onBatchAction={async (action, clipIds, payload) => {
             if (!projectId) return;
@@ -534,7 +569,7 @@ export default function ClipEditor() {
               });
               if (!res.ok) {
                 const errJson = await res.json().catch(() => ({}));
-                throw new Error(errJson.detail || `Batch ${action} failed`);
+                throw new Error(errJson.detail || t("ce.batchFailed", { action }));
               }
               const data = await res.json();
               if (data.project) {
@@ -543,12 +578,12 @@ export default function ClipEditor() {
                 if (updated) hydrate(updated);
               }
               setMsg({
-                text: `Batch ${action} applied to ${clipIds.length} clip(s)`,
+                text: t("ce.batchApplied", { action, count: clipIds.length }),
                 type: "success",
                 duration: 3000,
               });
             } catch (e: any) {
-              setMsg({ text: e.message || `Batch ${action} failed`, type: "error" });
+              setMsg({ text: e.message || t("ce.batchFailed", { action }), type: "error" });
             }
           }}
         />
@@ -571,55 +606,33 @@ export default function ClipEditor() {
                 {t("ce.tabOriginal")}
               </button>
             </div>
-            <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+            <div className="preview-toggles">
               <button
                 className={"btn ghost sm" + (showPhoneSimulator ? " on" : "")}
                 onClick={() => setShowPhoneSimulator(!showPhoneSimulator)}
+                aria-pressed={showPhoneSimulator}
                 data-testid="toggle-phone-simulator"
-                title="Toggle Phone Platform Simulator overlay"
+                title={t("ce.phoneFrameTitle")}
               >
-                Simulator: {showPhoneSimulator ? "ON" : "OFF"}
+                {t("ce.phoneFrame")}
               </button>
               <button
                 className={"btn ghost sm" + (showSafeGuides ? " on" : "")}
                 onClick={() => setShowSafeGuides(!showSafeGuides)}
-                title="Toggle safe zone guide overlay for TikTok and YouTube Shorts"
+                aria-pressed={showSafeGuides}
+                title={t("ce.safeZoneTitle")}
               >
-                Safe Zone: {showSafeGuides ? "ON" : "OFF"}
-              </button>
-              <button
-                className={"btn ghost sm" + (showMontageTimeline ? " on" : "")}
-                onClick={() => setShowMontageTimeline(!showMontageTimeline)}
-                data-testid="toggle-montage-timeline-btn"
-                title="Toggle Smart Montage Timeline sequencer"
-              >
-                Montage {showMontageTimeline ? "▲" : "▼"}
+                {t("ce.safeZone")}
               </button>
             </div>
           </div>
-          <AudioWaveformHeatmap
-            projectId={projectId}
-            clipId={clipId}
-            start={start}
-            end={end}
-            currentTime={currentTime}
-            duration={end - start}
-            videoSrc={videoSrc}
-            previewMode={previewMode}
-            onSeek={(absT, relT) => {
-              if (videoRef.current) {
-                if (previewMode === "rendered") {
-                  videoRef.current.currentTime = relT;
-                } else {
-                  videoRef.current.currentTime = absT;
-                }
-                setCurrentTime(videoRef.current.currentTime);
-              }
-            }}
-          />
-          <div className="video-wrap" ref={videoWrapperRef} style={{ position: "relative" }}>
+          <div
+            className={"video-wrap" + (simulatorShown ? " with-sim" : "")}
+            ref={videoWrapperRef}
+            style={{ position: "relative" }}
+          >
             {videoSrc ? (
-              showPhoneSimulator && previewMode === "rendered" ? (
+              simulatorShown ? (
                 <PhoneSimulator
                   platform={activeSimulatorPlatform}
                   onPlatformChange={(p) => setActiveSimulatorPlatform(p)}
@@ -635,12 +648,12 @@ export default function ClipEditor() {
                       activeStyle.y_frac = safeYFrac;
                     }
                     undo.set({ ...undo.state });
-                    setMsg({ text: "Captions auto-nudged to safe zone!", type: "success" });
+                    setMsg({ text: t("ce.nudgedCaptions"), type: "success" });
                   }}
                   onNudgeFacecam={(safeCam) => {
                     setCam(safeCam);
                     undo.set({ ...undo.state, cam: safeCam });
-                    setMsg({ text: "Facecam auto-nudged to safe zone!", type: "success" });
+                    setMsg({ text: t("ce.nudgedFacecam"), type: "success" });
                   }}
                 >
                   <InteractiveCanvas
@@ -752,81 +765,86 @@ export default function ClipEditor() {
               <div className="empty">{t("ce.notRendered")}</div>
             )}
           </div>
-          {showMontageTimeline && (
-            <div style={{ marginTop: 14 }}>
-              <MontageTimeline
-                projectId={projectId}
-                clips={project?.clips && project.clips.length > 0 ? project.clips : [clip]}
-                onSequenceChange={(reordered) => {
-                  setMontageOrder(reordered.map((r) => r.clipId));
-                  setMsg({
-                    text: `Montage sequence updated (${reordered.length} clips)`,
-                    type: "info",
-                  });
-                }}
-                onTransitionsChange={() => {
-                  setMsg({
-                    text: "Timeline transition updated",
-                    type: "info",
-                  });
-                }}
-              />
-              <div className="row" style={{ gap: 12, marginTop: 10, alignItems: "center", flexWrap: "wrap" }}>
-                <button
-                  className="btn"
-                  data-testid="montage-build-btn"
-                  disabled={montageBusy || montageClipIds.length < 2}
-                  onClick={buildMontage}
-                  title="Rendert die Clips in dieser Reihenfolge zu einem Video (harte Schnitte)"
-                >
-                  {montageBusy ? "Montage wird gebaut…" : `Montage erstellen (${montageClipIds.length} Clips)`}
-                </button>
-                {montageClipIds.length < 2 && (
-                  <span className="muted">Mindestens zwei fertig gerenderte Clips nötig.</span>
-                )}
-                {latestMontage?.status === "ready" && latestMontage.export_url && (
-                  <a className="btn ghost" href={api.downloadMontageUrl(projectId ?? "", latestMontage.id)} data-testid="montage-download">
-                    Montage herunterladen
-                  </a>
-                )}
-                {latestMontage?.status === "failed" && (
-                  <span className="notice error">Montage fehlgeschlagen: {latestMontage.error ?? "unbekannter Fehler"}</span>
-                )}
-              </div>
-            </div>
-          )}
-          <div className="panel section" style={{ marginTop: 14 }}>
-            <div className="row" style={{ justifyContent: "space-between", marginBottom: 10 }}>
-              <ScoreBadge score={clip.score} />
-              <span className="pill">{clip.reframe.tracked ? t("ce.tracked") : clip.reframe.overridden ? t("ce.manualCrop") : t("ce.centerCrop")}</span>
-            </div>
-            <div className="factors">
-              {clip.factors.map((f, i) => (
-                <span className="factor" key={i} title={f.detail}>
-                  {f.label} <span className="muted tiny">(+{f.weight})</span>
-                </span>
-              ))}
-            </div>
-            {clip.hashtags?.length > 0 && (
-              <div className="row" style={{ flexWrap: "wrap", gap: 6, marginTop: 12 }}>
-                {clip.hashtags.map((h) => (
-                  <span key={h} className="pill" style={{ color: "var(--accent)" }}>
-                    {h}
-                  </span>
-                ))}
-              </div>
-            )}
-            <div className="shortcuts-hint muted tiny" style={{ marginTop: 10, cursor: "pointer" }}
-                 onClick={() => setShowShortcuts(true)}>
-              <span className="muted">{t("ce.shortcuts")}</span>
-            </div>
+          {/* Timeline under the viewer, so the phone preview fits on screen */}
+          <div className="preview-wave">
+            <AudioWaveformHeatmap
+              projectId={projectId}
+              clipId={clipId}
+              start={start}
+              end={end}
+              currentTime={currentTime}
+              duration={end - start}
+              videoSrc={videoSrc}
+              previewMode={previewMode}
+              onSeek={(absT, relT) => {
+                if (videoRef.current) {
+                  if (previewMode === "rendered") {
+                    videoRef.current.currentTime = relT;
+                  } else {
+                    videoRef.current.currentTime = absT;
+                  }
+                  setCurrentTime(videoRef.current.currentTime);
+                }
+              }}
+            />
           </div>
         </div>
 
         <div className="controls-pane">
+          {/* What the clip scored and why, above the settings tabs */}
+          <div className="panel clip-summary">
+            <ScoreBadge score={clip.score} />
+            <div className="clip-summary-body">
+              {clip.factors.length > 0 && (
+                <div className="factors inline">
+                  {clip.factors.map((f, i) => (
+                    <span className="factor" key={i} title={f.detail}>
+                      {f.label}
+                      <span className="w">+{Math.round(f.weight)}</span>
+                    </span>
+                  ))}
+                </div>
+              )}
+              {clip.hashtags?.length > 0 && (
+                <div className="hashtag-row">
+                  {clip.hashtags.map((h) => (
+                    <span key={h} className="hashtag">{h}</span>
+                  ))}
+                </div>
+              )}
+            </div>
+            <span className="pill">{clip.reframe.tracked ? t("ce.tracked") : clip.reframe.overridden ? t("ce.manualCrop") : t("ce.centerCrop")}</span>
+          </div>
+
+          <div className="editor-tabbar">
+            <div className="editor-tabs" role="tablist" aria-label={t("ce.tabsLabel")}>
+              {tabs.map((id) => (
+                <button
+                  key={id}
+                  role="tab"
+                  aria-selected={activeTab === id}
+                  className={activeTab === id ? "on" : ""}
+                  data-testid={id === "montage" ? "toggle-montage-timeline-btn" : undefined}
+                  onClick={() => chooseTab(id)}
+                >
+                  {t(`ce.tab.${id}`)}
+                </button>
+              ))}
+            </div>
+            <button
+              className="btn ghost sm shortcuts-btn"
+              onClick={() => setShowShortcuts(true)}
+              title={t("ce.shortcuts")}
+              aria-label={t("ce.shortcuts")}
+            >
+              ?
+            </button>
+          </div>
+
           {/* AI Suggestions Co-Pilot Panel */}
           <div
             className="panel section"
+            hidden={activeTab !== "ai"}
           >
             <AiSuggestionsCoPilot
               projectId={projectId}
@@ -868,17 +886,17 @@ export default function ClipEditor() {
                 if (updatedClip) {
                   setClip((prev) => (prev ? { ...prev, ...updatedClip } : prev));
                 }
-                setMsg({ text: `Applied: ${sug.title}`, type: "success", duration: 3000 });
+                setMsg({ text: t("ce.applied", { title: sug.title }), type: "success", duration: 3000 });
               }}
             />
           </div>
 
-          <div className="panel section">
+          <div className="panel section" hidden={activeTab !== "cut"}>
             <h3>{t("ce.titleHook")}</h3>
             <input className="input" value={title} onChange={(e) => setTitle(e.target.value)} />
           </div>
 
-          <div className="panel section">
+          <div className="panel section" hidden={activeTab !== "cut"}>
             <h3>{t("ce.cut")}</h3>
             <div className="muted tiny" style={{ marginBottom: 10 }}>
               {fmtClock(start)} → {fmtClock(end)} · {fmtDuration(end - start)}
@@ -896,7 +914,7 @@ export default function ClipEditor() {
             )}
           </div>
 
-          <div className="panel section">
+          <div className="panel section" hidden={activeTab !== "cut"}>
             <h3>{t("ce.loopPreview")}</h3>
             <div className="seg" style={{ marginBottom: 8 }}>
               {[0, 3, 4, 5].map((seconds) => (
@@ -920,12 +938,12 @@ export default function ClipEditor() {
             </span>
           </div>
 
-          <div className="panel section">
-            <h3>{t("ce.captionStyle")}</h3>
-            <div className="row" style={{ gap: 8, marginBottom: 10 }}>
-              <button className="btn sm ghost" style={{ fontSize: 11 }}
+          <div className="panel section" hidden={activeTab !== "captions"}>
+            <div className="panel-head">
+              <h3>{t("ce.captionStyle")}</h3>
+              <button className="btn sm ghost"
                 onClick={async () => {
-                  const name = prompt("Template name:", "My Template");
+                  const name = prompt(t("ce.templatePrompt"), t("ce.templateDefault"));
                   if (!name) return;
                   try {
                     // Save current style as a new template via the typed api
@@ -941,7 +959,7 @@ export default function ClipEditor() {
                     setStyleId(id);
                     setMsg({ text: t("ce.templateSaved"), type: "success", duration: 2000 });
                   } catch (e) {
-                    setMsg({ text: (e as Error).message ?? "Failed to save template", type: "error" });
+                    setMsg({ text: (e as Error).message ?? t("ce.templateFail"), type: "error" });
                   }
                 }}>
                 {t("ce.saveAsTemplate")}
@@ -963,58 +981,57 @@ export default function ClipEditor() {
             </div>
           </div>
 
-          <div className="panel section">
+          <div className="panel section" hidden={activeTab !== "frame"}>
             <h3>{t("ce.reframe")}</h3>
             <div className="muted tiny" style={{ marginBottom: 10 }}>
               {cx === null
                 ? t("ce.cropAuto")
                 : t("ce.cropManual", { pct: Math.round(cx * 100) })}
-              {cx !== null && Math.abs(cx - 0.5) < 0.005 && " (Center Snapped)"}
+              {cx !== null && Math.abs(cx - 0.5) < 0.005 && ` · ${t("ce.centerSnapped")}`}
             </div>
-            {/* Visual On-Canvas Crop Presets & Indicator (Replaces raw range slider) */}
-            <div className="row" style={{ gap: 6, marginBottom: 8 }}>
-              <button
-                className={"btn sm ghost" + (cx !== null && Math.abs(cx - 0.25) < 0.03 ? " on" : "")}
-                onClick={() => {
-                  const nextCx = 0.25;
-                  setCx(nextCx);
-                  undo.set({ ...undo.state, cx: nextCx });
-                }}
-                title="Align 9:16 crop window to left (25%)"
-              >
-                ◀ Left (25%)
-              </button>
-              <button
-                className={"btn sm ghost" + (cx !== null && Math.abs(cx - 0.5) < 0.01 ? " on" : "")}
-                onClick={() => {
-                  const nextCx = 0.5;
-                  setCx(nextCx);
-                  undo.set({ ...undo.state, cx: nextCx });
-                }}
-                title="Snap 9:16 crop window to center (50%)"
-              >
-                Center (50%)
-              </button>
-              <button
-                className={"btn sm ghost" + (cx !== null && Math.abs(cx - 0.75) < 0.03 ? " on" : "")}
-                onClick={() => {
-                  const nextCx = 0.75;
-                  setCx(nextCx);
-                  undo.set({ ...undo.state, cx: nextCx });
-                }}
-                title="Align 9:16 crop window to right (75%)"
-              >
-                Right (75%) ▶
-              </button>
+            {/* Crop presets; the crop window can also be dragged on the Original preview */}
+            <div className="row" style={{ gap: 6, flexWrap: "wrap" }}>
+              <div className="seg">
+                <button
+                  className={cx !== null && Math.abs(cx - 0.25) < 0.03 ? "on" : ""}
+                  onClick={() => {
+                    const nextCx = 0.25;
+                    setCx(nextCx);
+                    undo.set({ ...undo.state, cx: nextCx });
+                  }}
+                  title={t("ce.cropLeftTitle")}
+                >
+                  {t("ce.cropLeft")}
+                </button>
+                <button
+                  className={cx !== null && Math.abs(cx - 0.5) < 0.01 ? "on" : ""}
+                  onClick={() => {
+                    const nextCx = 0.5;
+                    setCx(nextCx);
+                    undo.set({ ...undo.state, cx: nextCx });
+                  }}
+                  title={t("ce.cropCenterTitle")}
+                >
+                  {t("ce.cropCenter")}
+                </button>
+                <button
+                  className={cx !== null && Math.abs(cx - 0.75) < 0.03 ? "on" : ""}
+                  onClick={() => {
+                    const nextCx = 0.75;
+                    setCx(nextCx);
+                    undo.set({ ...undo.state, cx: nextCx });
+                  }}
+                  title={t("ce.cropRightTitle")}
+                >
+                  {t("ce.cropRight")}
+                </button>
+              </div>
+              {cx !== null && (
+                <button className="btn ghost sm" onClick={() => setCx(null)}>
+                  {t("ce.resetAuto")}
+                </button>
+              )}
             </div>
-            <div className="tiny muted" style={{ marginBottom: 10 }}>
-              Drag the 9:16 crop window directly on the video canvas (under Original preview) with magnetic center snapping.
-            </div>
-            {cx !== null && (
-              <button className="btn ghost sm" style={{ marginTop: 10 }} onClick={() => setCx(null)}>
-                {t("ce.resetAuto")}
-              </button>
-            )}
             <div style={{ marginTop: 14 }}>
               <label className="tiny muted">{t("ce.aspectLabel")}</label>
               <select className="input" value={aspect}
@@ -1029,7 +1046,7 @@ export default function ClipEditor() {
           </div>
 
           {clip.kind === "gameplay" && (
-            <div className="panel section">
+            <div className="panel section" hidden={activeTab !== "frame"}>
               <h3>{t("ce.facecamLayout")}</h3>
               <div className="seg" style={{ marginBottom: 10 }}>
                 {[
@@ -1108,43 +1125,39 @@ export default function ClipEditor() {
                   <div className="row" style={{ gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
                     <button
                       className="btn sm ghost"
-                      style={{ fontSize: 11, padding: "2px 8px" }}
                       onClick={() => {
                         const next = { ...cam, x: 0.02, y: 0.04 };
                         setCam(next);
                         undo.set({ ...undo.state, cam: next });
                       }}
-                      title="Move facecam to top-left corner"
+                      title={t("ce.camMoveTitle")}
                     >
-                      ↖ Top-Left
+                      {t("ce.camTopLeft")}
                     </button>
                     <button
                       className="btn sm ghost"
-                      style={{ fontSize: 11, padding: "2px 8px" }}
                       onClick={() => {
                         const next = { ...cam, x: Math.max(0, 0.98 - cam.w), y: 0.04 };
                         setCam(next);
                         undo.set({ ...undo.state, cam: next });
                       }}
-                      title="Move facecam to top-right corner"
+                      title={t("ce.camMoveTitle")}
                     >
-                      ↗ Top-Right
+                      {t("ce.camTopRight")}
                     </button>
                     <button
                       className="btn sm ghost"
-                      style={{ fontSize: 11, padding: "2px 8px" }}
                       onClick={() => {
                         const next = { ...cam, x: 0.02, y: Math.max(0, 0.96 - cam.h) };
                         setCam(next);
                         undo.set({ ...undo.state, cam: next });
                       }}
-                      title="Move facecam to bottom-left corner"
+                      title={t("ce.camMoveTitle")}
                     >
-                      ↙ Bottom-Left
+                      {t("ce.camBottomLeft")}
                     </button>
                     <button
                       className="btn sm ghost"
-                      style={{ fontSize: 11, padding: "2px 8px" }}
                       onClick={() => {
                         const next = {
                           ...cam,
@@ -1154,21 +1167,20 @@ export default function ClipEditor() {
                         setCam(next);
                         undo.set({ ...undo.state, cam: next });
                       }}
-                      title="Move facecam to bottom-right corner"
+                      title={t("ce.camMoveTitle")}
                     >
-                      ↘ Bottom-Right
+                      {t("ce.camBottomRight")}
                     </button>
                     <button
                       className="btn sm ghost"
-                      style={{ fontSize: 11, padding: "2px 8px" }}
                       onClick={() => {
                         const def = project.facecam ?? { x: 0.02, y: 0.55, w: 0.24, h: 0.34 };
                         setCam(def);
                         undo.set({ ...undo.state, cam: def });
                       }}
-                      title="Reset facecam to project default"
+                      title={t("ce.camResetTitle")}
                     >
-                      ↺ Reset
+                      {t("ce.camReset")}
                     </button>
                   </div>
                   <span className="muted tiny">
@@ -1180,7 +1192,7 @@ export default function ClipEditor() {
           )}
 
           {clip.speakers.length > 1 && (
-            <div className="panel section">
+            <div className="panel section" hidden={activeTab !== "captions"}>
               <h3>{t("ce.speakers")} <span className="muted tiny">{t("ce.speakersHint")}</span></h3>
               <div className="seg" style={{ flexWrap: "wrap", marginBottom: 8 }}>
                 {clip.speakers.map((sp) => {
@@ -1203,7 +1215,7 @@ export default function ClipEditor() {
             </div>
           )}
 
-          <div className="panel section">
+          <div className="panel section" hidden={activeTab !== "captions"}>
             <h3>{t("ce.captions")} <span className="muted tiny">{t("ce.captionsHint")}</span></h3>
             {/* Active word tracker — highlights the word currently spoken */}
             <div className="caption-list" style={{ maxHeight: 300, overflowY: "auto" }}>
@@ -1286,9 +1298,56 @@ export default function ClipEditor() {
             </div>
           </div>
 
-          {/* AI publish content — titles, description, hashtags per platform. */}
+          {/* AI publish content — titles, description, hashtags per platform.
+              Mounted while hidden so it loads as before. */}
           {clip.status === "ready" && projectId && clipId && (
-            <PublishPanel projectId={projectId} clipId={clipId} />
+            <div hidden={activeTab !== "publish"}>
+              <PublishPanel projectId={projectId} clipId={clipId} />
+            </div>
+          )}
+
+          {/* Montage sequencer: arrange the rendered clips, then build one video */}
+          {activeTab === "montage" && (
+            <div className="panel section montage-pane">
+              <h3>{t("ce.montageTitle")} <span className="muted tiny">{t("ce.montageHint")}</span></h3>
+              <MontageTimeline
+                projectId={projectId}
+                clips={project?.clips && project.clips.length > 0 ? project.clips : [clip]}
+                onSequenceChange={(reordered) => {
+                  setMontageOrder(reordered.map((r) => r.clipId));
+                  setMsg({ text: t("ce.montageSeq", { count: reordered.length }), type: "info" });
+                }}
+                onTransitionsChange={() => {
+                  setMsg({ text: t("ce.montageTransition"), type: "info" });
+                }}
+              />
+              <div className="row" style={{ gap: 12, marginTop: 12, alignItems: "center", flexWrap: "wrap" }}>
+                <button
+                  className="btn primary"
+                  data-testid="montage-build-btn"
+                  disabled={montageBusy || montageClipIds.length < 2}
+                  onClick={buildMontage}
+                  title={t("ce.montageBuildTitle")}
+                >
+                  {montageBusy
+                    ? <><span className="spinner" /> {t("cg.montageBuilding")}</>
+                    : t("ce.montageBuild", { count: montageClipIds.length })}
+                </button>
+                {montageClipIds.length < 2 && (
+                  <span className="muted tiny">{t("ce.montageNeedTwo")}</span>
+                )}
+                {latestMontage?.status === "ready" && latestMontage.export_url && (
+                  <a className="btn ghost" href={api.downloadMontageUrl(projectId ?? "", latestMontage.id)} data-testid="montage-download">
+                    {t("ce.montageDownload")}
+                  </a>
+                )}
+                {latestMontage?.status === "failed" && (
+                  <span className="notice error">
+                    {t("ce.montageFailed", { error: latestMontage.error ?? t("ce.renderUnknown") })}
+                  </span>
+                )}
+              </div>
+            </div>
           )}
         </div>
       </div>

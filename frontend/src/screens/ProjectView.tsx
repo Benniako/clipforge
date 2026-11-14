@@ -145,27 +145,11 @@ export default function ProjectView() {
     if (viewMode === "swipe") {
       return <SwipeReviewScreen project={project} onChange={setProject} onExit={() => setViewMode("grid")} />;
     }
+    // The grid/phone switch and the Streamer.bot webhook live inside the grid
+    // view (header and bottom folds).
     return (
       <>
-        <div className="container view-switch">
-          <div className="seg">
-            <button className={viewMode === "grid" ? "on" : ""} onClick={() => setViewMode("grid")}>
-              {t("pv.viewGrid")}
-            </button>
-            <button className={(viewMode as string) === "swipe" ? "on" : ""} onClick={() => setViewMode("swipe")}>
-              {t("pv.viewPhone")}
-            </button>
-          </div>
-          {/* Streamer.bot webhook: show the mark-highlight URL so users
-              can copy it into Streamer.bot's HTTP request action. */}
-          <span className="muted tiny">
-            Streamer.bot Webhook
-            <code>
-              POST /api/projects/{projectId}/mark-highlight?timestamp=SEC&amp;duration=30
-            </code>
-          </span>
-        </div>
-        <ClipGridView project={project} onChange={setProject} />
+        <ClipGridView project={project} onChange={setProject} onPhoneView={() => setViewMode("swipe")} />
         <Toast msg={toast} onDone={() => setToast(null)} />
       </>
     );

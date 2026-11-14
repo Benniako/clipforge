@@ -29,94 +29,23 @@ const LENGTHS = [
   { label: "30-60s", min: 30, max: 60 },
   { label: "15-60s", min: 15, max: 60 },
 ];
+// The description of each profile lives in i18n as `gp.<id>`.
 const GAME_PROFILES = [
-  {
-    id: "auto",
-    name: "Auto Detect",
-    icon: "AUTO",
-    desc: "Adaptive multi-modal highlight detection",
-    tag: "Universal",
-  },
-  {
-    id: "eafc",
-    name: "EA FC / FIFA",
-    icon: "FC",
-    desc: "-4.5s goal sync and crowd roar snapping",
-    tag: "Delay -4.5s",
-  },
-  {
-    id: "cs2",
-    name: "CS2",
-    icon: "CS2",
-    desc: "Multi-kill streak detection and clutch multipliers",
-    tag: "Killstreaks",
-  },
-  {
-    id: "valorant",
-    name: "Valorant",
-    icon: "VAL",
-    desc: "ACE detector and round-win stingers",
-    tag: "ACE Detection",
-  },
-  {
-    id: "horror",
-    name: "Horror",
-    icon: "HOR",
-    desc: "Jump scares, scream burst and silence snap",
-    tag: "Scream Spikes",
-  },
-  {
-    id: "rocketleague",
-    name: "Rocket League",
-    icon: "RL",
-    desc: "Goal explosions, aerial goals and save replays",
-    tag: "Explosion Peak",
-  },
+  { id: "auto", name: "Auto Detect", icon: "AUTO", tag: "Universal" },
+  { id: "eafc", name: "EA FC / FIFA", icon: "FC", tag: "Delay -4.5s" },
+  { id: "cs2", name: "CS2", icon: "CS2", tag: "Killstreaks" },
+  { id: "valorant", name: "Valorant", icon: "VAL", tag: "ACE Detection" },
+  { id: "horror", name: "Horror", icon: "HOR", tag: "Scream Spikes" },
+  { id: "rocketleague", name: "Rocket League", icon: "RL", tag: "Explosion Peak" },
 ];
 
 const CAPTION_PRESETS = [
-  {
-    id: "bold-pop",
-    name: "Bold Pop",
-    cls: "bold-pop",
-    previewText: "VIRAL HOOK",
-    tag: "High Contrast",
-  },
-  {
-    id: "kinetic-bounce",
-    name: "Kinetic Bounce",
-    cls: "kinetic",
-    previewText: "SPRING",
-    tag: "Spring Bounce",
-  },
-  {
-    id: "karaoke-pulse",
-    name: "Karaoke Pulse",
-    cls: "karaoke",
-    previewText: "KARAOKE",
-    tag: "Word Sweep",
-  },
-  {
-    id: "beast-outline",
-    name: "MrBeast Style",
-    cls: "beast",
-    previewText: "BEAST",
-    tag: "Thick Stroke",
-  },
-  {
-    id: "hormozi-yellow",
-    name: "Hormozi Gold",
-    cls: "hormozi",
-    previewText: "HORMOZI",
-    tag: "Yellow Punch",
-  },
-  {
-    id: "tiktok-bubble",
-    name: "TikTok Bubble",
-    cls: "tiktok",
-    previewText: "BUBBLE",
-    tag: "Frosted Glass",
-  },
+  { id: "bold-pop", name: "Bold Pop", cls: "bold-pop", previewText: "VIRAL HOOK" },
+  { id: "kinetic-bounce", name: "Kinetic Bounce", cls: "kinetic", previewText: "SPRING" },
+  { id: "karaoke-pulse", name: "Karaoke Pulse", cls: "karaoke", previewText: "KARAOKE" },
+  { id: "beast-outline", name: "MrBeast Style", cls: "beast", previewText: "BEAST" },
+  { id: "hormozi-yellow", name: "Hormozi Gold", cls: "hormozi", previewText: "HORMOZI" },
+  { id: "tiktok-bubble", name: "TikTok Bubble", cls: "tiktok", previewText: "BUBBLE" },
 ];
 
 
@@ -261,7 +190,7 @@ export default function Upload({ health }: { health: Health | null }) {
       return;
     }
     if (url.trim() && !url.trim().match(/^https?:\/\/.+/)) {
-      setErr("Invalid URL — must start with http:// or https://");
+      setErr(t("up.errUrl"));
       return;
     }
     setErr(null);
@@ -408,6 +337,43 @@ export default function Upload({ health }: { health: Health | null }) {
     cues: t("up.statusReady"),
   };
 
+  // Settings that only matter for gameplay are hidden for talking-head videos.
+  const gameplayish = contentType !== "talking";
+  const activeGame = GAME_PROFILES.find((p) => p.id === gameProfile) ?? GAME_PROFILES[0];
+  const recommendedPower = caps?.recommended_power_mode;
+
+  // One-line summaries for the folded "advanced" sections, so their state is
+  // readable without opening them.
+  const modeShort: Record<string, string> = {
+    zero_shot: t("gc.modeAutoShort"),
+    hybrid: t("gc.modeHybridShort"),
+    manual: t("gc.modeManualShort"),
+  };
+  const detectSummary = [
+    gameplayish ? modeShort[detectionMode] : null,
+    detectorEnabled(useOcr, ocrAvailable) ? "OCR" : null,
+    detectorEnabled(useVlm, vlmAvailable) ? t("up.aiVision") : null,
+    detectorEnabled(useAudioEvents, audioEventsAvailable) ? t("up.audioEvents") : null,
+    cueLearning ? t("up.cueLearning") : null,
+  ].filter(Boolean).join(" · ");
+  const editSummary = [
+    tighten ? t("up.jumpCuts") : null,
+    motion === "push" ? t("up.slowPush") : null,
+    denoise ? t("up.cleanVoice") : null,
+    gameplayish
+      ? manualContext
+        ? t("up.contextManual", { lead: leadSeconds, tail: tailSeconds })
+        : t("up.autoContext")
+      : null,
+  ].filter(Boolean).join(" · ");
+  const boostOn = Object.values(aiBoost).filter(Boolean).length;
+  const boostTotal = Object.keys(aiBoost).length;
+  const powerLabel = t(POWER_MODES.find((m) => m.id === powerMode)?.labelKey ?? "up.powerBalanced");
+
+  // Card numbers follow the cards actually shown (the game card can be hidden).
+  let step = 0;
+  const nextStep = () => String(++step).padStart(2, "0");
+
   return (
     <div className="container">
       <div className="page-head">
@@ -420,7 +386,7 @@ export default function Upload({ health }: { health: Health | null }) {
       <div className="import-layout">
       <div className="import-main">
       <div
-        className={"dropzone" + (drag ? " drag" : "")}
+        className={"dropzone" + (drag ? " drag" : "") + (file ? " has-file" : "")}
         onDragOver={(e) => {
           e.preventDefault();
           setDrag(true);
@@ -458,21 +424,11 @@ export default function Upload({ health }: { health: Health | null }) {
             <div className="muted tiny" style={{ marginTop: 6 }}>
               {t("up.dropFormats")}
             </div>
-            <div className="drop-format-pills">
-              <span className="drop-badge">.MP4</span>
-              <span className="drop-badge">.MKV</span>
-              <span className="drop-badge">.MOV</span>
-              <span className="drop-badge">.TS</span>
-              <span className="drop-badge">.WEBM</span>
-              <span className="drop-badge">4h+ Stream VODs OK</span>
-            </div>
-            <div style={{ marginTop: 18 }}>
+            <div className="drop-actions">
               <button className="btn primary" onClick={() => fileRef.current?.click()}>
                 {t("up.chooseFiles")}
               </button>
-            </div>
-            <div className="or">{t("up.orPasteLink")}</div>
-            <div className="url-row">
+              <span className="or">{t("up.orPasteLink")}</span>
               <input
                 className="input"
                 placeholder={
@@ -537,484 +493,524 @@ export default function Upload({ health }: { health: Health | null }) {
         </section>
       )}
 
+      {/* 01 — what comes out: type, format, platform, length, count */}
       <section className="card">
         <div className="card-head">
-          <h3><span className="card-step">01</span>{t("up.secOutput")}</h3>
+          <h3><span className="card-step">{nextStep()}</span>{t("up.secFormat")}</h3>
         </div>
-      <div className="settings-grid">
-        <div className="field wide">
-          <label>{t("up.powerMode")}</label>
-          <div className="seg power-seg">
-            {POWER_MODES.map((m) => (
-              <button
-                key={m.id}
-                className={powerMode === m.id ? "on" : ""}
-                onClick={() => setPowerMode(m.id)}
-                title={t(m.hintKey)}
-              >
-                <span>{t(m.labelKey)}</span>
-                {health?.capabilities.recommended_power_mode === m.id && (
-                  <small>{t("up.recommended")}</small>
-                )}
-              </button>
-            ))}
-          </div>
-        </div>
-        <div className="field">
-          <label>{t("up.contentType")}</label>
-          <div className="seg">
-            {[
-              { id: "auto", labelKey: "up.contentAuto" },
-              { id: "talking", labelKey: "up.contentTalking" },
-              { id: "gameplay", labelKey: "up.contentGameplay" },
-            ].map((c) => (
-              <button
-                key={c.id}
-                className={contentType === c.id ? "on" : ""}
-                onClick={() => setContentType(c.id)}
-                title={
-                  c.id === "gameplay"
-                    ? t("up.contentGameplayHint")
-                    : c.id === "talking"
-                      ? t("up.contentTalkingHint")
-                      : t("up.contentAutoHint")
-                }
-              >
-                {t(c.labelKey)}
-              </button>
-            ))}
-          </div>
-        </div>
-        <div className="field">
-          <label>{t("up.aspect")}</label>
-          <select className="input" value={aspect} onChange={(e) => setAspect(e.target.value)}>
-            <option value="9:16">{t("up.aspect916")}</option>
-            <option value="4:5">{t("up.aspect45")}</option>
-            <option value="1:1">{t("up.aspect11")}</option>
-            <option value="16:9">{t("up.aspect169")}</option>
-          </select>
-        </div>
-      </div>
-      </section>
-
-      <section className="card">
-        <div className="card-head">
-          <h3><span className="card-step">02</span>{t("up.secDetect")}</h3>
-        </div>
-      <div className="settings-grid">
-        {contentType !== "talking" && (
-          <div className="field wide game-profiles-wrap">
-            <div className="row" style={{ justifyContent: "space-between", alignItems: "baseline" }}>
-              <label>
-                {t("up.gameProfile")} <span className="muted tiny">{t("up.gameplayOnly")}</span>
-              </label>
-              {cues && cues[gameProfile] && (
-                <span className="muted tiny" title={t("up.cuesHint")}>
-                  {t("up.cuesCount", {
-                    configured: cues[gameProfile].configured,
-                    total: cues[gameProfile].total,
-                    state:
-                      cues[gameProfile].configured === 0
-                        ? t("up.cuesOcrOnly")
-                        : t("up.cuesCustomActive"),
-                  })}
-                </span>
-              )}
-            </div>
-            <div className="game-profile-grid">
-              {GAME_PROFILES.map((p) => {
-                const active = gameProfile === p.id;
-                return (
-                  <div
-                    key={p.id}
-                    className={"game-card" + (active ? " active" : "")}
-                    onClick={() => setGameProfile(p.id)}
-                    role="button"
-                    tabIndex={0}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" || e.key === " ") {
-                        e.preventDefault();
-                        setGameProfile(p.id);
-                      }
-                    }}
-                  >
-                    <div className="game-card-head">
-                      <span className="game-card-icon">{p.icon}</span>
-                      {active && <span className="game-check">✓</span>}
-                    </div>
-                    <div className="game-card-title">{p.name}</div>
-                    <div className="game-card-desc">{p.desc}</div>
-                    <span className="game-card-tag">{p.tag}</span>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        )}
-        {contentType !== "talking" && (
-          <div className="field wide">
-            <label>
-              {t("gc.section")} <span className="muted tiny">{t("gc.sectionHint")}</span>
-            </label>
-            <select
-              className="input"
-              value={detectionMode}
-              onChange={(e) => setDetectionMode(e.target.value)}
-              title={t("gc.detectionMode")}
-            >
-              <option value="zero_shot">{t("gc.modeAuto")}</option>
-              <option value="hybrid">{t("gc.modeHybrid")}</option>
-              <option value="manual">{t("gc.modeManual")}</option>
-            </select>
-            <div className="row" style={{ gap: 8, marginTop: 8, flexWrap: "wrap" }}>
-              <div className="col" style={{ flex: "1 1 220px", gap: 4 }}>
-                <label className="muted tiny">{t("gc.audioCues")}</label>
-                <input
-                  className="input"
-                  value={audioCues}
-                  onChange={(e) => setAudioCues(e.target.value)}
-                  placeholder={t("gc.placeholder")}
-                  title={t("gc.audioCuesHint")}
-                />
-              </div>
-              <div className="col" style={{ flex: "1 1 220px", gap: 4 }}>
-                <label className="muted tiny">{t("gc.visualCues")}</label>
-                <input
-                  className="input"
-                  value={visualTextCues}
-                  onChange={(e) => setVisualTextCues(e.target.value)}
-                  placeholder={t("gc.placeholder")}
-                  title={t("gc.visualCuesHint")}
-                />
-              </div>
-              <div className="col" style={{ flex: "1 1 220px", gap: 4 }}>
-                <label className="muted tiny">{t("gc.vlmCues")}</label>
-                <input
-                  className="input"
-                  value={vlmCues}
-                  onChange={(e) => setVlmCues(e.target.value)}
-                  placeholder={t("gc.placeholder")}
-                  title={t("gc.vlmCuesHint")}
-                />
-              </div>
-            </div>
-          </div>
-        )}
-        {contentType !== "talking" && (
+        <div className="settings-grid">
           <div className="field">
-            <label>{t("up.facecam")} <span className="muted tiny">{t("up.gameplayOnly")}</span></label>
-            <select className="input" value={facecamLayout}
-              onChange={(e) => setFacecamLayout(e.target.value)}
-              title={t("up.facecamTitle")}>
-              <option value="auto">{t("up.facecamAuto")}</option>
-              <option value="split">{t("up.facecamSplit")}</option>
-              <option value="framed">{t("up.facecamFramed")}</option>
-              <option value="off">{t("up.facecamOff")}</option>
+            <label>{t("up.contentType")}</label>
+            <div className="seg">
+              {[
+                { id: "auto", labelKey: "up.contentAuto" },
+                { id: "talking", labelKey: "up.contentTalking" },
+                { id: "gameplay", labelKey: "up.contentGameplay" },
+              ].map((c) => (
+                <button
+                  key={c.id}
+                  className={contentType === c.id ? "on" : ""}
+                  onClick={() => setContentType(c.id)}
+                  title={
+                    c.id === "gameplay"
+                      ? t("up.contentGameplayHint")
+                      : c.id === "talking"
+                        ? t("up.contentTalkingHint")
+                        : t("up.contentAutoHint")
+                  }
+                >
+                  {t(c.labelKey)}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="field">
+            <label>{t("up.aspect")}</label>
+            <select className="input" value={aspect} onChange={(e) => setAspect(e.target.value)}>
+              <option value="9:16">{t("up.aspect916")}</option>
+              <option value="4:5">{t("up.aspect45")}</option>
+              <option value="1:1">{t("up.aspect11")}</option>
+              <option value="16:9">{t("up.aspect169")}</option>
             </select>
           </div>
-        )}
-        <div className="field wide">
-          <label>{t("up.detectionToggles")}</label>
-          <div className="toggle-stack compact capability-toggles">
-            <button
-              className={"toggle" + (useOcr ? " on" : "") + (!ocrAvailable ? " disabled" : "")}
-              disabled={!ocrAvailable}
-              onClick={() => setUseOcr((v) => !v)}
-              title={t("up.ocrTitle")}
-            >
-              <span>OCR</span>
-              <small>{status.ocr}</small>
-              <i>{useOcr && ocrAvailable ? t("up.on") : t("up.off")}</i>
-            </button>
-            <button
-              className={"toggle" + (useVlm ? " on" : "") + (!vlmAvailable ? " disabled" : "")}
-              disabled={!vlmAvailable}
-              onClick={() => setUseVlm((v) => !v)}
-              title={t("up.aiVisionTitle")}
-            >
-              <span>{t("up.aiVision")}</span>
-              <small>{status.vlm}</small>
-              <i>{useVlm && vlmAvailable ? t("up.on") : t("up.off")}</i>
-            </button>
-            <button
-              className={"toggle" + (useAudioEvents ? " on" : "") + (!audioEventsAvailable ? " disabled" : "")}
-              disabled={!audioEventsAvailable}
-              onClick={() => setUseAudioEvents((v) => !v)}
-              title={t("up.audioEventsTitle")}
-            >
-              <span>{t("up.audioEvents")}</span>
-              <small>{status.audio}</small>
-              <i>{useAudioEvents && audioEventsAvailable ? t("up.on") : t("up.off")}</i>
-            </button>
-            <button
-              className={"toggle" + (cueLearning ? " on" : "")}
-              onClick={() => setCueLearning((v) => !v)}
-              title={t("up.cueLearningTitle")}
-            >
-              <span>{t("up.cueLearning")}</span>
-              <small>{status.cues}</small>
-              <i>{cueLearning ? t("up.on") : t("up.off")}</i>
-            </button>
-          </div>
-        </div>
-      </div>
-      </section>
-
-      <section className="card">
-        <div className="card-head">
-          <h3><span className="card-step">03</span>{t("up.secCaptions")}</h3>
-        </div>
-      <div className="settings-grid">
-        <div className="field">
-          <label>{t("up.captions")}</label>
-          <button
-            className={"toggle" + (burnCaptions ? " on" : "")}
-            onClick={() => setBurnCaptions((v) => !v)}
-            title={t("up.burnCaptionsTitle")}
-          >
-            <span>{t("up.burnCaptions")}</span>
-            <small>{status.captions}</small>
-            <i>{burnCaptions ? t("up.on") : t("up.off")}</i>
-          </button>
-          <span className="muted tiny">{t("up.captionsOffNote")}</span>
-        </div>
-        <div className="field">
-          <label>{t("up.rhythmStyle")}</label>
-          <div className="toggle-stack">
-            <button
-              className={"toggle" + (tighten ? " on" : "")}
-              onClick={() => setTighten((v) => !v)}
-              title={t("up.jumpCutsTitle")}
-            >
-              <span>{t("up.jumpCuts")}</span>
-              <i>{tighten ? t("up.on") : t("up.off")}</i>
-            </button>
-            <button
-              className={"toggle" + (motion === "push" ? " on" : "")}
-              onClick={() => setMotion((v) => (v === "push" ? "none" : "push"))}
-              title={t("up.slowPushTitle")}
-            >
-              <span>{t("up.slowPush")}</span>
-              <i>{motion === "push" ? t("up.on") : t("up.off")}</i>
-            </button>
-            <button
-              className={"toggle" + (denoise ? " on" : "")}
-              onClick={() => setDenoise((v) => !v)}
-              title={t("up.cleanVoiceTitle")}
-            >
-              <span>{t("up.cleanVoice")}</span>
-              <small>{status.cleanVoice}</small>
-              <i>{denoise ? t("up.on") : t("up.off")}</i>
-            </button>
-          </div>
-        </div>
-        <div className="field">
-          <label>{t("up.optimizeFor")}</label>
-          <div className="seg">
-            {PLATFORMS.map((p) => (
-              <button
-                key={p.id}
-                className={platform === p.id ? "on" : ""}
-                onClick={() => setPlatform(p.id)}
-              >
-                {p.labelKey ? t(p.labelKey) : p.label}
-              </button>
-            ))}
-          </div>
-        </div>
-        <div className="field">
-          <label>{t("up.spokenLanguage")}</label>
-          <select
-            className="input"
-            value={language}
-            onChange={(e) => setLanguage(e.target.value)}
-            title={t("up.spokenLanguageTitle")}
-          >
-            <option value="de">{t("up.langGerman")}</option>
-            <option value="en">{t("up.langEnglish")}</option>
-            <option value="auto">{t("up.langAuto")}</option>
-          </select>
-        </div>
-        <div className="field">
-          <label>{t("up.clipLength")}</label>
-          <button
-            className={"toggle" + (autoLength ? " on" : "")}
-            onClick={() => setAutoLength((v) => !v)}
-            title={t("up.autoLengthTitle")}
-            style={{ marginBottom: 8 }}
-          >
-            <span>{t("up.autoLength")}</span>
-            <i>{autoLength ? t("up.on") : t("up.off")}</i>
-          </button>
-          <select
-            className="input"
-            value={lenIdx}
-            disabled={autoLength}
-            onChange={(e) => setLenIdx(Number(e.target.value))}
-          >
-            {LENGTHS.map((l, i) => (
-              <option key={i} value={i}>
-                {l.label}
-              </option>
-            ))}
-          </select>
-        </div>
-        {contentType !== "talking" && (
-          <div className="field wide timing-controls">
-            <label>{t("up.clipContext")}</label>
-            <button
-              className={"toggle" + (!manualContext ? " on" : "")}
-              onClick={() => setManualContext((v) => !v)}
-              title={t("up.autoContextTitle")}
-              style={{ marginBottom: 8 }}
-            >
-              <span>{t("up.autoContext")}</span>
-              <i>{manualContext ? t("up.off") : t("up.on")}</i>
-            </button>
-            {manualContext && (
-              <>
-            <div className="range-label">
-              <span>{t("up.beforeMoment")}</span>
-              <b>{leadSeconds}s</b>
+          <div className="field">
+            <label>{t("up.optimizeFor")}</label>
+            <div className="seg">
+              {PLATFORMS.map((p) => (
+                <button
+                  key={p.id}
+                  className={platform === p.id ? "on" : ""}
+                  onClick={() => setPlatform(p.id)}
+                >
+                  {p.labelKey ? t(p.labelKey) : p.label}
+                </button>
+              ))}
             </div>
-            <input
-              type="range"
-              min={0}
-              max={30}
-              step={1}
-              value={leadSeconds}
-              onChange={(e) => setLeadSeconds(Number(e.target.value))}
-            />
-            <div className="range-label">
-              <span>{t("up.afterMoment")}</span>
-              <b>{tailSeconds}s</b>
-            </div>
-            <input
-              type="range"
-              min={2}
-              max={30}
-              step={1}
-              value={tailSeconds}
-              onChange={(e) => setTailSeconds(Number(e.target.value))}
-            />
-              </>
-            )}
           </div>
-        )}
-        <div className="field">
-          <label>{t("up.maxClips", { target })}</label>
-          <input
-            type="range"
-            min={3}
-            max={20}
-            value={target}
-            onChange={(e) => setTarget(Number(e.target.value))}
-          />
-        </div>
-        <div className="field wide caption-showcase-wrap">
-          <div className="row" style={{ justifyContent: "space-between", alignItems: "baseline" }}>
-            <label>{t("up.captionStyle")}</label>
-            {styles.length > 0 && (
+          <div className="field">
+            <label>{t("up.clipLength")}</label>
+            <div className="inline-pair">
               <select
                 className="input"
-                style={{ width: "auto", padding: "4px 8px", fontSize: 12 }}
-                value={styleId}
-                onChange={(e) => setStyleId(e.target.value)}
-                title="All saved templates"
+                value={lenIdx}
+                disabled={autoLength}
+                onChange={(e) => setLenIdx(Number(e.target.value))}
               >
-                {styles.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.name}
+                {LENGTHS.map((l, i) => (
+                  <option key={i} value={i}>
+                    {l.label}
                   </option>
                 ))}
               </select>
+              <button
+                className={"toggle" + (autoLength ? " on" : "")}
+                onClick={() => setAutoLength((v) => !v)}
+                title={t("up.autoLengthTitle")}
+              >
+                <span>{t("up.autoLength")}</span>
+                <i>{autoLength ? t("up.on") : t("up.off")}</i>
+              </button>
+            </div>
+          </div>
+          <div className="field">
+            <label className="range-head">
+              <span>{t("up.maxClipsLabel")}</span>
+              <b>{target}</b>
+            </label>
+            <input
+              type="range"
+              min={3}
+              max={20}
+              value={target}
+              aria-label={t("up.maxClips", { target })}
+              onChange={(e) => setTarget(Number(e.target.value))}
+            />
+          </div>
+        </div>
+      </section>
+
+      {/* 02 — which game, so the right HUD trackers and cues run */}
+      {gameplayish && (
+        <section className="card">
+          <div className="card-head">
+            <h3>
+              <span className="card-step">{nextStep()}</span>
+              {t("up.gameProfile")} <span className="muted tiny head-note">{t("up.gameplayOnly")}</span>
+            </h3>
+            {cues && cues[gameProfile] && (
+              <span className="muted tiny" title={t("up.cuesHint")}>
+                {t("up.cuesCount", {
+                  configured: cues[gameProfile].configured,
+                  total: cues[gameProfile].total,
+                  state:
+                    cues[gameProfile].configured === 0
+                      ? t("up.cuesOcrOnly")
+                      : t("up.cuesCustomActive"),
+                })}
+              </span>
             )}
           </div>
-          <div className="caption-showcase-grid">
-            {CAPTION_PRESETS.map((p) => {
-              const active = styleId === p.id;
+          <div className="game-profile-grid">
+            {GAME_PROFILES.map((p) => {
+              const active = gameProfile === p.id;
               return (
                 <div
                   key={p.id}
-                  className={"caption-tile" + (active ? " active" : "")}
-                  onClick={() => setStyleId(p.id)}
+                  className={"game-card" + (active ? " active" : "")}
+                  onClick={() => setGameProfile(p.id)}
                   role="button"
+                  aria-pressed={active}
                   tabIndex={0}
+                  title={t(`gp.${p.id}`)}
                   onKeyDown={(e) => {
                     if (e.key === "Enter" || e.key === " ") {
                       e.preventDefault();
-                      setStyleId(p.id);
+                      setGameProfile(p.id);
                     }
                   }}
                 >
-                  <div className={"caption-preview-box " + p.cls}>
-                    {p.previewText}
-                  </div>
-                  <div className="caption-tile-meta">
-                    <span className="caption-tile-name">{p.name}</span>
-                    <span className="caption-tile-pill">{p.tag}</span>
-                  </div>
+                  <span className="game-card-icon">{p.icon}</span>
+                  <span className="game-card-title">{p.name}</span>
                 </div>
               );
             })}
           </div>
-        </div>
-        {/* AI Boost — the viral-effect toggles, grouped so the user sees the
-            whole "make it look pro" surface in one place instead of hunting
-            across panels. Maps to the backend caption_fx / zoom / broll passes. */}
-      </div>
-      </section>
+          <p className="game-desc">
+            <b>{activeGame.name}</b>
+            <span>{t(`gp.${activeGame.id}`)}</span>
+            <span className="game-card-tag">{activeGame.tag}</span>
+          </p>
+        </section>
+      )}
 
+      {/* 03 — how the captions look */}
       <section className="card">
         <div className="card-head">
-          <h3><span className="card-step">04</span>{t("ai.title")}</h3>
-          <span className="muted tiny">{t("ai.subtitle")}</span>
+          <h3><span className="card-step">{nextStep()}</span>{t("up.secStyle")}</h3>
+          {styles.length > 0 && (
+            <select
+              className="input input-sm"
+              value={styleId}
+              onChange={(e) => setStyleId(e.target.value)}
+              title={t("up.allTemplates")}
+              aria-label={t("up.allTemplates")}
+            >
+              {styles.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name}
+                </option>
+              ))}
+            </select>
+          )}
         </div>
-      <div>
-        <div className="field ai-boost">
-          <div className="ai-boost-grid">
-            <Toggle
-              checked={aiBoost.emphasis}
-              onChange={(v) => setAiBoost({ ...aiBoost, emphasis: v })}
-              label={t("ai.emphasis")}
-              hint={t("ai.emphasisHint")}
-            />
-            <Toggle
-              checked={aiBoost.emoji}
-              onChange={(v) => setAiBoost({ ...aiBoost, emoji: v })}
-              label={t("ai.emoji")}
-              hint={t("ai.emojiHint")}
-            />
-            <Toggle
-              checked={aiBoost.speakerColors}
-              onChange={(v) => setAiBoost({ ...aiBoost, speakerColors: v })}
-              label={t("ai.speakerColors")}
-              hint={t("ai.speakerColorsHint")}
-            />
-            <Toggle
-              checked={aiBoost.autoZoom}
-              onChange={(v) => setAiBoost({ ...aiBoost, autoZoom: v })}
-              label={t("ai.zoom")}
-              hint={t("ai.zoomHint")}
-            />
-            <Toggle
-              checked={aiBoost.broll}
-              onChange={(v) => setAiBoost({ ...aiBoost, broll: v })}
-              label={t("ai.broll")}
-              hint={t("ai.brollHint")}
-            />
-            <Toggle
-              checked={aiBoost.hookCheck}
-              onChange={(v) => setAiBoost({ ...aiBoost, hookCheck: v })}
-              label={t("ai.hook")}
-              hint={t("ai.hookHint")}
-            />
+        <div className="caption-showcase-grid">
+          {CAPTION_PRESETS.map((p) => {
+            const active = styleId === p.id;
+            return (
+              <div
+                key={p.id}
+                className={"caption-tile" + (active ? " active" : "")}
+                onClick={() => setStyleId(p.id)}
+                role="button"
+                aria-pressed={active}
+                tabIndex={0}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    setStyleId(p.id);
+                  }
+                }}
+              >
+                <div className={"caption-preview-box " + p.cls}>
+                  {p.previewText}
+                </div>
+                <span className="caption-tile-name">{p.name}</span>
+              </div>
+            );
+          })}
+        </div>
+        <div className="settings-grid" style={{ marginTop: 16 }}>
+          <div className="field">
+            <label>{t("up.secOutput")}</label>
+            <button
+              className={"toggle" + (burnCaptions ? " on" : "")}
+              onClick={() => setBurnCaptions((v) => !v)}
+              title={t("up.burnCaptionsTitle")}
+            >
+              <span>{t("up.burnCaptions")}</span>
+              <small>{status.captions}</small>
+              <i>{burnCaptions ? t("up.on") : t("up.off")}</i>
+            </button>
+            <span className="muted tiny field-note">{t("up.captionsOffNote")}</span>
+          </div>
+          <div className="field">
+            <label>{t("up.spokenLanguage")}</label>
+            <select
+              className="input"
+              value={language}
+              onChange={(e) => setLanguage(e.target.value)}
+              title={t("up.spokenLanguageTitle")}
+            >
+              <option value="de">{t("up.langGerman")}</option>
+              <option value="en">{t("up.langEnglish")}</option>
+              <option value="auto">{t("up.langAuto")}</option>
+            </select>
           </div>
         </div>
-      </div>
       </section>
 
-      {contentType !== "talking" && (
+      {/* Advanced: folded, each with a one-line summary of what is set */}
+      <div className="fold-group">
+        <h3 className="fold-group-title eyebrow">{t("up.advanced")}</h3>
+
+        <details className="fold">
+          <summary>
+            <span>{t("up.secDetect")}</span>
+            <span className="fold-summary">{detectSummary || t("up.allOff")}</span>
+          </summary>
+          <div className="fold-body">
+            <div className="settings-grid">
+              {gameplayish && (
+                <div className="field wide">
+                  <label>
+                    {t("gc.section")} <span className="muted tiny">{t("gc.sectionHint")}</span>
+                  </label>
+                  <select
+                    className="input"
+                    value={detectionMode}
+                    onChange={(e) => setDetectionMode(e.target.value)}
+                    title={t("gc.detectionMode")}
+                  >
+                    <option value="zero_shot">{t("gc.modeAuto")}</option>
+                    <option value="hybrid">{t("gc.modeHybrid")}</option>
+                    <option value="manual">{t("gc.modeManual")}</option>
+                  </select>
+                  <div className="cue-inputs">
+                    <div className="col">
+                      <label className="muted tiny">{t("gc.audioCues")}</label>
+                      <input
+                        className="input"
+                        value={audioCues}
+                        onChange={(e) => setAudioCues(e.target.value)}
+                        placeholder={t("gc.placeholder")}
+                        title={t("gc.audioCuesHint")}
+                      />
+                    </div>
+                    <div className="col">
+                      <label className="muted tiny">{t("gc.visualCues")}</label>
+                      <input
+                        className="input"
+                        value={visualTextCues}
+                        onChange={(e) => setVisualTextCues(e.target.value)}
+                        placeholder={t("gc.placeholder")}
+                        title={t("gc.visualCuesHint")}
+                      />
+                    </div>
+                    <div className="col">
+                      <label className="muted tiny">{t("gc.vlmCues")}</label>
+                      <input
+                        className="input"
+                        value={vlmCues}
+                        onChange={(e) => setVlmCues(e.target.value)}
+                        placeholder={t("gc.placeholder")}
+                        title={t("gc.vlmCuesHint")}
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
+              <div className="field wide">
+                <label>{t("up.detectionToggles")}</label>
+                <div className="toggle-stack compact capability-toggles">
+                  <button
+                    className={"toggle" + (useOcr ? " on" : "") + (!ocrAvailable ? " disabled" : "")}
+                    disabled={!ocrAvailable}
+                    onClick={() => setUseOcr((v) => !v)}
+                    title={t("up.ocrTitle")}
+                  >
+                    <span>OCR</span>
+                    <small>{status.ocr}</small>
+                    <i>{useOcr && ocrAvailable ? t("up.on") : t("up.off")}</i>
+                  </button>
+                  <button
+                    className={"toggle" + (useVlm ? " on" : "") + (!vlmAvailable ? " disabled" : "")}
+                    disabled={!vlmAvailable}
+                    onClick={() => setUseVlm((v) => !v)}
+                    title={t("up.aiVisionTitle")}
+                  >
+                    <span>{t("up.aiVision")}</span>
+                    <small>{status.vlm}</small>
+                    <i>{useVlm && vlmAvailable ? t("up.on") : t("up.off")}</i>
+                  </button>
+                  <button
+                    className={"toggle" + (useAudioEvents ? " on" : "") + (!audioEventsAvailable ? " disabled" : "")}
+                    disabled={!audioEventsAvailable}
+                    onClick={() => setUseAudioEvents((v) => !v)}
+                    title={t("up.audioEventsTitle")}
+                  >
+                    <span>{t("up.audioEvents")}</span>
+                    <small>{status.audio}</small>
+                    <i>{useAudioEvents && audioEventsAvailable ? t("up.on") : t("up.off")}</i>
+                  </button>
+                  <button
+                    className={"toggle" + (cueLearning ? " on" : "")}
+                    onClick={() => setCueLearning((v) => !v)}
+                    title={t("up.cueLearningTitle")}
+                  >
+                    <span>{t("up.cueLearning")}</span>
+                    <small>{status.cues}</small>
+                    <i>{cueLearning ? t("up.on") : t("up.off")}</i>
+                  </button>
+                </div>
+              </div>
+              {gameplayish && (
+                <div className="field">
+                  <label>{t("up.facecam")} <span className="muted tiny">{t("up.gameplayOnly")}</span></label>
+                  <select className="input" value={facecamLayout}
+                    onChange={(e) => setFacecamLayout(e.target.value)}
+                    title={t("up.facecamTitle")}>
+                    <option value="auto">{t("up.facecamAuto")}</option>
+                    <option value="split">{t("up.facecamSplit")}</option>
+                    <option value="framed">{t("up.facecamFramed")}</option>
+                    <option value="off">{t("up.facecamOff")}</option>
+                  </select>
+                </div>
+              )}
+            </div>
+          </div>
+        </details>
+
+        <details className="fold">
+          <summary>
+            <span>{t("up.secEdit")}</span>
+            <span className="fold-summary">{editSummary || t("up.allOff")}</span>
+          </summary>
+          <div className="fold-body">
+            <div className="settings-grid">
+              <div className="field wide">
+                <label>{t("up.rhythmStyle")}</label>
+                <div className="toggle-stack compact">
+                  <button
+                    className={"toggle" + (tighten ? " on" : "")}
+                    onClick={() => setTighten((v) => !v)}
+                    title={t("up.jumpCutsTitle")}
+                  >
+                    <span>{t("up.jumpCuts")}</span>
+                    <i>{tighten ? t("up.on") : t("up.off")}</i>
+                  </button>
+                  <button
+                    className={"toggle" + (motion === "push" ? " on" : "")}
+                    onClick={() => setMotion((v) => (v === "push" ? "none" : "push"))}
+                    title={t("up.slowPushTitle")}
+                  >
+                    <span>{t("up.slowPush")}</span>
+                    <i>{motion === "push" ? t("up.on") : t("up.off")}</i>
+                  </button>
+                  <button
+                    className={"toggle" + (denoise ? " on" : "")}
+                    onClick={() => setDenoise((v) => !v)}
+                    title={t("up.cleanVoiceTitle")}
+                  >
+                    <span>{t("up.cleanVoice")}</span>
+                    <small>{status.cleanVoice}</small>
+                    <i>{denoise ? t("up.on") : t("up.off")}</i>
+                  </button>
+                </div>
+              </div>
+              {gameplayish && (
+                <div className="field wide timing-controls">
+                  <label>{t("up.clipContext")}</label>
+                  <button
+                    className={"toggle context-toggle" + (!manualContext ? " on" : "")}
+                    onClick={() => setManualContext((v) => !v)}
+                    title={t("up.autoContextTitle")}
+                  >
+                    <span>{t("up.autoContext")}</span>
+                    <i>{manualContext ? t("up.off") : t("up.on")}</i>
+                  </button>
+                  {manualContext && (
+                    <div className="context-ranges">
+                      <div>
+                        <div className="range-label">
+                          <span>{t("up.beforeMoment")}</span>
+                          <b>{leadSeconds}s</b>
+                        </div>
+                        <input
+                          type="range"
+                          min={0}
+                          max={30}
+                          step={1}
+                          value={leadSeconds}
+                          onChange={(e) => setLeadSeconds(Number(e.target.value))}
+                        />
+                      </div>
+                      <div>
+                        <div className="range-label">
+                          <span>{t("up.afterMoment")}</span>
+                          <b>{tailSeconds}s</b>
+                        </div>
+                        <input
+                          type="range"
+                          min={2}
+                          max={30}
+                          step={1}
+                          value={tailSeconds}
+                          onChange={(e) => setTailSeconds(Number(e.target.value))}
+                        />
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        </details>
+
+        {/* AI Boost — the viral-effect toggles, grouped so the user sees the
+            whole "make it look pro" surface in one place. Maps to the backend
+            caption_fx / zoom / broll passes. */}
+        <details className="fold">
+          <summary>
+            <span>{t("ai.title")}</span>
+            <span className="fold-summary">{t("up.boostCount", { on: boostOn, total: boostTotal })}</span>
+          </summary>
+          <div className="fold-body">
+            <p className="muted tiny fold-intro">{t("ai.subtitle")}</p>
+            <div className="field ai-boost">
+              <div className="ai-boost-grid">
+                <Toggle
+                  checked={aiBoost.emphasis}
+                  onChange={(v) => setAiBoost({ ...aiBoost, emphasis: v })}
+                  label={t("ai.emphasis")}
+                  hint={t("ai.emphasisHint")}
+                />
+                <Toggle
+                  checked={aiBoost.emoji}
+                  onChange={(v) => setAiBoost({ ...aiBoost, emoji: v })}
+                  label={t("ai.emoji")}
+                  hint={t("ai.emojiHint")}
+                />
+                <Toggle
+                  checked={aiBoost.speakerColors}
+                  onChange={(v) => setAiBoost({ ...aiBoost, speakerColors: v })}
+                  label={t("ai.speakerColors")}
+                  hint={t("ai.speakerColorsHint")}
+                />
+                <Toggle
+                  checked={aiBoost.autoZoom}
+                  onChange={(v) => setAiBoost({ ...aiBoost, autoZoom: v })}
+                  label={t("ai.zoom")}
+                  hint={t("ai.zoomHint")}
+                />
+                <Toggle
+                  checked={aiBoost.broll}
+                  onChange={(v) => setAiBoost({ ...aiBoost, broll: v })}
+                  label={t("ai.broll")}
+                  hint={t("ai.brollHint")}
+                />
+                <Toggle
+                  checked={aiBoost.hookCheck}
+                  onChange={(v) => setAiBoost({ ...aiBoost, hookCheck: v })}
+                  label={t("ai.hook")}
+                  hint={t("ai.hookHint")}
+                />
+              </div>
+            </div>
+          </div>
+        </details>
+
+        <details className="fold">
+          <summary>
+            <span>{t("up.powerMode")}</span>
+            <span className="fold-summary">
+              {powerLabel}
+              {recommendedPower === powerMode && ` · ${t("up.recommended")}`}
+            </span>
+          </summary>
+          <div className="fold-body">
+            <div className="seg power-seg">
+              {POWER_MODES.map((m) => (
+                <button
+                  key={m.id}
+                  className={powerMode === m.id ? "on" : ""}
+                  onClick={() => setPowerMode(m.id)}
+                  title={t(m.hintKey)}
+                >
+                  <span>{t(m.labelKey)}</span>
+                  {recommendedPower === m.id && (
+                    <small>{t("up.recommended")}</small>
+                  )}
+                </button>
+              ))}
+            </div>
+            <p className="muted tiny fold-intro" style={{ marginTop: 10 }}>
+              {t(POWER_MODES.find((m) => m.id === powerMode)?.hintKey ?? "up.powerBalancedHint")}
+            </p>
+          </div>
+        </details>
+      </div>
+
+      {gameplayish && (
         <>
           {file && (
             <CueLab
@@ -1128,8 +1124,3 @@ function StatusPill({ status, pct }: { status: string; pct: number }) {
     return <span className="pill warn">{Math.round(pct)}%</span>;
   return <span className="pill">{t("up.pillQueued")}</span>;
 }
-
-
-
-
-

@@ -5,6 +5,7 @@ import type { Project } from "../lib/types";
 import { fmtDuration, scoreColor } from "../lib/format";
 import { orderReviewClips } from "../lib/reviewOrder";
 import { useT } from "../lib/i18n";
+import ScoreBadge from "../components/ScoreBadge";
 
 export default function SwipeReviewScreen({
   project,
@@ -87,16 +88,18 @@ export default function SwipeReviewScreen({
         <button
           className={"btn ghost sm" + (showTikTokUI ? " on" : "")}
           onClick={() => setShowTikTokUI(!showTikTokUI)}
-          title="Toggle TikTok UI elements to verify layout"
+          aria-pressed={showTikTokUI}
+          title={t("swipe.tiktokUiTitle")}
         >
-          TikTok UI: {showTikTokUI ? "ON" : "OFF"}
+          {t("swipe.tiktokUi")}
         </button>
         <button
           className={"btn ghost sm" + (showSafeGuides ? " on" : "")}
           onClick={() => setShowSafeGuides(!showSafeGuides)}
-          title="Toggle safe margin guide overlay"
+          aria-pressed={showSafeGuides}
+          title={t("ce.safeZoneTitle")}
         >
-          Safe Zone: {showSafeGuides ? "ON" : "OFF"}
+          {t("ce.safeZone")}
         </button>
         <a className="btn ghost sm" href={api.exportPremiereUrl(project.id)}>{t("swipe.premiereEdl")}</a>
       </div>
@@ -184,16 +187,34 @@ export default function SwipeReviewScreen({
       {next?.export_url && <video className="preload-video" src={next.export_url} preload="auto" muted />}
 
       <div className="swipe-actions">
-        <button className="btn ghost" onClick={prev}>{t("swipe.back")}</button>
-        <button className="btn ghost" disabled={busy} onClick={() => rate("down")}>{t("swipe.bad")}</button>
+        {/* what this clip is and why it scored, next to the decision */}
+        <div className="swipe-info">
+          <ScoreBadge score={active.score} />
+          <div className="swipe-title">{active.title || t("swipe.untitled")}</div>
+          {reasons.length > 0 && (
+            <div className="factors inline">
+              {reasons.map((f, i) => (
+                <span className="factor" key={i} title={f.detail}>
+                  {f.label}
+                  <span className="w">+{Math.round(f.weight)}</span>
+                </span>
+              ))}
+            </div>
+          )}
+          <span className="muted tiny">{fmtDuration(active.tightened_duration ?? active.end - active.start)}</span>
+        </div>
         <button className="btn primary" disabled={busy} onClick={() => rate("up")}>{t("swipe.good")}</button>
-        <button className="btn ghost" onClick={forward}>{t("swipe.next")}</button>
+        <button className="btn ghost" disabled={busy} onClick={() => rate("down")}>{t("swipe.bad")}</button>
+        <div className="swipe-nav">
+          <button className="btn ghost" onClick={prev}>{t("swipe.back")}</button>
+          <button className="btn ghost" onClick={forward}>{t("swipe.next")}</button>
+        </div>
         <button
           className={"copy-tiktok-btn" + (copied ? " copied" : "")}
           onClick={copyCaption}
           style={{ width: "100%", justifyContent: "center" }}
         >
-          {copied ? "Copied" : "Copy Caption"}
+          {copied ? t("cc.copied") : t("cc.copyCaption")}
         </button>
         <Link className="btn ghost" to={`/p/${project.id}/clip/${active.id}`}>{t("swipe.edit")}</Link>
         <a className="btn ghost" href={api.downloadClipUrl(project.id, active.id)} download>{t("swipe.download")}</a>
