@@ -114,6 +114,8 @@ export default function ClipEditor() {
   const [captionY, setCaptionY] = useState(0.78);
   const [activeSimulatorPlatform, setActiveSimulatorPlatform] = useState<PlatformType>("tiktok");
   const [showPhoneSimulator, setShowPhoneSimulator] = useState<boolean>(true);
+  // The workflow bar's batch row (multi-clip actions) is hidden until asked for.
+  const [showBatch, setShowBatch] = useState(false);
   // Active settings tab, remembered in this browser between clips.
   const [tab, setTab] = useState<EditorTab>(() => {
     try {
@@ -483,6 +485,14 @@ export default function ClipEditor() {
               {t("ce.srt")}
             </a>
           )}
+          <button
+            className={"btn sm ghost" + (showBatch ? " on" : "")}
+            aria-pressed={showBatch}
+            onClick={() => setShowBatch((v) => !v)}
+            title={t("ce.batchToggleTitle")}
+          >
+            {t("ce.batchToggle")}
+          </button>
           <button className="btn sm ghost" disabled={!undo.canUndo}
             onClick={() => applyUndo(undo.undo())}
             title={t("ce.shortcutUndo")} style={{ fontWeight: undo.canUndo ? 600 : 400 }}>
@@ -500,7 +510,7 @@ export default function ClipEditor() {
       </div>
 
       {/* Streamer Quick Workflow Bar: Hotkeys, Tactile/HUD Feedback, Batch Toolbar */}
-      <div className="editor-workflow">
+      <div className={"editor-workflow" + (showBatch ? "" : " no-batch")}>
         <StreamerWorkflowBar
           style={WORKFLOW_BAR_STYLE}
           projectId={projectId}

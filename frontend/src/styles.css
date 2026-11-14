@@ -724,7 +724,26 @@ input[type="range"] { width: 100%; accent-color: var(--accent); height: 4px; cur
 .stage .muted { font-family: var(--font-mono); font-size: var(--fs-xs); }
 .bar { height: 6px; background: var(--bg-2); border-radius: 999px; overflow: hidden; }
 .bar > i { display: block; height: 100%; background: var(--accent); border-radius: 999px; transition: width 0.4s ease; }
+.bar.lg { height: 10px; }
+.bar.hot > i, .bar.paused > i { background: var(--warn); }
 .eta { font-family: var(--font-display); font-size: var(--fs-2xl); font-weight: 600; font-variant-numeric: tabular-nums; }
+/* processing: progress and stages left, run facts and system meters right */
+.proc-layout { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: var(--s5); align-items: start; }
+.proc-main { padding: var(--s5); }
+.proc-main .eta { font-size: 34px; line-height: 1.1; }
+.proc-eta-row { display: flex; align-items: flex-end; justify-content: space-between; gap: var(--s4); margin-bottom: var(--s3); }
+.proc-pct { font-family: var(--font-display); font-size: 44px; font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums; flex: none; }
+.proc-pct small { font-size: 18px; color: var(--muted); margin-left: 2px; }
+.proc-message { margin: 10px 0 0; }
+.proc-aside { position: sticky; top: 76px; display: flex; flex-direction: column; gap: var(--s4); min-width: 0; }
+.facts { display: grid; grid-template-columns: auto 1fr; gap: 9px 16px; margin: 0; font-size: var(--fs-sm); }
+.facts dt { color: var(--muted); }
+.facts dd { margin: 0; text-align: right; font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text); align-self: center; }
+.meter { display: grid; grid-template-columns: 44px minmax(0, 1fr) auto; align-items: center; gap: 10px; font-size: var(--fs-sm); }
+.meter + .meter { margin-top: 10px; }
+.meter b { font-family: var(--font-mono); font-weight: 600; font-size: var(--fs-xs); color: var(--text-2); }
+.clip-grid.compact { grid-template-columns: repeat(auto-fill, minmax(min(300px, 100%), 1fr)); }
+.clip-grid.compact .clip-card > .thumb { width: 96px; min-height: 171px; }
 
 /* ---- project / clip grid ---- */
 .project-head { display: flex; align-items: flex-end; justify-content: space-between; gap: var(--s4); flex-wrap: wrap; }
@@ -1020,6 +1039,8 @@ details.fold[open] > summary .fold-summary { color: var(--muted-2); }
 .editor-bar { display: flex; align-items: center; justify-content: space-between; gap: var(--s3); flex-wrap: wrap; margin-bottom: var(--s4); }
 .editor-bar h2 { font-size: var(--fs-xl); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
 .editor-workflow { margin-bottom: var(--s4); }
+/* the bar stays mounted (hotkeys keep working); only its batch row hides */
+.editor-workflow.no-batch [data-testid="batch-toolbar"] { display: none !important; }
 /* The preview column is sized from the window height so the phone preview
    fits on screen and stays there while the settings scroll. */
 .editor {
@@ -1191,6 +1212,8 @@ kbd { background: var(--bg-2); border: 1px solid var(--border-2); border-bottom-
 @media (max-width: 1080px) {
   .import-layout { grid-template-columns: 1fr; }
   .import-aside { position: static; order: -1; }
+  .proc-layout { grid-template-columns: 1fr; }
+  .proc-aside { position: static; }
   .caps-summary { display: none; }
 }
 @media (max-width: 860px) {
